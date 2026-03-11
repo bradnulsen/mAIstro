@@ -271,7 +271,8 @@ async def dispatch_task(task_id: str, req: DispatchRequest | None = None):
         raise HTTPException(409, "Task is already running")
 
     context = req.context if req else None
-    dispatch_id = await db.enqueue_dispatch(task_id, "manual", context=context)
+    head = git.head_hash(PROJECT_DIR)
+    dispatch_id = await db.enqueue_dispatch(task_id, "manual", trigger_detail=head, context=context)
     worker.notify()
     return {"dispatch_id": dispatch_id}
 
@@ -389,8 +390,8 @@ You have full awareness of the project's administrative state (tasks, dispatches
 and its content (files, git history). Help the user understand project status, plan work, \
 troubleshoot issues, and manage their tasks.
 
-You can read files, search code, and analyze the project. You are NOT running a task dispatch — \
-you are having a conversation with the human operator.
+You can read files, search code, and analyze the project. Always commit after making code changes. \
+You are NOT running a task dispatch — you are having a conversation with the human operator.
 
 ## Working Directory
 {project_dir}

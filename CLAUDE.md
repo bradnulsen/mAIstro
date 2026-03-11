@@ -71,4 +71,3 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 - `dispatch_queue.context` column stores trigger-specific data (human instructions, task handoff, commit metadata)
 - Queue can be auto-processing or manual — controlled via `/api/queue/settings` (auto_dispatch toggle)
 - Backend port: 8420, Frontend port: 5173
-- Always commit after making code changes
