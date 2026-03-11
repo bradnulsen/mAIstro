@@ -33,6 +33,12 @@ export default function App() {
     if (project) refreshTasks()
   }, [project, refreshTasks])
 
+  useEffect(() => {
+    if (!project) return
+    const interval = setInterval(refreshTasks, 5000)
+    return () => clearInterval(interval)
+  }, [project, refreshTasks])
+
   const handleTabMouseDown = useCallback((e) => {
     e.preventDefault()
     const startX = e.clientX
