@@ -14,6 +14,12 @@ const STATUS_LABELS = {
   cancelled: 'Cancelled',
 }
 
+const TRIGGER_LABELS = {
+  manual: 'User',
+  commit: 'Commit',
+  task_queue: 'Task',
+}
+
 function getStatus(item) {
   if (item.error) {
     if (item.error === 'cancelled') return 'cancelled'
@@ -40,6 +46,26 @@ function formatDuration(startStr, endStr) {
 function isUpcoming(item) {
   const s = getStatus(item)
   return s === 'pending' || s === 'running'
+}
+
+/** Normalize the triggers array, falling back to scalar fields for older records. */
+function getTriggers(item) {
+  if (item.triggers && item.triggers.length > 0) return item.triggers
+  return [{ trigger: item.trigger, detail: item.trigger_detail, context: item.context }]
+}
+
+function triggerLabel(entry) {
+  const base = TRIGGER_LABELS[entry.trigger] || entry.trigger
+  if (entry.trigger === 'commit' && entry.detail) return `${base} (${entry.detail.slice(0, 8)})`
+  if (entry.trigger === 'task_queue' && entry.detail) return `${base} (${entry.detail})`
+  if (entry.trigger === 'manual' && entry.detail) return `${base} @ ${entry.detail.slice(0, 8)}`
+  return base
+}
+
+function getMessageContent(msg) {
+  if (typeof msg.content === 'string') return msg.content
+  if (Array.isArray(msg.content)) return msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
+  return String(msg.content ?? '')
 }
 
 export default function Queue() {
@@ -162,10 +188,7 @@ export default function Queue() {
           )}
           {filtered.map(item => {
             const status = getStatus(item)
-            const triggers = item.triggers && item.triggers.length > 0
-              ? item.triggers
-              : [{ trigger: item.trigger, detail: item.trigger_detail, context: item.context }]
-            // Show unique trigger type icons
+            const triggers = getTriggers(item)
             const triggerTypes = [...new Set(triggers.map(t => t.trigger))]
             // First context that has content, for preview
             const previewCtx = triggers.find(t => t.context)?.context
@@ -210,140 +233,7 @@ export default function Queue() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              {(() => {
-                const status = getStatus(selected)
-                // Parse triggers array — each entry has {trigger, detail, context}
-                const triggers = selected.triggers && selected.triggers.length > 0
-                  ? selected.triggers
-                  : [{ trigger: selected.trigger, detail: selected.trigger_detail, context: selected.context }]
-
-                const TRIGGER_LABELS = {
-                  manual: 'User',
-                  commit: 'Commit',
-                  task_queue: 'Task',
-                }
-
-                const triggerLabel = (entry) => {
-                  const base = TRIGGER_LABELS[entry.trigger] || entry.trigger
-                  if (entry.trigger === 'commit' && entry.detail) return `${base} (${entry.detail.slice(0, 8)})`
-                  if (entry.trigger === 'task_queue' && entry.detail) return `${base} (${entry.detail})`
-                  if (entry.trigger === 'manual' && entry.detail) return `${base} @ ${entry.detail.slice(0, 8)}`
-                  return base
-                }
-
-                return (
-                  <>
-                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-                      #{selected.id} — {selected.task_name}
-                    </div>
-
-                    <div style={{ marginBottom: 12 }}>
-                      <label>Status</label>
-                      <span className={`queue-status ${status}`} style={{ fontSize: 12 }}>
-                        {STATUS_LABELS[status]}
-                      </span>
-                    </div>
-
-                    <div style={{ marginBottom: 12 }}>
-                      <label>Queued by</label>
-                      <div style={{ fontSize: 12 }}>
-                        {triggers.map((entry, i) => (
-                          <div key={i}>
-                            {TRIGGER_ICONS[entry.trigger] || ''} {triggerLabel(entry)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div style={{ marginBottom: 12 }}>
-                      <label>Dispatched</label>
-                      <div style={{ fontSize: 12 }}>
-                        {selected.dispatch_method || '—'}
-                      </div>
-                    </div>
-
-                    <div style={{ marginBottom: 12 }}>
-                      <label>Context</label>
-                      {triggers.map((entry, i) => (
-                        <pre key={i} style={{
-                          fontSize: 11, background: '#f5f5f0', padding: 8,
-                          borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                          border: '1px solid #ddd', marginBottom: triggers.length > 1 ? 4 : 0,
-                          color: entry.context ? 'inherit' : '#aaa',
-                          fontStyle: entry.context ? 'normal' : 'italic',
-                        }}>
-                          {entry.context || 'not provided'}
-                        </pre>
-                      ))}
-                    </div>
-
-                    <div style={{ marginBottom: 12 }}>
-                      <label>Timeline</label>
-                      <div style={{ fontSize: 11 }}>
-                        <div>Created: {formatDate(selected.created_at, true)}</div>
-                        {selected.started_at && <div>Started: {formatDate(selected.started_at, true)}</div>}
-                        {selected.completed_at && <div>Completed: {formatDate(selected.completed_at, true)}</div>}
-                        {selected.started_at && selected.completed_at && (
-                          <div style={{ marginTop: 2, color: 'var(--text)' }}>
-                            Duration: {formatDuration(selected.started_at, selected.completed_at)}
-                          </div>
-                        )}
-                        {selected.started_at && !selected.completed_at && (
-                          <div style={{ marginTop: 2, color: 'var(--running)' }}>
-                            Running for {formatDuration(selected.started_at)}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {selected.result_commit && (
-                      <div style={{ marginBottom: 12 }}>
-                        <label>Result Commit</label>
-                        <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                          {selected.result_commit.slice(0, 8)}
-                        </div>
-                      </div>
-                    )}
-
-                    {selected.error && status !== 'cancelled' && (
-                      <div style={{ marginBottom: 12 }}>
-                        <label>Error</label>
-                        <div style={{ fontSize: 11, color: 'var(--danger)' }}>{selected.error}</div>
-                      </div>
-                    )}
-                  </>
-                )
-              })()}
-
-              {(() => {
-                const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
-                if (assistantMsgs.length === 0) return null
-                return (
-                  <div style={{ marginBottom: 12 }}>
-                    <label>Output</label>
-                    {assistantMsgs.map((msg, i) => {
-                      const content = typeof msg.content === 'string'
-                        ? msg.content
-                        : Array.isArray(msg.content)
-                          ? msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
-                          : String(msg.content ?? '')
-                      if (!content.trim()) return null
-                      return (
-                        <div key={i} className="md-content" style={{
-                          fontSize: 12,
-                          padding: '8px 10px',
-                          background: 'var(--surface)',
-                          border: '1px solid var(--border-light)',
-                          borderRadius: 4,
-                          marginBottom: 6,
-                        }}>
-                          <Markdown>{mdBreaks(content)}</Markdown>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )
-              })()}
+              <DispatchDetail item={selected} output={output} />
 
               {isUpcoming(selected) && (
                 <button className="danger small" onClick={() => handleCancel(selected.id)}>
@@ -358,4 +248,113 @@ export default function Queue() {
   )
 }
 
+function DispatchDetail({ item, output }) {
+  const status = getStatus(item)
+  const triggers = getTriggers(item)
+  const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
 
+  return (
+    <>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+        #{item.id} — {item.task_name}
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label>Status</label>
+        <span className={`queue-status ${status}`} style={{ fontSize: 12 }}>
+          {STATUS_LABELS[status]}
+        </span>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label>Queued by</label>
+        <div style={{ fontSize: 12 }}>
+          {triggers.map((entry, i) => (
+            <div key={i}>
+              {TRIGGER_ICONS[entry.trigger] || ''} {triggerLabel(entry)}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label>Dispatched</label>
+        <div style={{ fontSize: 12 }}>
+          {item.dispatch_method || '—'}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label>Context</label>
+        {triggers.map((entry, i) => (
+          <pre key={i} style={{
+            fontSize: 11, background: '#f5f5f0', padding: 8,
+            borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            border: '1px solid #ddd', marginBottom: triggers.length > 1 ? 4 : 0,
+            color: entry.context ? 'inherit' : '#aaa',
+            fontStyle: entry.context ? 'normal' : 'italic',
+          }}>
+            {entry.context || 'not provided'}
+          </pre>
+        ))}
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label>Timeline</label>
+        <div style={{ fontSize: 11 }}>
+          <div>Created: {formatDate(item.created_at, true)}</div>
+          {item.started_at && <div>Started: {formatDate(item.started_at, true)}</div>}
+          {item.completed_at && <div>Completed: {formatDate(item.completed_at, true)}</div>}
+          {item.started_at && item.completed_at && (
+            <div style={{ marginTop: 2, color: 'var(--text)' }}>
+              Duration: {formatDuration(item.started_at, item.completed_at)}
+            </div>
+          )}
+          {item.started_at && !item.completed_at && (
+            <div style={{ marginTop: 2, color: 'var(--running)' }}>
+              Running for {formatDuration(item.started_at)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {item.result_commit && (
+        <div style={{ marginBottom: 12 }}>
+          <label>Result Commit</label>
+          <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
+            {item.result_commit.slice(0, 8)}
+          </div>
+        </div>
+      )}
+
+      {item.error && status !== 'cancelled' && (
+        <div style={{ marginBottom: 12 }}>
+          <label>Error</label>
+          <div style={{ fontSize: 11, color: 'var(--danger)' }}>{item.error}</div>
+        </div>
+      )}
+
+      {assistantMsgs.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <label>Output</label>
+          {assistantMsgs.map((msg, i) => {
+            const content = getMessageContent(msg)
+            if (!content.trim()) return null
+            return (
+              <div key={i} className="md-content" style={{
+                fontSize: 12,
+                padding: '8px 10px',
+                background: 'var(--surface)',
+                border: '1px solid var(--border-light)',
+                borderRadius: 4,
+                marginBottom: 6,
+              }}>
+                <Markdown>{mdBreaks(content)}</Markdown>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </>
+  )
+}

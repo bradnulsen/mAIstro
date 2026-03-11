@@ -150,6 +150,15 @@ async def _migrate_db(db: aiosqlite.Connection):
     await db.execute("DELETE FROM task_properties WHERE key IN ('mode', 'running')")
     await db.execute("DELETE FROM task_property_defs WHERE key IN ('mode', 'running')")
 
+    # Add dispatch_method to dispatch_queue
+    dq_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
+    if "dispatch_method" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN dispatch_method TEXT")
+
+    # Add triggers JSON array column for enqueue-time coalescing
+    if "triggers" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN triggers TEXT")
+
     await db.commit()
 
 
@@ -293,17 +302,60 @@ async def delete_task(task_id: str) -> bool:
 async def enqueue_dispatch(task_id: str, trigger: str,
                            trigger_detail: str | None = None,
                            context: str | None = None) -> int:
+    """Enqueue a dispatch, coalescing into an existing pending record if enabled."""
+    new_entry = {"trigger": trigger, "detail": trigger_detail, "context": context}
     db = await get_db()
     try:
+        # Check if coalescing is enabled and there's an existing pending dispatch
+        task = await get_task(task_id, db=db)
+        if task and task["properties"].get("coalesce_dispatches"):
+            rows = await db.execute_fetchall(
+                """SELECT id, trigger, trigger_detail, context, triggers
+                   FROM dispatch_queue
+                   WHERE task_id = ? AND started_at IS NULL AND error IS NULL
+                   ORDER BY created_at ASC LIMIT 1""",
+                (task_id,)
+            )
+            if rows:
+                existing = dict(rows[0])
+                # Build triggers array from existing record
+                if existing["triggers"]:
+                    triggers = json.loads(existing["triggers"])
+                else:
+                    # Migrate: first entry from the original scalar fields
+                    triggers = [{"trigger": existing["trigger"],
+                                 "detail": existing["trigger_detail"],
+                                 "context": existing["context"]}]
+                triggers.append(new_entry)
+                await db.execute(
+                    "UPDATE dispatch_queue SET triggers = ? WHERE id = ?",
+                    (json.dumps(triggers), existing["id"])
+                )
+                await db.commit()
+                return existing["id"]
+
+        # No coalescing — insert new record
+        triggers_json = json.dumps([new_entry])
         cursor = await db.execute(
-            """INSERT INTO dispatch_queue (task_id, trigger, trigger_detail, context)
-               VALUES (?, ?, ?, ?)""",
-            (task_id, trigger, trigger_detail, context)
+            """INSERT INTO dispatch_queue (task_id, trigger, trigger_detail, context, triggers)
+               VALUES (?, ?, ?, ?, ?)""",
+            (task_id, trigger, trigger_detail, context, triggers_json)
         )
         await db.commit()
         return cursor.lastrowid
     finally:
         await db.close()
+
+
+def _parse_dispatch_row(row) -> dict:
+    """Convert a dispatch row, parsing the triggers JSON column."""
+    d = dict(row)
+    if d.get("triggers"):
+        try:
+            d["triggers"] = json.loads(d["triggers"])
+        except (json.JSONDecodeError, TypeError):
+            d["triggers"] = None
+    return d
 
 
 async def get_dispatch(dispatch_id: int) -> dict | None:
@@ -313,7 +365,7 @@ async def get_dispatch(dispatch_id: int) -> dict | None:
             "SELECT dq.*, t.name as task_name FROM dispatch_queue dq JOIN tasks t ON t.id = dq.task_id WHERE dq.id = ?",
             (dispatch_id,)
         )
-        return dict(rows[0]) if rows else None
+        return _parse_dispatch_row(rows[0]) if rows else None
     finally:
         await db.close()
 
@@ -327,7 +379,7 @@ async def get_dispatch_queue(limit: int = 50) -> list[dict]:
                ORDER BY dq.created_at DESC LIMIT ?""",
             (limit,)
         )
-        return [dict(r) for r in rows]
+        return [_parse_dispatch_row(r) for r in rows]
     finally:
         await db.close()
 
@@ -342,23 +394,7 @@ async def get_oldest_pending_dispatch() -> dict | None:
                WHERE dq.started_at IS NULL AND dq.error IS NULL
                ORDER BY dq.created_at ASC LIMIT 1"""
         )
-        return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
-
-
-async def get_pending_dispatches_for_task(task_id: str) -> list[dict]:
-    """Get all pending (not started, no error) dispatches for a task, oldest first."""
-    db = await get_db()
-    try:
-        rows = await db.execute_fetchall(
-            """SELECT dq.*, t.name as task_name FROM dispatch_queue dq
-               JOIN tasks t ON t.id = dq.task_id
-               WHERE dq.task_id = ? AND dq.started_at IS NULL AND dq.error IS NULL
-               ORDER BY dq.created_at ASC""",
-            (task_id,)
-        )
-        return [dict(r) for r in rows]
+        return _parse_dispatch_row(rows[0]) if rows else None
     finally:
         await db.close()
 
