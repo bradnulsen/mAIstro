@@ -202,15 +202,6 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             </div>
 
             <div className="field-group">
-              <label>Model</label>
-              <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
-                <option value="haiku">Haiku</option>
-              </select>
-            </div>
-
-            <div className="field-group">
               <label>Allowed Tools</label>
               <input
                 type="text"
@@ -218,6 +209,15 @@ function TaskDetail({ task, onRefresh, onDelete }) {
                 onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
                 placeholder="Comma-separated tool names..."
               />
+            </div>
+
+            <div className="field-group">
+              <label>Model</label>
+              <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+                <option value="haiku">Haiku</option>
+              </select>
             </div>
           </div>
 
