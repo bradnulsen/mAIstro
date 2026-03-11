@@ -253,7 +253,7 @@ export default function Chat() {
           {messages.map((m, i) => (
             <div key={i} className={`chat-message ${m.role}`}>
               <div className={`bubble${m.role === 'assistant' ? ' md-content' : ''}`}>
-                {m.role === 'assistant' ? <Markdown>{m.content}</Markdown> : m.content}
+                {m.role === 'assistant' ? <Markdown>{mdBreaks(m.content)}</Markdown> : m.content}
               </div>
             </div>
           ))}
@@ -268,7 +268,7 @@ export default function Chat() {
           {streaming && (
             <div className="chat-message assistant">
               <div className="bubble md-content">
-                <Markdown>{streaming}</Markdown>
+                <Markdown>{mdBreaks(streaming)}</Markdown>
                 <span style={{ opacity: 0.5 }}>▌</span>
               </div>
             </div>
@@ -308,4 +308,10 @@ export default function Chat() {
       </div>
     </div>
   )
+}
+
+// Convert single newlines to double so markdown renders them as paragraph breaks
+function mdBreaks(text) {
+  if (!text) return text
+  return text.replace(/\n(?!\n)/g, '\n\n')
 }
