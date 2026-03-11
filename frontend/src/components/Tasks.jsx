@@ -196,7 +196,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       )}
 
       {/* Task Definition — two-column layout */}
-      <div className="task-section">
+      <div className="task-section task-section-grow">
         <h3>Task Definition</h3>
         <div className="task-def-columns">
           <div className="task-def-left">
@@ -235,15 +235,14 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             <div className="field-group" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               <label>Instructions</label>
               {editingInstructions || !getVal('instructions') ? (
-                <AutoTextarea
+                <textarea
                   value={getVal('instructions') || ''}
                   onChange={e => edit('instructions', e.target.value)}
                   onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
                   placeholder="Detailed instructions for what this task should do..."
-                  maxHeight={400}
-                  minRows={8}
+                  rows={8}
                   autoFocus={editingInstructions}
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, resize: 'none', overflowY: 'auto', minHeight: 120 }}
                 />
               ) : (
                 <div className="instructions-preview md-content" onClick={() => setEditingInstructions(true)}>
@@ -331,8 +330,9 @@ function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, m
     const el = ref.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px'
-    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
+    const contentHeight = el.scrollHeight
+    el.style.height = Math.min(contentHeight, maxHeight) + 'px'
+    el.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden'
   }
   useEffect(() => { resize() }, [value])
   useEffect(() => { if (autoFocus && ref.current) ref.current.focus() }, [autoFocus])
