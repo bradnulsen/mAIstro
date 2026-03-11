@@ -146,6 +146,8 @@ export default function Queue() {
   )
   if (filter === 'past') {
     filtered.sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
+  } else {
+    filtered.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
   }
 
   return (
