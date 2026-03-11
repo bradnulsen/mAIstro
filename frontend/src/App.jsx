@@ -1,18 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listAgents } from './api'
+import { useState, useEffect, useCallback } from 'react'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listTasks } from './api'
 import Feed from './components/Feed'
-import Agents from './components/Agents'
+import Tasks from './components/Tasks'
+import Queue from './components/Queue'
 import Chat from './components/Chat'
 
-const VIEWS = { feed: 'feed', agents: 'agents', chat: 'chat' }
+const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue' }
 
 export default function App() {
   const [project, setProject] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState(VIEWS.feed)
-  const [agents, setAgents] = useState([])
+  const [view, setView] = useState(VIEWS.queue)
+  const [tasks, setTasks] = useState([])
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatWidth, setChatWidth] = useState(380)
 
-  // Check for loaded project on mount
   useEffect(() => {
     getProject()
       .then(p => { if (p.loaded) setProject(p) })
@@ -20,61 +22,94 @@ export default function App() {
       .finally(() => setLoading(false))
   }, [])
 
-  const refreshAgents = useCallback(async () => {
+  const refreshTasks = useCallback(async () => {
     try {
-      const list = await listAgents()
-      setAgents(list)
+      const list = await listTasks()
+      setTasks(list)
     } catch {}
   }, [])
 
   useEffect(() => {
-    if (project) refreshAgents()
-  }, [project, refreshAgents])
+    if (project) refreshTasks()
+  }, [project, refreshTasks])
+
+  const handleTabMouseDown = useCallback((e) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = chatOpen ? chatWidth : 380
+    let didDrag = false
+
+    const onMove = (e) => {
+      const delta = startX - e.clientX
+      if (!didDrag && Math.abs(delta) > 5) didDrag = true
+      if (didDrag) {
+        const newW = Math.max(250, Math.min(800, startW + delta))
+        setChatWidth(newW)
+        if (!chatOpen) setChatOpen(true)
+      }
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (!didDrag) setChatOpen(o => !o)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [chatOpen, chatWidth])
 
   if (loading) return <div className="loading">Loading...</div>
   if (!project) return <ProjectOpener onOpen={setProject} />
 
   return (
     <div className="app-shell">
-      {/* Rail */}
       <nav className="rail">
         <div className="rail-logo">⬡</div>
         <button
+          className={`rail-icon ${view === VIEWS.queue ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.queue)}
+          title="Queue"
+        >▶</button>
+        <button
           className={`rail-icon ${view === VIEWS.feed ? 'active' : ''}`}
           onClick={() => setView(VIEWS.feed)}
-          title="Feed"
+          title="Activity"
         >☰</button>
         <button
-          className={`rail-icon ${view === VIEWS.agents ? 'active' : ''}`}
-          onClick={() => setView(VIEWS.agents)}
-          title="Agents"
+          className={`rail-icon ${view === VIEWS.tasks ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.tasks)}
+          title="Tasks"
         >◉</button>
-        <button
-          className={`rail-icon ${view === VIEWS.chat ? 'active' : ''}`}
-          onClick={() => setView(VIEWS.chat)}
-          title="Chat"
-        >💬</button>
         <div className="rail-spacer" />
         <button className="rail-icon" title="Settings">⚙</button>
       </nav>
 
-      {/* Main */}
       <div className="main-area">
-        {/* Status bar */}
         <div className="status-bar">
-          {agents.map(a => (
-            <div key={a.id} className="status-chip">
-              <span className={`status-dot ${a.properties?.running ? 'running' : 'idle'}`} />
-              {a.name}
+          {tasks.map(t => (
+            <div key={t.id} className="status-chip">
+              <span className={`status-dot ${t.properties?.running ? 'running' : 'idle'}`} />
+              {t.name}
             </div>
           ))}
-          {agents.length === 0 && <span style={{ color: '#888' }}>No agents configured</span>}
+          {tasks.length === 0 && <span style={{ color: '#888' }}>No tasks configured</span>}
         </div>
 
-        {/* View */}
-        {view === VIEWS.feed && <Feed agents={agents} />}
-        {view === VIEWS.agents && <Agents agents={agents} onRefresh={refreshAgents} />}
-        {view === VIEWS.chat && <Chat agents={agents} />}
+        {view === VIEWS.feed && <Feed tasks={tasks} />}
+        {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} />}
+        {view === VIEWS.queue && <Queue tasks={tasks} />}
+      </div>
+
+      <div className={`chat-tray ${chatOpen ? 'open' : ''}`} style={chatOpen ? { width: chatWidth, minWidth: chatWidth } : undefined}>
+        <div className="chat-tray-tab" onMouseDown={handleTabMouseDown}>
+          Chat
+        </div>
+        <div className="chat-tray-content">
+          <div className="chat-tray-header">
+            <span>Chat</span>
+            <button className="small" onClick={() => setChatOpen(false)}>✕</button>
+          </div>
+          <Chat />
+        </div>
       </div>
     </div>
   )
