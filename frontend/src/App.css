@@ -484,8 +484,13 @@ label {
 
 .task-actions {
   display: flex;
+  align-items: flex-start;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.task-actions textarea {
+  min-height: 28px;
 }
 
 .field-group {
