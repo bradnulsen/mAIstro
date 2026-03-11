@@ -259,7 +259,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       <div className="task-section">
         <h3>Subscriptions</h3>
 
-        <div className="field-group">
+        <div className="field-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
             <input
               type="checkbox"
