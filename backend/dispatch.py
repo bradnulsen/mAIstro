@@ -1,6 +1,5 @@
 """Dispatch engine — prompt assembly, dispatch lifecycle, watch triggers."""
 
-import fnmatch
 import glob as globmod
 import logging
 import os

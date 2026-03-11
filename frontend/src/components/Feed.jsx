@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { getFeed, getGitDiff } from '../api'
 import { formatDate, TRIGGER_ICONS } from '../util'
 
-export default function Feed({ tasks }) {
+export default function Feed() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)

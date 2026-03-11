@@ -100,7 +100,7 @@ export default function App() {
           {tasks.length === 0 && <span style={{ color: '#888' }}>No tasks configured</span>}
         </div>
 
-        {view === VIEWS.feed && <Feed tasks={tasks} />}
+        {view === VIEWS.feed && <Feed />}
         {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} />}
         {view === VIEWS.queue && <Queue />}
       </div>

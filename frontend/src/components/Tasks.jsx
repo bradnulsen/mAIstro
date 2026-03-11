@@ -183,17 +183,23 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
       {/* Actions */}
       <div className="task-actions">
-        <button className="primary" onClick={handleDispatch} disabled={dispatching || props.running}>
-          {dispatching ? 'Queuing...' : '▶ Queue'}
-        </button>
-        <input
-          type="text"
-          placeholder="Optional context..."
+        <AutoTextarea
           value={context}
           onChange={e => setContext(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && !dispatching && !props.running && handleDispatch()}
+          placeholder="Optional context..."
+          maxHeight={120}
+          minRows={1}
           style={{ flex: 1 }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey && !dispatching && !props.running) {
+              e.preventDefault()
+              handleDispatch()
+            }
+          }}
         />
+        <button className="primary" onClick={handleDispatch} disabled={dispatching || props.running} style={{ alignSelf: 'flex-end' }}>
+          {dispatching ? 'Queuing...' : '▶ Queue'}
+        </button>
       </div>
 
       {lastDispatchId && (
@@ -331,7 +337,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   )
 }
 
-function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, minRows = 2, autoFocus, style }) {
+function AutoTextarea({ value, onChange, onBlur, onKeyDown, placeholder, maxHeight = 200, minRows = 2, autoFocus, style }) {
   const ref = useRef(null)
   const resize = () => {
     const el = ref.current
@@ -350,6 +356,7 @@ function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, m
       value={value}
       onChange={onChange}
       onBlur={onBlur}
+      onKeyDown={onKeyDown}
       onInput={resize}
       placeholder={placeholder}
       style={{ resize: 'none', maxHeight, ...style }}
