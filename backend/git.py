@@ -164,7 +164,6 @@ def changed_files_in_commit(cwd: str, commit_hash: str) -> list[str]:
     return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
 
 
-
 def head_hash(cwd: str) -> str | None:
     """Get current HEAD commit hash."""
     result = run_git("rev-parse", "HEAD", cwd=cwd)

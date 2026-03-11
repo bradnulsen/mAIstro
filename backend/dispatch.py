@@ -21,165 +21,169 @@ def utcnow() -> str:
 
 async def run_dispatch(
     dispatch_id: int,
-    agent: dict,
+    task: dict,
     project_dir: str,
     context: str | None = None,
+    cancel_event=None,
 ) -> AsyncIterator[dict]:
-    """Execute a dispatch: build prompt, invoke Claude CLI, yield SSE events."""
-    props = agent["properties"]
-    agent_id = agent["id"]
+    """Build prompts, invoke Claude CLI, yield events.
 
-    log.info(f"[dispatch:{dispatch_id}] Starting agent={agent_id}")
+    Only handles prompt assembly and CLI invocation.
+    Lifecycle management (timestamps, chat storage) belongs to the worker.
+    """
+    props = task["properties"]
 
-    await db.update_dispatch(dispatch_id, started_at=utcnow())
-    await db.set_agent_running(agent_id, True)
+    log.info(f"[dispatch:{dispatch_id}] Starting task={task['id']}")
 
-    yield {"type": "dispatch", "status": "started", "agent_id": agent_id, "dispatch_id": dispatch_id}
+    dispatch_record = await db.get_dispatch(dispatch_id)
+    queue_context = await _build_queue_context(dispatch_record, project_dir)
+    manifest = await build_task_manifest()
 
-    try:
-        queue_context = await _build_queue_context(dispatch_id, project_dir)
-        manifest = await build_agent_manifest()
-
-        system_prompt = build_system_prompt(agent, project_dir)
-        user_prompt = build_user_prompt(agent, project_dir, context, queue_context, manifest)
-
-        log.info(f"[dispatch:{dispatch_id}] System: {len(system_prompt)} chars, User: {len(user_prompt)} chars")
-        log.debug(f"[dispatch:{dispatch_id}] System prompt:\n{system_prompt[:500]}")
-        log.debug(f"[dispatch:{dispatch_id}] User prompt:\n{user_prompt[:500]}")
-
-        allowed = props.get("base_tools") or None
-        disallowed = props.get("disallowed_tools") or None
-
-        async for event in cli.invoke(
-            prompt=user_prompt,
-            system_prompt=system_prompt,
-            cwd=project_dir,
-            model=props.get("model"),
-            allowed_tools=allowed,
-            disallowed_tools=disallowed,
-        ):
-            if event["type"] == "error":
-                log.error(f"[dispatch:{dispatch_id}] CLI error: {event.get('message', '')[:200]}")
-            elif event["type"] == "tool_use":
-                log.info(f"[dispatch:{dispatch_id}] Tool use: {event.get('tool', '?')}")
-            yield event
-
-        commit_hash = commit_agent_changes(agent, project_dir)
-        if commit_hash:
-            log.info(f"[dispatch:{dispatch_id}] Committed: {commit_hash[:8]}")
-            await db.update_dispatch(dispatch_id, completed_at=utcnow(), result_commit=commit_hash)
-        else:
-            log.info(f"[dispatch:{dispatch_id}] No file changes to commit")
-            await db.update_dispatch(dispatch_id, completed_at=utcnow())
-
-        yield {
-            "type": "result",
-            "status": "completed",
-            "agent_id": agent_id,
-            "dispatch_id": dispatch_id,
-            "commit": commit_hash,
+    # Build dispatch metadata for prompt injection
+    dispatch_meta = None
+    if dispatch_record:
+        auto_setting = await db.get_config("queue_auto_dispatch")
+        dispatch_meta = {
+            "trigger": dispatch_record.get("trigger", "unknown"),
+            "trigger_detail": dispatch_record.get("trigger_detail", ""),
+            "auto_dispatched": auto_setting == "true",
         }
-        log.info(f"[dispatch:{dispatch_id}] Completed")
 
-    except Exception as e:
-        log.exception(f"[dispatch:{dispatch_id}] Failed: {e}")
-        await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=str(e))
-        yield {"type": "error", "message": str(e), "agent_id": agent_id, "dispatch_id": dispatch_id}
-    finally:
-        await db.set_agent_running(agent_id, False)
+    system_prompt = build_dispatch_system_prompt(task, project_dir)
+    user_prompt = build_user_prompt(task, project_dir, context, queue_context, manifest, dispatch_meta=dispatch_meta)
+
+    log.info(f"[dispatch:{dispatch_id}] System: {len(system_prompt)} chars, User: {len(user_prompt)} chars")
+
+    async for event in cli.invoke(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        cwd=project_dir,
+        model=props.get("model"),
+        allowed_tools=props.get("base_tools") or None,
+        disallowed_tools=props.get("disallowed_tools") or None,
+        cancel_event=cancel_event,
+    ):
+        if event["type"] == "error":
+            log.error(f"[dispatch:{dispatch_id}] CLI error: {event.get('message', '')[:200]}")
+        elif event["type"] == "tool_use":
+            log.info(f"[dispatch:{dispatch_id}] Tool use: {event.get('tool', '?')}")
+        yield event
 
 
 # ── Prompt assembly ─────────────────────────────────────────
 
-PLATFORM_PREAMBLE = (
-    "Documentation is the source of truth. Your files should be first-principle, "
-    "as-is representations of current project state — not task lists, not work-in-progress notes. "
-    "Any reasoning, context, or work management belongs in commit messages, not in documentation. "
-    "Keep your documentation current, accurate, and useful to anyone reading it cold."
-)
+DISPATCH_SYSTEM_PROMPT = """\
+You are an autonomous agent in mAistro, a development engine where tasks coordinate through git.
+
+## Execution Mode
+You are running in HEADLESS DISPATCH mode. There is no human in the loop.
+- Do NOT ask questions, request clarification, or wait for confirmation.
+- Make decisions autonomously based on available context.
+- Read files, analyze the codebase, and do your work.
+- If instructions are ambiguous, use your best judgment and document your reasoning.
+
+## Documentation Principle
+Documentation is the source of truth. Your files should be first-principle, \
+as-is representations of current project state — not task lists, not work-in-progress notes. \
+Any reasoning, context, or work management belongs in commit messages, not in documentation. \
+Keep your documentation current, accurate, and useful to anyone reading it cold.
+
+## Git Workflow
+- Commit your changes with descriptive messages explaining what changed and why.
+- Use the task name as a commit tag prefix: [{task_name}] description
+- Stage and commit related changes together as logical units.
+
+## Working Directory
+{project_dir}"""
 
 
-def build_system_prompt(agent: dict, project_dir: str) -> str:
-    props = agent["properties"]
-    name = agent["name"]
-    persona = props.get("persona")
-
-    sections = [
-        f"You are {name}, an agent in mAistro.",
-        "## Execution Mode\n"
-        "You are running in HEADLESS DISPATCH mode. There is no human in the loop.\n"
-        "- Do NOT ask questions, request clarification, or wait for confirmation.\n"
-        "- Make decisions autonomously based on available context.\n"
-        "- Read files, analyze the codebase, and do your work.\n"
-        "- If instructions are ambiguous, use your best judgment and document your reasoning.\n"
-        "- Produce concrete output: write files, update artifacts, commit results.",
-        f"## Documentation Principle\n{PLATFORM_PREAMBLE}",
-    ]
-    if persona:
-        sections.append(f"## Your Role\n{persona}")
-
-    sections.append(f"## Working Directory\n{project_dir}")
-
-    return "\n\n".join(sections)
+def build_dispatch_system_prompt(task: dict, project_dir: str) -> str:
+    return DISPATCH_SYSTEM_PROMPT.format(
+        task_name=task["name"],
+        project_dir=project_dir,
+    )
 
 
-def build_user_prompt(agent: dict, project_dir: str, context: str | None = None,
-                      queue_context: str | None = None, manifest: str | None = None) -> str:
-    props = agent["properties"]
+def build_user_prompt(task: dict, project_dir: str, context: str | None = None,
+                      queue_context: str | None = None, manifest: str | None = None,
+                      dispatch_meta: dict | None = None) -> str:
+    props = task["properties"]
     sections = []
+
+    # Task identity
+    name = task["name"]
+    description = props.get("description") or ""
+    instructions = props.get("instructions") or ""
+
+    identity_parts = [f"# Task: {name}"]
+    if description:
+        identity_parts.append(description)
+    if dispatch_meta:
+        trigger = dispatch_meta.get("trigger", "unknown")
+        detail = dispatch_meta.get("trigger_detail", "")
+        auto = dispatch_meta.get("auto_dispatched", False)
+        mode = "auto-dispatched" if auto else "manually dispatched"
+        trigger_line = f"**Dispatch:** {trigger} ({mode})"
+        if detail:
+            trigger_line += f" — `{detail}`"
+        identity_parts.append(trigger_line)
+    sections.append("\n".join(identity_parts))
+
+    if instructions:
+        sections.append(f"## Instructions\n{instructions}")
 
     if queue_context:
         sections.append(queue_context)
 
     if manifest and manifest.strip():
-        sections.append(f"## Agent Registry\n{manifest}")
+        sections.append(f"## Task Registry\n{manifest}")
 
-    # Subscription contents — files this agent watches and receives as context
+    # Subscription file list — agent reads contents via tools as needed
     sub_globs = props.get("subscriptions")
     if sub_globs:
-        sub_contents = read_glob_contents(project_dir, sub_globs)
-        if sub_contents:
-            sections.append(f"## Subscriptions (context)\n{sub_contents}")
+        sub_files = resolve_glob_files(project_dir, sub_globs)
+        if sub_files:
+            file_list = "\n".join(f"- `{f['path']}` ({f['size']}B)" for f in sub_files)
+            sections.append(f"## Subscribed Files\nThese files are relevant to your task. Read them as needed.\n{file_list}")
 
     recent = git.log_oneline(project_dir)
     if recent:
         sections.append(f"## Recent Activity\n```\n{recent}\n```")
 
     if context:
-        sections.append(f"## Task\n{context}")
+        sections.append(f"## Context\n{context}")
     else:
         sections.append(
-            "## Task\n"
-            "Review the project state — subscriptions, recent activity, and any files in your working directory. "
+            "## Your Turn\n"
+            "Review the project state — your instructions, subscriptions, and recent activity. "
             "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
         )
 
     return "\n\n".join(sections)
 
 
-# ── Agent manifest ─────────────────────────────────────────
+# ── Task manifest ─────────────────────────────────────────
 
-async def build_agent_manifest() -> str:
-    """Build the agent registry — all agents with personas and subscriptions."""
-    agents = await db.list_agents()
-    if not agents:
+async def build_task_manifest() -> str:
+    """Build the task registry — all tasks with descriptions and subscriptions."""
+    tasks = await db.list_tasks()
+    if not tasks:
         return ""
-    lines = ["Agents in this project:"]
-    for a in agents:
-        persona = a["properties"].get("persona") or ""
-        subs = a["properties"].get("subscriptions") or []
-        summary = persona[:100] + "..." if len(persona) > 100 else persona
+    lines = ["Tasks in this project:"]
+    for t in tasks:
+        desc = t["properties"].get("description") or ""
+        subs = t["properties"].get("subscriptions") or []
+        summary = desc[:100] + "..." if len(desc) > 100 else desc
         sub_str = ", ".join(subs) if subs else "(none)"
-        lines.append(f"- **{a['name']}** — {summary or '(no persona)'}")
+        lines.append(f"- **{t['name']}** — {summary or '(no description)'}")
         lines.append(f"  Subscriptions: {sub_str}")
     return "\n".join(lines)
 
 
 # ── Queue context ───────────────────────────────────────────
 
-async def _build_queue_context(dispatch_id: int, project_dir: str) -> str | None:
-    """Build context from the queuing agent for agent-queued dispatches."""
-    dispatch = await db.get_dispatch(dispatch_id)
+async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str | None:
+    """Build context from the queuing task for task-queued dispatches."""
     if not dispatch:
         return None
 
@@ -188,18 +192,18 @@ async def _build_queue_context(dispatch_id: int, project_dir: str) -> str | None
     context = dispatch.get("context")
     sections = []
 
-    if trigger == "agent_queue" and trigger_detail:
-        queuing_agent = await db.get_agent(trigger_detail)
-        if queuing_agent:
+    if trigger == "task_queue" and trigger_detail:
+        queuing_task = await db.get_task(trigger_detail)
+        if queuing_task:
             sections.append(
-                f"## Queued by: {queuing_agent['name']}\n"
-                f"Agent `{queuing_agent['name']}` has queued you to run."
+                f"## Queued by: {queuing_task['name']}\n"
+                f"Task `{queuing_task['name']}` has queued you to run."
             )
             if context:
                 sections.append(f"**Reason:** {context}")
 
-            # Read the queuing agent's subscribed files for summary context
-            q_subs = queuing_agent["properties"].get("subscriptions") or []
+            # Read the queuing task's subscribed files for summary context
+            q_subs = queuing_task["properties"].get("subscriptions") or []
             for pattern in q_subs:
                 for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
                     if fpath.endswith("summary.md") and os.path.isfile(fpath):
@@ -207,7 +211,7 @@ async def _build_queue_context(dispatch_id: int, project_dir: str) -> str | None
                         if content:
                             rel = os.path.relpath(fpath, project_dir)
                             sections.append(
-                                f"### {queuing_agent['name']}'s Current Summary\n"
+                                f"### {queuing_task['name']}'s Current Summary\n"
                                 f"(from `{rel}`):\n```\n{content[:4000]}\n```"
                             )
 
@@ -219,44 +223,28 @@ async def _build_queue_context(dispatch_id: int, project_dir: str) -> str | None
     return "\n\n".join(sections) if sections else None
 
 
-# ── Agent commit ────────────────────────────────────────────
-
-def commit_agent_changes(agent: dict, project_dir: str) -> str | None:
-    """Stage and commit any changes the agent made. Returns commit hash or None."""
-    author = f"{agent['name']} <{agent['id']}@maistro.local>"
-    message = f"[{agent['name']}] automated update"
-    return git.commit_all(project_dir, message, author=author)
-
-
 # ── Watch pattern matching ──────────────────────────────────
 
 async def check_watch_triggers(commit_hash: str, project_dir: str) -> list[dict]:
-    """Check which watch-mode agents should be triggered by a commit."""
+    """Check which watch-mode tasks should be triggered by a commit."""
     changed_files = git.changed_files_in_commit(project_dir, commit_hash)
     if not changed_files:
         return []
 
-    agents = await db.list_agents()
+    tasks = await db.list_tasks()
     triggered = []
 
-    for agent in agents:
-        props = agent["properties"]
-        if props.get("mode") != "watch" or props.get("running"):
+    for task in tasks:
+        props = task["properties"]
+        if not props.get("watch_enabled") or props.get("running"):
             continue
 
         patterns = props.get("subscriptions")
         if not patterns:
             continue
 
-        last_dispatch = await db.get_last_dispatch_time(agent["id"])
-        cooldown = props.get("cooldown_seconds", 30)
-        if last_dispatch:
-            elapsed = (datetime.now(timezone.utc) - last_dispatch).total_seconds()
-            if elapsed < cooldown:
-                continue
-
         if _any_file_matches(changed_files, patterns):
-            triggered.append(agent)
+            triggered.append(task)
 
     return triggered
 
@@ -271,26 +259,6 @@ def _any_file_matches(files: list[str], patterns: list[str]) -> bool:
 
 
 # ── File helpers ────────────────────────────────────────────
-
-def read_glob_contents(project_dir: str, patterns: list[str], max_lines: int = 500) -> str:
-    """Read files matching glob patterns, return concatenated contents."""
-    seen = set()
-    sections = []
-    for pattern in patterns:
-        for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
-            if fpath in seen or not os.path.isfile(fpath):
-                continue
-            seen.add(fpath)
-            rel = os.path.relpath(fpath, project_dir)
-            try:
-                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()[:max_lines]
-                    content = "".join(lines)
-                sections.append(f"### {rel}\n```\n{content}\n```")
-            except (OSError, UnicodeDecodeError):
-                continue
-    return "\n\n".join(sections) if sections else ""
-
 
 def resolve_glob_files(project_dir: str, patterns: list[str]) -> list[dict]:
     """Resolve glob patterns to file metadata dicts."""
