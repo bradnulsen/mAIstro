@@ -384,6 +384,25 @@ label {
   padding: 0;
 }
 
+.task-save-bar {
+  position: sticky;
+  top: -16px;
+  margin: -16px -16px 16px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 1;
+}
+
+.task-save-bar-label {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .instructions-preview {
   font-size: 12px;
   line-height: 1.5;
@@ -394,6 +413,10 @@ label {
   max-height: 300px;
   overflow-y: auto;
   cursor: text;
+}
+
+.instructions-preview:hover {
+  border-color: var(--border);
 }
 .instructions-preview p { margin: 0.3em 0; }
 .instructions-preview p:first-child { margin-top: 0; }

@@ -155,6 +155,16 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
   return (
     <div>
+      {isDirty && (
+        <div className="task-save-bar">
+          <span className="task-save-bar-label">Unsaved changes</span>
+          <button onClick={() => setEditing({})}>Discard</button>
+          <button className="primary" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: props.description ? 4 : 12 }}>
         <h2 style={{ flex: 1 }}>{task.name}</h2>
         <span style={{ fontSize: 11, color: '#888' }}>id: {task.id}</span>
@@ -180,8 +190,8 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       </div>
 
       {lastDispatchId && (
-        <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>
-          Queued as dispatch #{lastDispatchId}
+        <div style={{ fontSize: 11, color: 'var(--success)', marginBottom: 8 }}>
+          ✓ Queued as dispatch #{lastDispatchId}
         </div>
       )}
 
@@ -293,15 +303,6 @@ function TaskDetail({ task, onRefresh, onDelete }) {
           </div>
         )}
       </div>
-
-      {isDirty && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <button className="primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving...' : 'Save Changes'}
-          </button>
-          <button onClick={() => setEditing({})}>Cancel</button>
-        </div>
-      )}
 
       {/* Danger zone */}
       <div className="task-section">
