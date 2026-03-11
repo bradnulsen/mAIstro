@@ -44,6 +44,12 @@ export default function Queue({ tasks }) {
     try {
       const queue = await getDispatchQueue()
       setItems(queue)
+      // Keep selected item in sync with fresh data
+      setSelected(prev => {
+        if (!prev) return null
+        const updated = queue.find(q => q.id === prev.id)
+        return updated || null
+      })
     } catch {}
     setLoading(false)
   }, [])
@@ -120,7 +126,7 @@ export default function Queue({ tasks }) {
         </div>
         <button className="small" onClick={refresh}>↻</button>
         <div style={{ borderLeft: '1px solid #ccc', height: 16, margin: '0 4px' }} />
-        <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+        <label className="checkbox-label" style={{ fontSize: 11, marginBottom: 0, width: 'auto' }}>
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
           Auto
         </label>
@@ -146,9 +152,8 @@ export default function Queue({ tasks }) {
             return (
               <div
                 key={item.id}
-                className="feed-item"
+                className={`feed-item ${selected?.id === item.id ? 'active' : ''}`}
                 onClick={() => setSelected(item)}
-                style={selected?.id === item.id ? { background: '#eee' } : {}}
               >
                 <div className="feed-avatar">
                   {(item.task_name || '?')[0].toUpperCase()}
@@ -226,9 +231,9 @@ export default function Queue({ tasks }) {
             <div style={{ marginBottom: 12 }}>
               <label>Timeline</label>
               <div style={{ fontSize: 11 }}>
-                <div>Created: {selected.created_at}</div>
-                {selected.started_at && <div>Started: {selected.started_at}</div>}
-                {selected.completed_at && <div>Completed: {selected.completed_at}</div>}
+                <div>Created: {formatDate(selected.created_at, true)}</div>
+                {selected.started_at && <div>Started: {formatDate(selected.started_at, true)}</div>}
+                {selected.completed_at && <div>Completed: {formatDate(selected.completed_at, true)}</div>}
               </div>
             </div>
 

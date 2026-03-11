@@ -232,6 +232,10 @@ label {
   background: var(--rail-bg);
 }
 
+.feed-item.active {
+  background: #eee;
+}
+
 .feed-avatar {
   width: 28px;
   height: 28px;

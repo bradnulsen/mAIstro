@@ -63,7 +63,6 @@ export default function Feed({ tasks }) {
               key={item.hash}
               className={`feed-item ${selected?.hash === item.hash ? 'active' : ''}`}
               onClick={() => selectItem(item)}
-              style={selected?.hash === item.hash ? { background: '#eee' } : {}}
             >
               <div className="feed-avatar">
                 {(item.author || '?')[0].toUpperCase()}
