@@ -355,6 +355,35 @@ label {
   margin-bottom: 12px;
 }
 
+.task-description-display {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.task-description-display p { margin: 0.3em 0; }
+.task-description-display p:first-child { margin-top: 0; }
+.task-description-display p:last-child { margin-bottom: 0; }
+.task-description-display code {
+  font-size: 11px;
+  background: rgba(0,0,0,0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.task-description-display pre {
+  background: #1a1a1a;
+  color: #e0e0e0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 11px;
+  margin: 0.4em 0;
+}
+.task-description-display pre code {
+  background: none;
+  padding: 0;
+}
+
 .task-section {
   margin-bottom: 16px;
 }

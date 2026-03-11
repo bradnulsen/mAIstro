@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import Markdown from 'react-markdown'
 import {
   createTask, updateTask, deleteTask, getTaskSubscriptions,
   dispatchTask,
@@ -145,10 +146,15 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: props.description ? 4 : 12 }}>
         <h2 style={{ flex: 1 }}>{task.name}</h2>
         <span style={{ fontSize: 11, color: '#888' }}>id: {task.id}</span>
       </div>
+      {props.description && (
+        <div className="task-description-display">
+          <Markdown>{props.description}</Markdown>
+        </div>
+      )}
 
       {/* Actions */}
       <div className="task-actions">
