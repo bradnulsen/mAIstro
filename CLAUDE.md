@@ -39,9 +39,10 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 - **Git as source of truth**: all project content lives in git. The SQLite DB (`.maistro/` dir, gitignored) holds only operational state — task configs, dispatch queue, chat sessions
 - **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db` (async via aiosqlite); app DB at `<repo>/.maistro/app.db` (sync, `appstate.py`) holds recent-projects list
 - **Queue-first dispatch**: dispatches are always enqueued first, then processed asynchronously by the background worker. Frontend polls `/api/dispatch/{id}/output` for stored results. This decouples request handling from long-running CLI invocations
+- **Watch trigger pattern matching**: uses `pathlib.PurePath.match()` for glob patterns, enabling recursive `**` patterns in subscription filters
 - **Task properties are EAV**: `task_property_defs` table defines keys with defaults and types; `task_properties` stores per-task overrides. Types: `string`, `json`, `integer`, `boolean`
 - **Claude CLI via Popen+threads**: `cli.py` uses `subprocess.Popen` with thread readers pushing to `asyncio.Queue` (avoids Windows ProactorEventLoop issues). Pipes prompt and system prompt via stdin to avoid cmd arg quoting issues. Reads NDJSON from both stdout and stderr (CLI writes to stderr on `--resume`)
-- **Universal system prompt**: `MAISTRO_SYSTEM_PROMPT` in `dispatch.py` covers execution mode, documentation principles, and git workflow for all tasks. Task-specific `instructions` are layered into the user prompt
+- **Universal system prompt**: `DISPATCH_SYSTEM_PROMPT` in `dispatch.py` covers execution mode, documentation principles, and git workflow (including mandatory commit behavior) for all tasks. Task-specific `instructions` are layered into the user prompt
 - **Dispatch creates chat sessions**: each dispatch gets a linked chat session for durable output storage — serves as a permanent audit trail
 - **Vite proxies `/api` to backend**: frontend makes API calls to same origin, Vite dev server proxies to port 8420
 
