@@ -76,7 +76,7 @@ export default function Tasks({ tasks, onRefresh }) {
 
         <div className="task-detail">
           {activeTask ? (
-            <TaskDetail task={activeTask} onRefresh={onRefresh} onDelete={() => setSelected(null)} />
+            <TaskDetail key={activeTask.id} task={activeTask} onRefresh={onRefresh} onDelete={() => setSelected(null)} />
           ) : (
             <div className="empty-state">Select or create a task</div>
           )}
