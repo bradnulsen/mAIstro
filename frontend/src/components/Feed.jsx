@@ -43,7 +43,7 @@ export default function Feed({ tasks }) {
       <div className="header-bar">
         <h1>Activity Feed</h1>
         <div className="spacer" />
-        <button className="small" onClick={refresh}>↻ Refresh</button>
+        <button className="small" onClick={refresh}>↻</button>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>

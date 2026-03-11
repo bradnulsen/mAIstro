@@ -230,19 +230,21 @@ export default function Queue() {
         {selected && (
           <div className="detail-panel">
             <div className="detail-panel-header">
-              <h3>Dispatch Detail</h3>
+              <h3>#{selected.id} — {selected.task_name}</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               <DispatchDetail item={selected} output={output} />
+            </div>
 
-              {isUpcoming(selected) && (
+            {isUpcoming(selected) && (
+              <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0 }}>
                 <button className="danger small" onClick={() => handleCancel(selected.id)}>
                   Cancel Dispatch
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -255,12 +257,16 @@ function DispatchDetail({ item, output }) {
   const triggers = getTriggers(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
 
+  // Tick every second while running so duration stays current
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (status !== 'running') return
+    const interval = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(interval)
+  }, [status])
+
   return (
     <>
-      <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-        #{item.id} — {item.task_name}
-      </div>
-
       <div style={{ marginBottom: 12 }}>
         <label>Status</label>
         <span className={`queue-status ${status}`} style={{ fontSize: 12 }}>
