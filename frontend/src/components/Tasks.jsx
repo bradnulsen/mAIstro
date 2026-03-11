@@ -206,25 +206,16 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
 
         <div className="field-group">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <label>Instructions</label>
-            {getVal('instructions') && (
-              <button
-                className="small"
-                style={{ fontSize: 10, padding: '1px 6px' }}
-                onClick={() => setEditingInstructions(e => !e)}
-              >
-                {editingInstructions ? 'Preview' : 'Edit'}
-              </button>
-            )}
-          </div>
+          <label>Instructions</label>
           {editingInstructions || !getVal('instructions') ? (
             <AutoTextarea
               value={getVal('instructions') || ''}
               onChange={e => edit('instructions', e.target.value)}
+              onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
               placeholder="Detailed instructions for what this task should do..."
               maxHeight={300}
               minRows={3}
+              autoFocus={editingInstructions}
             />
           ) : (
             <div className="instructions-preview" onClick={() => setEditingInstructions(true)}>
@@ -316,7 +307,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   )
 }
 
-function AutoTextarea({ value, onChange, placeholder, maxHeight = 200, minRows = 2 }) {
+function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, minRows = 2, autoFocus }) {
   const ref = useRef(null)
   const resize = () => {
     const el = ref.current
@@ -326,12 +317,14 @@ function AutoTextarea({ value, onChange, placeholder, maxHeight = 200, minRows =
     el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
   }
   useEffect(() => { resize() }, [value])
+  useEffect(() => { if (autoFocus && ref.current) ref.current.focus() }, [autoFocus])
   return (
     <textarea
       ref={ref}
       rows={minRows}
       value={value}
       onChange={onChange}
+      onBlur={onBlur}
       onInput={resize}
       placeholder={placeholder}
       style={{ resize: 'none' }}
