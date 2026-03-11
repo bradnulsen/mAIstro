@@ -266,7 +266,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
               checked={getVal('watch_enabled') || false}
               onChange={e => edit('watch_enabled', e.target.checked)}
             />
-            Auto-dispatch on commit
+            Auto-queue on commit
           </label>
           <label className="checkbox-label" style={{
             whiteSpace: 'nowrap',
