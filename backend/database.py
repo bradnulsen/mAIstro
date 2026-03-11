@@ -224,7 +224,7 @@ async def get_task(task_id: str, db: aiosqlite.Connection | None = None,
 async def list_tasks() -> list[dict]:
     db = await get_db()
     try:
-        rows = await db.execute_fetchall("SELECT id FROM tasks ORDER BY id")
+        rows = await db.execute_fetchall("SELECT id FROM tasks")
         # Fetch running task IDs in one query to avoid N+1
         running_rows = await db.execute_fetchall(
             "SELECT DISTINCT task_id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
@@ -260,6 +260,20 @@ async def update_task(task_id: str, updates: dict) -> dict | None:
             )
         await db.commit()
         return await get_task(task_id, db=db)
+    finally:
+        await db.close()
+
+
+async def reorder_tasks(task_ids: list[str]):
+    """Set sort_order for multiple tasks in a single transaction."""
+    db = await get_db()
+    try:
+        for i, task_id in enumerate(task_ids):
+            await db.execute(
+                "INSERT OR REPLACE INTO task_properties (task_id, key, value) VALUES (?, 'sort_order', ?)",
+                (task_id, str(i))
+            )
+        await db.commit()
     finally:
         await db.close()
 

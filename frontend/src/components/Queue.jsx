@@ -31,7 +31,7 @@ function isUpcoming(item) {
   return s === 'pending' || s === 'running'
 }
 
-export default function Queue({ tasks }) {
+export default function Queue() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)

@@ -243,8 +243,7 @@ async def delete_task(task_id: str):
 @app.post("/api/tasks/reorder")
 async def reorder_tasks(req: ReorderRequest):
     _require_project()
-    for i, task_id in enumerate(req.task_ids):
-        await db.update_task(task_id, {"sort_order": i})
+    await db.reorder_tasks(req.task_ids)
     return {"status": "ok"}
 
 

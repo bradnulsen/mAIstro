@@ -96,7 +96,7 @@ export default function App() {
 
         {view === VIEWS.feed && <Feed tasks={tasks} />}
         {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} />}
-        {view === VIEWS.queue && <Queue tasks={tasks} />}
+        {view === VIEWS.queue && <Queue />}
       </div>
 
       <div className={`chat-tray ${chatOpen ? 'open' : ''}`} style={chatOpen ? { width: chatWidth, minWidth: chatWidth } : undefined}>
