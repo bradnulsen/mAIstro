@@ -118,6 +118,9 @@ export default function Queue() {
   const filtered = items.filter(item =>
     filter === 'upcoming' ? isUpcoming(item) : !isUpcoming(item)
   )
+  if (filter === 'past') {
+    filtered.sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
+  }
 
   return (
     <>
