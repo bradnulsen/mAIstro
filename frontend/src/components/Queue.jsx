@@ -242,10 +242,19 @@ export default function Queue({ tasks }) {
               </div>
             )}
 
-            {selected.error && (
+            {selected.error && getStatus(selected) !== 'coalesced' && (
               <div style={{ marginBottom: 12 }}>
                 <label>Error</label>
                 <div style={{ fontSize: 11, color: 'var(--danger)' }}>{selected.error}</div>
+              </div>
+            )}
+
+            {getStatus(selected) === 'coalesced' && selected.error && (
+              <div style={{ marginBottom: 12 }}>
+                <label>Note</label>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  {selected.error}
+                </div>
               </div>
             )}
 

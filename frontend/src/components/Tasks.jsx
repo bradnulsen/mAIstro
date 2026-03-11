@@ -268,11 +268,16 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             />
             Auto-dispatch when matched files are committed
           </label>
-          <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+          <label className="checkbox-label" style={{
+            whiteSpace: 'nowrap',
+            paddingLeft: 20,
+            opacity: getVal('watch_enabled') ? 1 : 0.4,
+          }}>
             <input
               type="checkbox"
               checked={getVal('coalesce_dispatches') || false}
               onChange={e => edit('coalesce_dispatches', e.target.checked)}
+              disabled={!getVal('watch_enabled')}
             />
             Coalesce pending dispatches into one invocation
           </label>
