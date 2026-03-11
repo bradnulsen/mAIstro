@@ -469,9 +469,10 @@ label {
 }
 
 .checkbox-label {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  cursor: pointer;
   font-size: 12px;
   text-transform: none;
   letter-spacing: normal;
