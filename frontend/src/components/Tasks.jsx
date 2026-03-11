@@ -259,18 +259,17 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       <div className="task-section">
         <h3>Subscriptions</h3>
 
-        <div className="field-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="field-group" style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
             <input
               type="checkbox"
               checked={getVal('watch_enabled') || false}
               onChange={e => edit('watch_enabled', e.target.checked)}
             />
-            Auto-dispatch when matched files are committed
+            Auto-dispatch on commit
           </label>
           <label className="checkbox-label" style={{
             whiteSpace: 'nowrap',
-            paddingLeft: 20,
             opacity: getVal('watch_enabled') ? 1 : 0.4,
           }}>
             <input
@@ -279,7 +278,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
               onChange={e => edit('coalesce_dispatches', e.target.checked)}
               disabled={!getVal('watch_enabled')}
             />
-            Coalesce pending dispatches into one invocation
+            Coalesce pending dispatches
           </label>
         </div>
 
