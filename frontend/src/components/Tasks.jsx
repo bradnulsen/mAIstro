@@ -247,9 +247,19 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
       {/* Subscriptions config */}
       <div className="task-section">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h3 style={{ marginBottom: 0 }}>Subscriptions</h3>
-          <label className="checkbox-label" style={{ marginBottom: 4 }}>
+        <h3>Subscriptions</h3>
+
+        <div className="field-group" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1 }}>
+            <label>Glob patterns (one per line)</label>
+            <AutoTextarea
+              value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
+              onChange={e => edit('subscriptions', e.target.value)}
+              maxHeight={150}
+              minRows={2}
+            />
+          </div>
+          <label className="checkbox-label" style={{ marginTop: 22, whiteSpace: 'nowrap' }}>
             <input
               type="checkbox"
               checked={getVal('watch_enabled') || false}
@@ -257,16 +267,6 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             />
             Watch mode
           </label>
-        </div>
-
-        <div className="field-group">
-          <label>Glob patterns (one per line)</label>
-          <AutoTextarea
-            value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
-            onChange={e => edit('subscriptions', e.target.value)}
-            maxHeight={150}
-            minRows={2}
-          />
         </div>
 
         {/* Resolved files (collapsible) */}
