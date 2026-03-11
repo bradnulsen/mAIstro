@@ -345,7 +345,7 @@ function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, m
       onBlur={onBlur}
       onInput={resize}
       placeholder={placeholder}
-      style={{ resize: 'none', ...style }}
+      style={{ resize: 'none', maxHeight, ...style }}
     />
   )
 }
