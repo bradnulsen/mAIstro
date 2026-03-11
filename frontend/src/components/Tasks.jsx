@@ -94,13 +94,14 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   const [context, setContext] = useState('')
   const [subs, setSubs] = useState(null)
   const [subsOpen, setSubsOpen] = useState(false)
+  const [editingInstructions, setEditingInstructions] = useState(false)
   const props = task.properties || {}
 
   useEffect(() => {
     getTaskSubscriptions(task.id).then(setSubs).catch(() => setSubs(null))
   }, [task.id])
 
-  useEffect(() => { setEditing({}) }, [task.id])
+  useEffect(() => { setEditing({}); setEditingInstructions(false) }, [task.id])
 
   const edit = (key, value) => setEditing(prev => ({ ...prev, [key]: value }))
 
@@ -201,14 +202,31 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
 
         <div className="field-group">
-          <label>Instructions</label>
-          <AutoTextarea
-            value={getVal('instructions') || ''}
-            onChange={e => edit('instructions', e.target.value)}
-            placeholder="Detailed instructions for what this task should do..."
-            maxHeight={300}
-            minRows={3}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <label>Instructions</label>
+            {getVal('instructions') && (
+              <button
+                className="small"
+                style={{ fontSize: 10, padding: '1px 6px' }}
+                onClick={() => setEditingInstructions(e => !e)}
+              >
+                {editingInstructions ? 'Preview' : 'Edit'}
+              </button>
+            )}
+          </div>
+          {editingInstructions || !getVal('instructions') ? (
+            <AutoTextarea
+              value={getVal('instructions') || ''}
+              onChange={e => edit('instructions', e.target.value)}
+              placeholder="Detailed instructions for what this task should do..."
+              maxHeight={300}
+              minRows={3}
+            />
+          ) : (
+            <div className="instructions-preview" onClick={() => setEditingInstructions(true)}>
+              <Markdown>{getVal('instructions')}</Markdown>
+            </div>
+          )}
         </div>
       </div>
 
