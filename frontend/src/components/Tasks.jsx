@@ -159,7 +159,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       {/* Actions */}
       <div className="task-actions">
         <button className="primary" onClick={handleDispatch} disabled={dispatching || props.running}>
-          {dispatching ? 'Queuing...' : '▶ Run'}
+          {dispatching ? 'Queuing...' : '▶ Queue'}
         </button>
         <input
           type="text"
@@ -176,23 +176,9 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
       )}
 
-      {/* Subscriptions */}
-      {subs && (
-        <div className="task-section">
-          <h3>Subscriptions</h3>
-          {subs.subscriptions.length === 0 && <div style={{ fontSize: 11, color: '#888' }}>No subscriptions</div>}
-          {subs.subscriptions.map(f => (
-            <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
-              <span>{f.path}</span>
-              <span style={{ color: '#888' }}>{formatSize(f.size)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Config */}
+      {/* Description & Instructions */}
       <div className="task-section">
-        <h3>Configuration</h3>
+        <h3>Task Definition</h3>
 
         <div className="field-group">
           <label>Description</label>
@@ -205,6 +191,15 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
 
         <div className="field-group">
+          <label>Model</label>
+          <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
+            <option value="sonnet">Sonnet</option>
+            <option value="opus">Opus</option>
+            <option value="haiku">Haiku</option>
+          </select>
+        </div>
+
+        <div className="field-group">
           <label>Instructions</label>
           <textarea
             rows={4}
@@ -213,15 +208,38 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             placeholder="Detailed instructions for what this task should do..."
           />
         </div>
+      </div>
+
+      {/* Subscriptions config */}
+      <div className="task-section">
+        <h3>Subscriptions</h3>
 
         <div className="field-group">
-          <label>Model</label>
-          <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
-            <option value="sonnet">Sonnet</option>
-            <option value="opus">Opus</option>
-            <option value="haiku">Haiku</option>
-          </select>
+          <label>Glob patterns (one per line)</label>
+          <textarea
+            rows={3}
+            value={arrayToLines(getVal('subscriptions'))}
+            onChange={e => edit('subscriptions', linesToArray(e.target.value))}
+          />
         </div>
+
+        {/* Resolved files */}
+        {subs && subs.subscriptions.length > 0 && (
+          <div className="field-group">
+            <label>Resolved files</label>
+            {subs.subscriptions.map(f => (
+              <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
+                <span>{f.path}</span>
+                <span style={{ color: '#888' }}>{formatSize(f.size)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Behavior */}
+      <div className="task-section">
+        <h3>Behavior</h3>
 
         <div className="field-group">
           <label>Watch Mode</label>
@@ -236,15 +254,6 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
 
         <div className="field-group">
-          <label>Subscriptions (one glob per line)</label>
-          <textarea
-            rows={3}
-            value={arrayToLines(getVal('subscriptions'))}
-            onChange={e => edit('subscriptions', linesToArray(e.target.value))}
-          />
-        </div>
-
-        <div className="field-group">
           <label>Allowed Tools (comma-separated)</label>
           <input
             type="text"
@@ -252,16 +261,16 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
           />
         </div>
-
-        {isDirty && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button className="primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving...' : 'Save Changes'}
-            </button>
-            <button onClick={() => setEditing({})}>Cancel</button>
-          </div>
-        )}
       </div>
+
+      {isDirty && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <button className="primary" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+          <button onClick={() => setEditing({})}>Cancel</button>
+        </div>
+      )}
 
       {/* Danger zone */}
       <div className="task-section">
