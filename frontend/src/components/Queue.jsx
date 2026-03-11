@@ -184,115 +184,117 @@ export default function Queue() {
 
         {/* Detail panel */}
         {selected && (
-          <div className="detail-panel" style={{ overflow: 'auto' }}>
+          <div className="detail-panel">
             <div className="detail-panel-header">
               <h3>Dispatch Detail</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
-            <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-              #{selected.id} — {selected.task_name}
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <label>Status</label>
-              <span className={`queue-status ${getStatus(selected)}`} style={{ fontSize: 12 }}>
-                {STATUS_LABELS[getStatus(selected)]}
-              </span>
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <label>Trigger</label>
-              <div style={{ fontSize: 12 }}>
-                {TRIGGER_ICONS[selected.trigger] || ''} {selected.trigger}
-                {selected.trigger_detail && (
-                  <span style={{ color: '#888' }}> — {selected.trigger_detail}</span>
-                )}
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                #{selected.id} — {selected.task_name}
               </div>
-            </div>
 
-            {selected.context && (
               <div style={{ marginBottom: 12 }}>
-                <label>Context</label>
-                <pre style={{
-                  fontSize: 11, background: '#f5f5f0', padding: 8,
-                  borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  border: '1px solid #ddd',
-                }}>
-                  {selected.context}
-                </pre>
+                <label>Status</label>
+                <span className={`queue-status ${getStatus(selected)}`} style={{ fontSize: 12 }}>
+                  {STATUS_LABELS[getStatus(selected)]}
+                </span>
               </div>
-            )}
 
-            <div style={{ marginBottom: 12 }}>
-              <label>Timeline</label>
-              <div style={{ fontSize: 11 }}>
-                <div>Created: {formatDate(selected.created_at, true)}</div>
-                {selected.started_at && <div>Started: {formatDate(selected.started_at, true)}</div>}
-                {selected.completed_at && <div>Completed: {formatDate(selected.completed_at, true)}</div>}
-              </div>
-            </div>
-
-            {selected.result_commit && (
               <div style={{ marginBottom: 12 }}>
-                <label>Result Commit</label>
-                <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                  {selected.result_commit.slice(0, 8)}
+                <label>Trigger</label>
+                <div style={{ fontSize: 12 }}>
+                  {TRIGGER_ICONS[selected.trigger] || ''} {selected.trigger}
+                  {selected.trigger_detail && (
+                    <span style={{ color: '#888' }}> — {selected.trigger_detail}</span>
+                  )}
                 </div>
               </div>
-            )}
 
-            {selected.error && getStatus(selected) !== 'coalesced' && (
-              <div style={{ marginBottom: 12 }}>
-                <label>Error</label>
-                <div style={{ fontSize: 11, color: 'var(--danger)' }}>{selected.error}</div>
-              </div>
-            )}
-
-            {getStatus(selected) === 'coalesced' && selected.error && (
-              <div style={{ marginBottom: 12 }}>
-                <label>Note</label>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                  {selected.error}
-                </div>
-              </div>
-            )}
-
-            {(() => {
-              const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
-              if (assistantMsgs.length === 0) return null
-              return (
+              {selected.context && (
                 <div style={{ marginBottom: 12 }}>
-                  <label>Output</label>
-                  {assistantMsgs.map((msg, i) => {
-                    const content = typeof msg.content === 'string'
-                      ? msg.content
-                      : Array.isArray(msg.content)
-                        ? msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
-                        : String(msg.content ?? '')
-                    if (!content.trim()) return null
-                    return (
-                      <div key={i} className="md-content" style={{
-                        fontSize: 12,
-                        padding: '8px 10px',
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border-light)',
-                        borderRadius: 4,
-                        marginBottom: 6,
-                      }}>
-                        <Markdown>{mdBreaks(content)}</Markdown>
-                      </div>
-                    )
-                  })}
+                  <label>Context</label>
+                  <pre style={{
+                    fontSize: 11, background: '#f5f5f0', padding: 8,
+                    borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    border: '1px solid #ddd',
+                  }}>
+                    {selected.context}
+                  </pre>
                 </div>
-              )
-            })()}
+              )}
 
-            {isUpcoming(selected) && (
-              <button className="danger small" onClick={() => handleCancel(selected.id)}>
-                Cancel Dispatch
-              </button>
-            )}
+              <div style={{ marginBottom: 12 }}>
+                <label>Timeline</label>
+                <div style={{ fontSize: 11 }}>
+                  <div>Created: {formatDate(selected.created_at, true)}</div>
+                  {selected.started_at && <div>Started: {formatDate(selected.started_at, true)}</div>}
+                  {selected.completed_at && <div>Completed: {formatDate(selected.completed_at, true)}</div>}
+                </div>
+              </div>
+
+              {selected.result_commit && (
+                <div style={{ marginBottom: 12 }}>
+                  <label>Result Commit</label>
+                  <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                    {selected.result_commit.slice(0, 8)}
+                  </div>
+                </div>
+              )}
+
+              {selected.error && getStatus(selected) !== 'coalesced' && (
+                <div style={{ marginBottom: 12 }}>
+                  <label>Error</label>
+                  <div style={{ fontSize: 11, color: 'var(--danger)' }}>{selected.error}</div>
+                </div>
+              )}
+
+              {getStatus(selected) === 'coalesced' && selected.error && (
+                <div style={{ marginBottom: 12 }}>
+                  <label>Note</label>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                    {selected.error}
+                  </div>
+                </div>
+              )}
+
+              {(() => {
+                const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
+                if (assistantMsgs.length === 0) return null
+                return (
+                  <div style={{ marginBottom: 12 }}>
+                    <label>Output</label>
+                    {assistantMsgs.map((msg, i) => {
+                      const content = typeof msg.content === 'string'
+                        ? msg.content
+                        : Array.isArray(msg.content)
+                          ? msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
+                          : String(msg.content ?? '')
+                      if (!content.trim()) return null
+                      return (
+                        <div key={i} className="md-content" style={{
+                          fontSize: 12,
+                          padding: '8px 10px',
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border-light)',
+                          borderRadius: 4,
+                          marginBottom: 6,
+                        }}>
+                          <Markdown>{mdBreaks(content)}</Markdown>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+
+              {isUpcoming(selected) && (
+                <button className="danger small" onClick={() => handleCancel(selected.id)}>
+                  Cancel Dispatch
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
