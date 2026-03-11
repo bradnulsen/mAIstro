@@ -315,8 +315,10 @@ label {
   width: 200px;
   min-width: 200px;
   border-right: 1.5px solid var(--border);
-  overflow-y: auto;
   background: var(--rail-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .task-list-item {
@@ -751,4 +753,61 @@ label {
 .scroll-area {
   flex: 1;
   overflow-y: auto;
+}
+
+/* ── Detail Panel (Feed + Queue) ── */
+
+.detail-panel {
+  width: 600px;
+  min-width: 600px;
+  border-left: 1.5px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.detail-panel-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.detail-panel-header h3 {
+  font-size: 13px;
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+/* ── Diff Viewer ── */
+
+.diff-view {
+  font-size: 11px;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  padding: 8px;
+  border-radius: 4px;
+  overflow: auto;
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.diff-view .diff-add {
+  color: #7ec87e;
+  background: rgba(74, 170, 74, 0.1);
+}
+
+.diff-view .diff-del {
+  color: #e87272;
+  background: rgba(204, 68, 68, 0.1);
+}
+
+.diff-view .diff-hunk {
+  color: #7ab0d6;
+  font-weight: bold;
 }

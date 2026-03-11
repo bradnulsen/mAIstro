@@ -7,6 +7,7 @@ export default function Feed({ tasks }) {
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
   const [diff, setDiff] = useState('')
+  const [loadingDiff, setLoadingDiff] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -26,12 +27,15 @@ export default function Feed({ tasks }) {
 
   const selectItem = async (item) => {
     setSelected(item)
+    setDiff('')
+    setLoadingDiff(true)
     try {
       const d = await getGitDiff(item.hash)
       setDiff(d.diff || '')
     } catch {
       setDiff('')
     }
+    setLoadingDiff(false)
   }
 
   return (
@@ -80,13 +84,9 @@ export default function Feed({ tasks }) {
 
         {/* Detail panel */}
         {selected && (
-          <div style={{
-            width: 600, minWidth: 600, borderLeft: '1.5px solid #222',
-            display: 'flex', flexDirection: 'column',
-            overflow: 'hidden', padding: 16, background: '#fff',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, flexShrink: 0 }}>
-              <h3 style={{ fontSize: 13 }}>Commit Detail</h3>
+          <div className="detail-panel">
+            <div className="detail-panel-header">
+              <h3>Commit Detail</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
             <div style={{ fontSize: 11, color: '#888', marginBottom: 4, flexShrink: 0 }}>
@@ -103,15 +103,20 @@ export default function Feed({ tasks }) {
                 ))}
               </div>
             )}
+            {loadingDiff && (
+              <div style={{ fontSize: 11, color: '#888', padding: '8px 0' }}>Loading diff...</div>
+            )}
             {diff && (
               <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
                 <label style={{ flexShrink: 0 }}>Diff</label>
-                <pre style={{
-                  fontSize: 11, background: '#1a1a1a', color: '#e0e0e0',
-                  padding: 8, borderRadius: 4, overflow: 'auto', flex: 1,
-                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                }}>
-                  {diff}
+                <pre className="diff-view">
+                  {diff.split('\n').map((line, i) => (
+                    <div key={i} className={
+                      line.startsWith('+') ? 'diff-add' :
+                      line.startsWith('-') ? 'diff-del' :
+                      line.startsWith('@@') ? 'diff-hunk' : ''
+                    }>{line}</div>
+                  ))}
                 </pre>
               </div>
             )}

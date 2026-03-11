@@ -178,12 +178,9 @@ export default function Queue({ tasks }) {
 
         {/* Detail panel */}
         {selected && (
-          <div style={{
-            width: 600, minWidth: 600, borderLeft: '1.5px solid #222',
-            overflow: 'auto', padding: 16, background: '#fff',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-              <h3 style={{ fontSize: 13 }}>Dispatch Detail</h3>
+          <div className="detail-panel" style={{ overflow: 'auto' }}>
+            <div className="detail-panel-header">
+              <h3>Dispatch Detail</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
