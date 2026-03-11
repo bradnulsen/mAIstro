@@ -228,6 +228,19 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
       </div>
 
+      {/* Tools */}
+      <div className="task-section">
+        <h3>Allowed Tools</h3>
+        <div className="field-group">
+          <input
+            type="text"
+            value={(getVal('base_tools') || []).join(', ')}
+            onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+            placeholder="Comma-separated tool names..."
+          />
+        </div>
+      </div>
+
       {/* Subscriptions config */}
       <div className="task-section">
         <h3>Subscriptions</h3>
@@ -280,15 +293,6 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             />
             Auto-enqueue when subscribed files change
           </label>
-        </div>
-
-        <div className="field-group">
-          <label>Allowed Tools (comma-separated)</label>
-          <input
-            type="text"
-            value={(getVal('base_tools') || []).join(', ')}
-            onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-          />
         </div>
       </div>
 
