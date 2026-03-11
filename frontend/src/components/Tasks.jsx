@@ -249,24 +249,25 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       <div className="task-section">
         <h3>Subscriptions</h3>
 
-        <div className="field-group" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-          <div style={{ flex: 1 }}>
-            <label>Glob patterns (one per line)</label>
-            <AutoTextarea
-              value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
-              onChange={e => edit('subscriptions', e.target.value)}
-              maxHeight={150}
-              minRows={2}
-            />
-          </div>
-          <label className="checkbox-label" style={{ marginTop: 22, whiteSpace: 'nowrap' }}>
+        <div className="field-group">
+          <label className="checkbox-label">
             <input
               type="checkbox"
               checked={getVal('watch_enabled') || false}
               onChange={e => edit('watch_enabled', e.target.checked)}
             />
-            Watch mode
+            Auto-dispatch when matched files are committed
           </label>
+        </div>
+
+        <div className="field-group">
+          <label>Glob patterns (one per line)</label>
+          <AutoTextarea
+            value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
+            onChange={e => edit('subscriptions', e.target.value)}
+            maxHeight={150}
+            minRows={2}
+          />
         </div>
 
         {/* Resolved files (collapsible) */}
