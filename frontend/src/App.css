@@ -554,6 +554,7 @@ label {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
 }
 
@@ -569,10 +570,13 @@ label {
 
 .chat-message .bubble {
   display: inline-block;
+  max-width: 100%;
   padding: 10px 14px;
   border-radius: 6px;
   font-size: 12px;
   word-break: break-word;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
 }
 
 /* Markdown inside chat bubbles */
@@ -585,6 +589,7 @@ label {
   padding: 6px 8px;
   border-radius: 4px;
   overflow-x: auto;
+  max-width: 100%;
   font-size: 11px;
   margin: 0.4em 0;
 }
