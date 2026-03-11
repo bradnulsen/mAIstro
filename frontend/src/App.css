@@ -563,8 +563,7 @@ label {
 }
 
 .chat-message.user {
-  margin-left: auto;
-  text-align: right;
+  text-align: left;
 }
 
 .chat-message .bubble {
