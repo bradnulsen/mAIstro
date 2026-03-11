@@ -1,23 +1,31 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import Markdown from 'react-markdown'
 import {
   sendChatMessage, getChatSessions, getChatMessages, deleteChatSession,
+  getChatSessionStatus,
 } from '../api'
 
-export default function Chat({ agents }) {
+export default function Chat() {
   const [sessions, setSessions] = useState([])
   const [activeSession, setActiveSession] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [streaming, setStreaming] = useState('')
-  const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '')
+  const [thinking, setThinking] = useState('')
+  const [toolStatus, setToolStatus] = useState(null)
   const messagesEnd = useRef(null)
+  const abortRef = useRef(null)
+  // Track session ID across async operations (avoids stale closure issues)
+  const activeSessionRef = useRef(null)
 
   const refreshSessions = useCallback(async () => {
     try {
       const s = await getChatSessions()
       setSessions(s)
+      return s
     } catch {}
+    return []
   }, [])
 
   useEffect(() => { refreshSessions() }, [refreshSessions])
@@ -25,57 +33,157 @@ export default function Chat({ agents }) {
   // Auto-scroll
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streaming])
+  }, [messages, streaming, thinking, toolStatus])
+
+  // On mount: check if the most recent session is still processing (e.g. we navigated away)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const sessions = await refreshSessions()
+      if (cancelled || sessions.length === 0) return
+      const latest = sessions[0]
+      try {
+        const { processing } = await getChatSessionStatus(latest.id)
+        if (cancelled) return
+        if (processing) {
+          // Session is still being processed by backend — load messages and show indicator
+          setActiveSession(latest)
+          activeSessionRef.current = latest
+          const msgs = await getChatMessages(latest.id)
+          if (!cancelled) {
+            setMessages(msgs)
+            setToolStatus('processing...')
+            setSending(true)
+            // Poll for completion
+            _pollForCompletion(latest.id, cancelled)
+          }
+        }
+      } catch {}
+    })()
+    return () => { cancelled = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll for completion of an active background task
+  const _pollForCompletion = useCallback(async (sessionId, cancelled) => {
+    const poll = async () => {
+      if (cancelled) return
+      try {
+        const { processing } = await getChatSessionStatus(sessionId)
+        if (!processing) {
+          // Done — reload messages from DB
+          const msgs = await getChatMessages(sessionId)
+          if (!cancelled) {
+            setMessages(msgs)
+            setStreaming('')
+            setToolStatus(null)
+            setSending(false)
+            refreshSessions()
+          }
+          return
+        }
+        // Still processing — reload messages (might have partial saves) and keep polling
+        setTimeout(poll, 2000)
+      } catch {
+        setTimeout(poll, 3000)
+      }
+    }
+    setTimeout(poll, 2000)
+  }, [refreshSessions])
 
   const loadSession = async (session) => {
+    // Cancel any in-progress stream
+    if (abortRef.current) {
+      abortRef.current()
+      abortRef.current = null
+    }
     setActiveSession(session)
-    setSelectedAgent(session.agent_id)
+    activeSessionRef.current = session
+    setStreaming('')
+    setToolStatus(null)
+    setSending(false)
     try {
       const msgs = await getChatMessages(session.id)
       setMessages(msgs)
+      // Check if this session is still processing
+      const { processing } = await getChatSessionStatus(session.id)
+      if (processing) {
+        setToolStatus('processing...')
+        setSending(true)
+        _pollForCompletion(session.id, false)
+      }
     } catch {
       setMessages([])
     }
   }
 
   const handleSend = async () => {
-    if (!input.trim() || !selectedAgent) return
+    if (!input.trim()) return
     const msg = input.trim()
     setInput('')
     setSending(true)
     setStreaming('')
+    setThinking('')
+    setToolStatus(null)
 
     // Add user message to UI immediately
     setMessages(prev => [...prev, { role: 'user', content: msg, created_at: new Date().toISOString() }])
 
-    let fullResponse = ''
-    let newSessionId = activeSession?.id || null
+    let newSessionId = null
+    let streamingText = ''
 
     try {
-      await sendChatMessage(selectedAgent, msg, activeSession?.id, null, (event) => {
-        if (event.type === 'text') {
-          fullResponse += event.content || ''
-          setStreaming(fullResponse)
+      let thinkingAccum = ''
+      const result = await sendChatMessage(msg, activeSession?.id, null, (event) => {
+        if (event.type === 'thinking') {
+          thinkingAccum += event.content || ''
+          setThinking(thinkingAccum)
+          setToolStatus(null)
+        } else if (event.type === 'text') {
+          if (thinkingAccum) {
+            thinkingAccum = ''
+            setThinking('')
+          }
+          streamingText += event.content || ''
+          setStreaming(streamingText)
+          setToolStatus(null)
+        } else if (event.type === 'tool_use') {
+          if (thinkingAccum) {
+            thinkingAccum = ''
+            setThinking('')
+          }
+          setToolStatus(event.tool || 'working...')
         } else if (event.session_id) {
           newSessionId = event.session_id
         }
       })
+      if (result?.abort) abortRef.current = result.abort
     } catch (e) {
-      fullResponse = `Error: ${e.message}`
+      if (e.name === 'AbortError') return
     }
 
-    // Add assistant message
-    if (fullResponse) {
-      setMessages(prev => [...prev, { role: 'assistant', content: fullResponse, created_at: new Date().toISOString() }])
+    // Always reload from DB — single source of truth
+    const sid = newSessionId || activeSession?.id
+    if (sid) {
+      try {
+        const msgs = await getChatMessages(sid)
+        setMessages(msgs)
+      } catch {}
     }
     setStreaming('')
+    setThinking('')
+    setToolStatus(null)
     setSending(false)
+    abortRef.current = null
 
-    // Refresh sessions to pick up new session
-    await refreshSessions()
-    if (newSessionId && !activeSession) {
-      const s = sessions.find(s => s.id === newSessionId)
-      if (s) setActiveSession(s)
+    // Refresh sessions and switch to new one if created
+    const updated = await getChatSessions().catch(() => [])
+    setSessions(updated)
+    if (newSessionId && !activeSessionRef.current) {
+      const found = updated.find(s => s.id === newSessionId)
+      if (found) {
+        setActiveSession(found)
+        activeSessionRef.current = found
+      }
     }
   }
 
@@ -84,6 +192,7 @@ export default function Chat({ agents }) {
       await deleteChatSession(sessionId)
       if (activeSession?.id === sessionId) {
         setActiveSession(null)
+        activeSessionRef.current = null
         setMessages([])
       }
       await refreshSessions()
@@ -91,34 +200,25 @@ export default function Chat({ agents }) {
   }
 
   const handleNewChat = () => {
+    if (abortRef.current) {
+      abortRef.current()
+      abortRef.current = null
+    }
     setActiveSession(null)
+    activeSessionRef.current = null
     setMessages([])
     setStreaming('')
+    setToolStatus(null)
+    setSending(false)
   }
 
   return (
-    <>
-      <div className="header-bar">
-        <h1>Chat</h1>
-        <div className="spacer" />
-        <select
-          value={selectedAgent}
-          onChange={e => setSelectedAgent(e.target.value)}
-          style={{ width: 150 }}
-        >
-          {agents.map(a => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
-      </div>
-
-      <div className="chat-layout">
-        {/* Session sidebar */}
+    <div className="chat-layout">
+      {/* Session list (collapsible) */}
+      {sessions.length > 0 && (
         <div className="chat-sidebar">
-          <div style={{ padding: 8 }}>
-            <button className="small" style={{ width: '100%' }} onClick={handleNewChat}>
-              + New Chat
-            </button>
+          <div style={{ padding: 6, display: 'flex', gap: 4 }}>
+            <button className="small" style={{ flex: 1 }} onClick={handleNewChat}>+ New</button>
           </div>
           <div className="scroll-area">
             {sessions.map(s => (
@@ -129,54 +229,83 @@ export default function Chat({ agents }) {
               >
                 <div className="chat-session-title">{s.title || 'Untitled'}</div>
                 <div className="chat-session-meta">
-                  {agents.find(a => a.id === s.agent_id)?.name || s.agent_id}
+                  <span>{new Date(s.created_at + 'Z').toLocaleDateString()}</span>
+                  <button
+                    className="chat-session-delete"
+                    onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.id) }}
+                    title="Delete session"
+                  >✕</button>
                 </div>
               </div>
             ))}
-            {sessions.length === 0 && (
-              <div style={{ padding: 12, fontSize: 11, color: '#888' }}>
-                No chat sessions yet
-              </div>
-            )}
           </div>
         </div>
+      )}
 
-        {/* Chat messages */}
-        <div className="chat-main">
-          <div className="chat-messages">
-            {messages.length === 0 && !streaming && (
-              <div className="empty-state">
-                Start a conversation with an agent
+      {/* Chat messages */}
+      <div className="chat-main">
+        <div className="chat-messages">
+          {messages.length === 0 && !streaming && !toolStatus && (
+            <div className="empty-state">
+              Ask mAistro about your project, tasks, or dispatches
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className={`chat-message ${m.role}`}>
+              <div className={`bubble${m.role === 'assistant' ? ' md-content' : ''}`}>
+                {m.role === 'assistant' ? <Markdown>{m.content}</Markdown> : m.content}
               </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`chat-message ${m.role}`}>
-                <div className="bubble">{m.content}</div>
+            </div>
+          ))}
+          {thinking && (
+            <div className="chat-message assistant">
+              <div className="bubble thinking-bubble">
+                <span className="thinking-label">reasoning</span>
+                <div className="thinking-content">{thinking}</div>
               </div>
-            ))}
-            {streaming && (
-              <div className="chat-message assistant">
-                <div className="bubble">{streaming}<span style={{ opacity: 0.5 }}>▌</span></div>
+            </div>
+          )}
+          {streaming && (
+            <div className="chat-message assistant">
+              <div className="bubble md-content">
+                <Markdown>{streaming}</Markdown>
+                <span style={{ opacity: 0.5 }}>▌</span>
               </div>
-            )}
-            <div ref={messagesEnd} />
-          </div>
+            </div>
+          )}
+          <div ref={messagesEnd} />
+        </div>
 
-          <div className="chat-input-bar">
-            <input
-              type="text"
-              placeholder={`Message ${agents.find(a => a.id === selectedAgent)?.name || 'agent'}...`}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
-              disabled={sending}
-            />
-            <button className="primary" onClick={handleSend} disabled={sending || !input.trim()}>
-              {sending ? '...' : 'Send'}
-            </button>
+        {sending && (
+          <div className="chat-status-strip">
+            <span className="tool-spinner" />
+            {toolStatus || 'thinking...'}
           </div>
+        )}
+
+        <div className="chat-input-bar">
+          <textarea
+            placeholder="Ask mAistro..."
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            disabled={sending}
+            rows={1}
+            onInput={e => {
+              e.target.style.height = 'auto'
+              e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px'
+            }}
+          />
+          <button className="primary" onClick={handleSend} disabled={sending || !input.trim()}>
+            {sending ? '...' : 'Send'}
+          </button>
         </div>
       </div>
-    </>
+    </div>
   )
 }

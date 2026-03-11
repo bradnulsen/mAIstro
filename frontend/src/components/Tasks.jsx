@@ -170,7 +170,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         <span style={{ fontSize: 11, color: '#888' }}>id: {task.id}</span>
       </div>
       {props.description && (
-        <div className="task-description-display">
+        <div className="task-description-display md-content">
           <Markdown>{props.description}</Markdown>
         </div>
       )}
@@ -246,7 +246,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
                   style={{ flex: 1 }}
                 />
               ) : (
-                <div className="instructions-preview" onClick={() => setEditingInstructions(true)}>
+                <div className="instructions-preview md-content" onClick={() => setEditingInstructions(true)}>
                   <Markdown>{getVal('instructions')}</Markdown>
                 </div>
               )}

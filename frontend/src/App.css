@@ -361,28 +361,6 @@ label {
   margin-bottom: 12px;
   line-height: 1.5;
 }
-.task-description-display p { margin: 0.3em 0; }
-.task-description-display p:first-child { margin-top: 0; }
-.task-description-display p:last-child { margin-bottom: 0; }
-.task-description-display code {
-  font-size: 11px;
-  background: rgba(0,0,0,0.06);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-.task-description-display pre {
-  background: #1a1a1a;
-  color: #e0e0e0;
-  padding: 6px 8px;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 11px;
-  margin: 0.4em 0;
-}
-.task-description-display pre code {
-  background: none;
-  padding: 0;
-}
 
 .task-save-bar {
   position: sticky;
@@ -418,33 +396,6 @@ label {
 .instructions-preview:hover {
   border-color: var(--border);
 }
-.instructions-preview p { margin: 0.3em 0; }
-.instructions-preview p:first-child { margin-top: 0; }
-.instructions-preview p:last-child { margin-bottom: 0; }
-.instructions-preview code {
-  font-size: 11px;
-  background: rgba(0,0,0,0.06);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-.instructions-preview pre {
-  background: #1a1a1a;
-  color: #e0e0e0;
-  padding: 6px 8px;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 11px;
-  margin: 0.4em 0;
-}
-.instructions-preview pre code {
-  background: none;
-  padding: 0;
-}
-.instructions-preview ul, .instructions-preview ol {
-  margin: 0.3em 0;
-  padding-left: 1.4em;
-}
-.instructions-preview strong { font-weight: 600; }
 
 .collapsible-label {
   cursor: pointer;
@@ -519,7 +470,6 @@ label {
   text-transform: none;
   letter-spacing: normal;
   color: var(--text);
-  cursor: pointer;
 }
 
 .mode-toggle {
@@ -711,39 +661,9 @@ label {
   box-sizing: border-box;
 }
 
-/* Markdown inside chat bubbles */
-.chat-message .bubble p { margin: 0.4em 0; }
-.chat-message .bubble p:first-child { margin-top: 0; }
-.chat-message .bubble p:last-child { margin-bottom: 0; }
+/* Chat bubble overrides on shared .md-content */
 .chat-message .bubble pre {
-  background: #1a1a1a;
-  color: #e0e0e0;
-  padding: 6px 8px;
-  border-radius: 4px;
-  overflow-x: auto;
   max-width: 100%;
-  font-size: 11px;
-  margin: 0.4em 0;
-}
-.chat-message .bubble code {
-  font-size: 11px;
-  background: rgba(0,0,0,0.06);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-.chat-message .bubble pre code {
-  background: none;
-  padding: 0;
-}
-.chat-message .bubble ul, .chat-message .bubble ol {
-  margin: 0.3em 0;
-  padding-left: 1.4em;
-}
-.chat-message .bubble h1, .chat-message .bubble h2,
-.chat-message .bubble h3, .chat-message .bubble h4 {
-  font-size: 12px;
-  font-weight: bold;
-  margin: 0.5em 0 0.2em;
 }
 
 /* Status strip — sits above input bar */
@@ -867,6 +787,42 @@ label {
 .recent-project:hover {
   background: var(--rail-bg);
   border-color: var(--border);
+}
+
+/* ── Rendered Markdown (shared) ── */
+
+.md-content p { margin: 0.3em 0; }
+.md-content p:first-child { margin-top: 0; }
+.md-content p:last-child { margin-bottom: 0; }
+.md-content code {
+  font-size: 11px;
+  background: rgba(0,0,0,0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.md-content pre {
+  background: #1a1a1a;
+  color: #e0e0e0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 11px;
+  margin: 0.4em 0;
+}
+.md-content pre code {
+  background: none;
+  padding: 0;
+}
+.md-content ul, .md-content ol {
+  margin: 0.3em 0;
+  padding-left: 1.4em;
+}
+.md-content strong { font-weight: 600; }
+.md-content h1, .md-content h2,
+.md-content h3, .md-content h4 {
+  font-size: 12px;
+  font-weight: bold;
+  margin: 0.5em 0 0.2em;
 }
 
 /* ── Utilities ── */
