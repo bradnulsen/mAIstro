@@ -301,6 +301,7 @@ label {
 .queue-status.running { color: var(--running); }
 .queue-status.completed { color: var(--success); }
 .queue-status.error { color: var(--danger); }
+.queue-status.coalesced { color: var(--text-muted); font-style: italic; }
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
 
 /* ── Task List + Detail ── */

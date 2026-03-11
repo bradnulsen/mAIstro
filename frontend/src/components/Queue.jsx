@@ -10,12 +10,17 @@ const STATUS_LABELS = {
   pending: 'Pending',
   running: 'Running',
   completed: 'Completed',
+  coalesced: 'Coalesced',
   error: 'Error',
   cancelled: 'Cancelled',
 }
 
 function getStatus(item) {
-  if (item.error) return item.error === 'cancelled' ? 'cancelled' : 'error'
+  if (item.error) {
+    if (item.error === 'cancelled') return 'cancelled'
+    if (item.error.startsWith('coalesced')) return 'coalesced'
+    return 'error'
+  }
   if (item.completed_at) return 'completed'
   if (item.started_at) return 'running'
   return 'pending'
