@@ -19,9 +19,9 @@ export default function Feed({ tasks }) {
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Auto-refresh every 10s
+  // Auto-refresh every 5s
   useEffect(() => {
-    const interval = setInterval(refresh, 10000)
+    const interval = setInterval(refresh, 5000)
     return () => clearInterval(interval)
   }, [refresh])
 
