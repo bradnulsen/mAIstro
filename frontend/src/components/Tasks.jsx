@@ -192,11 +192,12 @@ function TaskDetail({ task, onRefresh, onDelete }) {
           <div className="task-def-left">
             <div className="field-group">
               <label>Description</label>
-              <input
-                type="text"
+              <AutoTextarea
                 value={getVal('description') || ''}
                 onChange={e => edit('description', e.target.value)}
                 placeholder="Short description for the task registry..."
+                maxHeight={200}
+                minRows={3}
               />
             </div>
 
