@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getFeed, getFeedItem, getGitDiff } from '../api'
+import { getFeed, getGitDiff } from '../api'
+import { formatDate } from '../util'
 
 const TRIGGER_ICONS = {
   commit: '⚡',
-  agent_queue: '↗',
+  task_queue: '↗',
   manual: '→',
   auto: '⏱',
   human: '👤',
-  agent: '🤖',
+  task: '🤖',
 }
 
-export default function Feed({ agents }) {
+export default function Feed({ tasks }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -55,7 +56,7 @@ export default function Feed({ agents }) {
         <div className="feed-list" style={{ flex: 1 }}>
           {loading && <div className="loading">Loading feed...</div>}
           {!loading && items.length === 0 && (
-            <div className="empty-state">No commits yet. Create an agent and run it.</div>
+            <div className="empty-state">No commits yet. Create a task and run it.</div>
           )}
           {items.map(item => (
             <div
@@ -90,21 +91,22 @@ export default function Feed({ agents }) {
         {/* Detail panel */}
         {selected && (
           <div style={{
-            width: 400, minWidth: 400, borderLeft: '1.5px solid #222',
-            overflow: 'auto', padding: 16, background: '#fff',
+            width: 600, minWidth: 600, borderLeft: '1.5px solid #222',
+            display: 'flex', flexDirection: 'column',
+            overflow: 'hidden', padding: 16, background: '#fff',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, flexShrink: 0 }}>
               <h3 style={{ fontSize: 13 }}>Commit Detail</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
-            <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, color: '#888', marginBottom: 4, flexShrink: 0 }}>
               {selected.hash?.slice(0, 8)} by {selected.author}
             </div>
-            <div style={{ fontSize: 12, marginBottom: 12, fontWeight: 'bold' }}>
+            <div style={{ fontSize: 12, marginBottom: 12, fontWeight: 'bold', flexShrink: 0 }}>
               {selected.message}
             </div>
             {selected.files && (
-              <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 12, flexShrink: 0 }}>
                 <label>Changed Files</label>
                 {selected.files.map(f => (
                   <div key={f} style={{ fontSize: 11, padding: '1px 0' }}>{f}</div>
@@ -112,11 +114,11 @@ export default function Feed({ agents }) {
               </div>
             )}
             {diff && (
-              <div>
-                <label>Diff</label>
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                <label style={{ flexShrink: 0 }}>Diff</label>
                 <pre style={{
                   fontSize: 11, background: '#1a1a1a', color: '#e0e0e0',
-                  padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 400,
+                  padding: 8, borderRadius: 4, overflow: 'auto', flex: 1,
                   whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 }}>
                   {diff}
@@ -130,17 +132,3 @@ export default function Feed({ agents }) {
   )
 }
 
-function formatDate(dateStr) {
-  if (!dateStr) return ''
-  try {
-    const d = new Date(dateStr)
-    const now = new Date()
-    const diff = (now - d) / 1000
-    if (diff < 60) return 'just now'
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-    return d.toLocaleDateString()
-  } catch {
-    return dateStr
-  }
-}

@@ -29,34 +29,46 @@ export const getRecentProjects = () => fetchJSON('/api/project/recent')
 export const removeRecentProject = (path) =>
   fetchJSON(`/api/project/recent?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
 
-// ── Agents ──
+// ── Tasks ──
 
-export const listAgents = () => fetchJSON('/api/agents/')
+export const listTasks = () => fetchJSON('/api/tasks/')
 
-export const getAgent = (id) => fetchJSON(`/api/agents/${id}`)
+export const createTask = (name, properties) =>
+  fetchJSON('/api/tasks/', { method: 'POST', body: JSON.stringify({ name, properties }) })
 
-export const createAgent = (name, properties) =>
-  fetchJSON('/api/agents/', { method: 'POST', body: JSON.stringify({ name, properties }) })
+export const updateTask = (id, updates) =>
+  fetchJSON(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
 
-export const updateAgent = (id, updates) =>
-  fetchJSON(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
+export const deleteTask = (id) =>
+  fetchJSON(`/api/tasks/${id}`, { method: 'DELETE' })
 
-export const deleteAgent = (id) =>
-  fetchJSON(`/api/agents/${id}`, { method: 'DELETE' })
-
-export const getAgentArtifacts = (id) => fetchJSON(`/api/agents/${id}/artifacts`)
+export const getTaskSubscriptions = (id) => fetchJSON(`/api/tasks/${id}/subscriptions`)
 
 // ── Dispatch ──
 
-export function dispatchAgent(agentId, context, onEvent) {
-  const body = context ? JSON.stringify({ context }) : '{}'
-  return fetchSSE(`/api/dispatch/${agentId}`, { method: 'POST', body }, onEvent)
-}
+export const dispatchTask = (taskId, context) =>
+  fetchJSON(`/api/dispatch/${taskId}`, {
+    method: 'POST',
+    body: JSON.stringify({ context: context || undefined }),
+  })
 
 export const getDispatchQueue = () => fetchJSON('/api/dispatch/queue')
 
+export const getDispatchOutput = (dispatchId) =>
+  fetchJSON(`/api/dispatch/${dispatchId}/output`)
+
 export const cancelDispatch = (id) =>
   fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
+
+// ── Queue Control ──
+
+export const getQueueSettings = () => fetchJSON('/api/queue/settings')
+
+export const setQueueSettings = (settings) =>
+  fetchJSON('/api/queue/settings', { method: 'POST', body: JSON.stringify(settings) })
+
+export const processQueue = (all = false) =>
+  fetchJSON(`/api/queue/process?all=${all}`, { method: 'POST' })
 
 // ── Feed ──
 
@@ -65,13 +77,10 @@ export const getFeed = (params = {}) => {
   return fetchJSON(`/api/feed/?${qs}`)
 }
 
-export const getFeedItem = (hash) => fetchJSON(`/api/feed/${hash}`)
-
 // ── Chat ──
 
-export function sendChatMessage(agentId, message, sessionId, context, onEvent) {
+export function sendChatMessage(message, sessionId, context, onEvent) {
   const body = JSON.stringify({
-    agent_id: agentId,
     message,
     session_id: sessionId || undefined,
     context: context || undefined,
@@ -79,10 +88,7 @@ export function sendChatMessage(agentId, message, sessionId, context, onEvent) {
   return fetchSSE('/api/chat/', { method: 'POST', body }, onEvent)
 }
 
-export const getChatSessions = (agentId) => {
-  const qs = agentId ? `?agent_id=${agentId}` : ''
-  return fetchJSON(`/api/chat/sessions${qs}`)
-}
+export const getChatSessions = () => fetchJSON('/api/chat/sessions')
 
 export const getChatMessages = (sessionId) =>
   fetchJSON(`/api/chat/sessions/${sessionId}/messages`)
@@ -90,19 +96,12 @@ export const getChatMessages = (sessionId) =>
 export const deleteChatSession = (sessionId) =>
   fetchJSON(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' })
 
+export const getChatSessionStatus = (sessionId) =>
+  fetchJSON(`/api/chat/sessions/${sessionId}/status`)
+
 // ── Git ──
 
-export const getGitLog = (limit = 50) => fetchJSON(`/api/git/log?limit=${limit}`)
-
 export const getGitDiff = (hash) => fetchJSON(`/api/git/diff/${hash}`)
-
-export const getGitFile = (path) => fetchJSON(`/api/git/file/${path}`)
-
-export const writeGitFile = (path, content, message) =>
-  fetchJSON(`/api/git/file/${path}`, {
-    method: 'PUT',
-    body: JSON.stringify({ content, message }),
-  })
 
 // ── SSE Helper ──
 
@@ -123,6 +122,7 @@ async function fetchSSE(url, opts, onEvent) {
   const decoder = new TextDecoder()
   let buffer = ''
 
+  let currentEventType = null
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -133,15 +133,19 @@ async function fetchSSE(url, opts, onEvent) {
       buffer = lines.pop() || ''
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
+        if (line.startsWith('event: ')) {
+          currentEventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.slice(6))
+            if (currentEventType && !data.type) data.type = currentEventType
             onEvent(data)
           } catch {
             // ignore parse errors
           }
-        } else if (line.startsWith('event: ')) {
-          // event type line — next data line will have the payload
+          currentEventType = null
+        } else if (line === '') {
+          currentEventType = null
         }
       }
     }

@@ -408,20 +408,6 @@ label {
   color: #fff;
 }
 
-.tag-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.tag {
-  font-size: 11px;
-  padding: 1px 6px;
-  border: 1px solid var(--border-light);
-  border-radius: 3px;
-  background: var(--surface);
-}
-
 /* ── Dispatch Stream ── */
 
 .dispatch-stream {
@@ -436,11 +422,6 @@ label {
   word-break: break-word;
   margin-top: 12px;
 }
-
-.dispatch-stream .stream-text { color: #e0e0e0; }
-.dispatch-stream .stream-tool { color: #6cf; }
-.dispatch-stream .stream-error { color: #f66; }
-.dispatch-stream .stream-result { color: #6f6; }
 
 /* ── Chat Tray ── */
 

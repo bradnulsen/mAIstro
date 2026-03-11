@@ -1,0 +1,278 @@
+import React, { useState, useEffect, useCallback } from 'react'
+import {
+  getDispatchQueue, cancelDispatch, getDispatchOutput,
+  getQueueSettings, setQueueSettings, processQueue,
+} from '../api'
+import { formatDate } from '../util'
+
+const TRIGGER_ICONS = {
+  commit: '⚡',
+  task_queue: '↗',
+  manual: '→',
+  auto: '⏱',
+}
+
+const STATUS_LABELS = {
+  pending: 'Pending',
+  running: 'Running',
+  completed: 'Completed',
+  error: 'Error',
+  cancelled: 'Cancelled',
+}
+
+function getStatus(item) {
+  if (item.error) return item.error === 'cancelled' ? 'cancelled' : 'error'
+  if (item.completed_at) return 'completed'
+  if (item.started_at) return 'running'
+  return 'pending'
+}
+
+function isUpcoming(item) {
+  const s = getStatus(item)
+  return s === 'pending' || s === 'running'
+}
+
+export default function Queue({ tasks }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selected, setSelected] = useState(null)
+  const [filter, setFilter] = useState('upcoming') // 'upcoming' | 'past'
+  const [autoDispatch, setAutoDispatch] = useState(false)
+  const [output, setOutput] = useState(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const queue = await getDispatchQueue()
+      setItems(queue)
+    } catch {}
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  // Load queue settings
+  useEffect(() => {
+    getQueueSettings().then(s => setAutoDispatch(s.auto_dispatch)).catch(() => {})
+  }, [])
+
+  // Auto-refresh every 5s
+  useEffect(() => {
+    const interval = setInterval(refresh, 5000)
+    return () => clearInterval(interval)
+  }, [refresh])
+
+  // Load output when selection changes
+  useEffect(() => {
+    if (!selected) { setOutput(null); return }
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await getDispatchOutput(selected.id)
+        if (!cancelled) setOutput(data)
+      } catch { if (!cancelled) setOutput(null) }
+    }
+    load()
+    // Poll if running
+    const status = getStatus(selected)
+    if (status === 'running') {
+      const interval = setInterval(load, 2000)
+      return () => { cancelled = true; clearInterval(interval) }
+    }
+    return () => { cancelled = true }
+  }, [selected, selected?.completed_at])
+
+  const handleToggleAuto = async (val) => {
+    await setQueueSettings({ auto_dispatch: val })
+    setAutoDispatch(val)
+  }
+
+  const handleProcess = async (all) => {
+    await processQueue(all)
+    await refresh()
+  }
+
+  const handleCancel = async (id) => {
+    try {
+      await cancelDispatch(id)
+      await refresh()
+      if (selected?.id === id) setSelected(null)
+    } catch {}
+  }
+
+  const filtered = items.filter(item =>
+    filter === 'upcoming' ? isUpcoming(item) : !isUpcoming(item)
+  )
+
+  return (
+    <>
+      <div className="header-bar">
+        <h1>Queue</h1>
+        <div className="spacer" />
+        <div className="mode-toggle">
+          <button
+            className={filter === 'upcoming' ? 'active' : ''}
+            onClick={() => { setFilter('upcoming'); setSelected(null) }}
+          >Upcoming</button>
+          <button
+            className={filter === 'past' ? 'active' : ''}
+            onClick={() => { setFilter('past'); setSelected(null) }}
+          >Past</button>
+        </div>
+        <button className="small" onClick={refresh}>↻</button>
+        <div style={{ borderLeft: '1px solid #ccc', height: 16, margin: '0 4px' }} />
+        <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
+          Auto
+        </label>
+        {!autoDispatch && (
+          <>
+            <button className="small primary" onClick={() => handleProcess(false)}>▶ Next</button>
+            <button className="small" onClick={() => handleProcess(true)}>▶▶ All</button>
+          </>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Queue list */}
+        <div className="feed-list" style={{ flex: 1 }}>
+          {loading && <div className="loading">Loading queue...</div>}
+          {!loading && filtered.length === 0 && (
+            <div className="empty-state">
+              {filter === 'upcoming' ? 'No pending or running dispatches' : 'No past dispatches'}
+            </div>
+          )}
+          {filtered.map(item => {
+            const status = getStatus(item)
+            return (
+              <div
+                key={item.id}
+                className="feed-item"
+                onClick={() => setSelected(item)}
+                style={selected?.id === item.id ? { background: '#eee' } : {}}
+              >
+                <div className="feed-avatar">
+                  {(item.task_name || '?')[0].toUpperCase()}
+                </div>
+                <div className="feed-body">
+                  <div className="feed-meta">
+                    <span className="feed-author">{item.task_name}</span>
+                    <span className="feed-trigger">
+                      {TRIGGER_ICONS[item.trigger] || ''}
+                    </span>
+                    <span className={`queue-status ${status}`}>
+                      {STATUS_LABELS[status]}
+                    </span>
+                    <span>{formatDate(item.created_at, true)}</span>
+                  </div>
+                  <div className="feed-message">
+                    {item.context
+                      ? item.context.length > 80 ? item.context.slice(0, 80) + '...' : item.context
+                      : `${item.trigger} dispatch`}
+                  </div>
+                  {item.trigger_detail && (
+                    <div className="feed-files">{item.trigger_detail}</div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Detail panel */}
+        {selected && (
+          <div style={{
+            width: 600, minWidth: 600, borderLeft: '1.5px solid #222',
+            overflow: 'auto', padding: 16, background: '#fff',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+              <h3 style={{ fontSize: 13 }}>Dispatch Detail</h3>
+              <button className="small" onClick={() => setSelected(null)}>✕</button>
+            </div>
+
+            <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+              #{selected.id} — {selected.task_name}
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label>Status</label>
+              <span className={`queue-status ${getStatus(selected)}`} style={{ fontSize: 12 }}>
+                {STATUS_LABELS[getStatus(selected)]}
+              </span>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label>Trigger</label>
+              <div style={{ fontSize: 12 }}>
+                {TRIGGER_ICONS[selected.trigger] || ''} {selected.trigger}
+                {selected.trigger_detail && (
+                  <span style={{ color: '#888' }}> — {selected.trigger_detail}</span>
+                )}
+              </div>
+            </div>
+
+            {selected.context && (
+              <div style={{ marginBottom: 12 }}>
+                <label>Context</label>
+                <pre style={{
+                  fontSize: 11, background: '#f5f5f0', padding: 8,
+                  borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  border: '1px solid #ddd',
+                }}>
+                  {selected.context}
+                </pre>
+              </div>
+            )}
+
+            <div style={{ marginBottom: 12 }}>
+              <label>Timeline</label>
+              <div style={{ fontSize: 11 }}>
+                <div>Created: {selected.created_at}</div>
+                {selected.started_at && <div>Started: {selected.started_at}</div>}
+                {selected.completed_at && <div>Completed: {selected.completed_at}</div>}
+              </div>
+            </div>
+
+            {selected.result_commit && (
+              <div style={{ marginBottom: 12 }}>
+                <label>Result Commit</label>
+                <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                  {selected.result_commit.slice(0, 8)}
+                </div>
+              </div>
+            )}
+
+            {selected.error && (
+              <div style={{ marginBottom: 12 }}>
+                <label>Error</label>
+                <div style={{ fontSize: 11, color: 'var(--danger)' }}>{selected.error}</div>
+              </div>
+            )}
+
+            {output && output.messages && output.messages.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <label>Output</label>
+                <div className="dispatch-stream">
+                  {output.messages.map((msg, i) => (
+                    <div key={i} style={{ fontSize: 11, marginBottom: 4 }}>
+                      <strong style={{ color: msg.role === 'system' ? 'var(--danger)' : '#888' }}>
+                        {msg.role}:
+                      </strong>{' '}
+                      {msg.content}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isUpcoming(selected) && (
+              <button className="danger small" onClick={() => handleCancel(selected.id)}>
+                Cancel Dispatch
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
