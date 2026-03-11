@@ -97,9 +97,11 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   const [editingInstructions, setEditingInstructions] = useState(false)
   const props = task.properties || {}
 
-  useEffect(() => {
+  const refreshSubs = useCallback(() => {
     getTaskSubscriptions(task.id).then(setSubs).catch(() => setSubs(null))
   }, [task.id])
+
+  useEffect(() => { refreshSubs() }, [refreshSubs])
 
   useEffect(() => { setEditing({}); setEditingInstructions(false) }, [task.id])
 
@@ -118,6 +120,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       await updateTask(task.id, payload)
       setEditing({})
       await onRefresh()
+      refreshSubs()
     } catch (e) {
       alert(e.message)
     }
