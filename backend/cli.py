@@ -8,10 +8,13 @@ Uses subprocess.Popen + thread readers because asyncio.create_subprocess_exec
 raises NotImplementedError on Windows ProactorEventLoop.
 
 Event schema (yielded dicts):
-    {"type": "text",       "content": "..."}
-    {"type": "tool_use",   "tool": "...", "input": {...}}
-    {"type": "session_id", "cli_session_id": "..."}
-    {"type": "error",      "message": "..."}
+    {"type": "_raw",              "raw_json": "...", "event_type": "..."}
+    {"type": "text",              "content": "..."}
+    {"type": "thinking",          "content": "..."}
+    {"type": "tool_use",          "tool": "...", "input": {...}}
+    {"type": "assistant_complete","content": "..."}
+    {"type": "session_id",        "cli_session_id": "..."}
+    {"type": "error",             "message": "..."}
 """
 
 import asyncio
@@ -34,6 +37,7 @@ async def invoke(
     disallowed_tools: list[str] | None = None,
     max_turns: int = 50,
     resume_session: str | None = None,
+    cancel_event: asyncio.Event | None = None,
 ) -> AsyncIterator[dict]:
     """Invoke Claude CLI as subprocess, yield events as dicts."""
     claude_bin = shutil.which("claude")
@@ -89,7 +93,7 @@ async def invoke(
 
     # Read stdout and stderr via threads, feed into async queue
     queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _reader(pipe, label):
         try:
@@ -112,7 +116,17 @@ async def invoke(
         pipes_done = 0
 
         while pipes_done < 2:
-            line = await queue.get()
+            # Check for cancellation
+            if cancel_event and cancel_event.is_set():
+                log.info("[cli] Cancellation requested — killing process")
+                process.kill()
+                yield {"type": "error", "message": "cancelled"}
+                return
+
+            try:
+                line = await asyncio.wait_for(queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
             if line is None:
                 pipes_done += 1
                 continue
@@ -128,6 +142,10 @@ async def invoke(
             except json.JSONDecodeError:
                 non_json_lines.append(line)
                 continue
+
+            # Always yield raw event for storage
+            raw_type = data.get("type", "")
+            yield {"type": "_raw", "raw_json": line, "event_type": raw_type}
 
             event = _translate_event(data)
             if event:
@@ -155,25 +173,40 @@ def _translate_event(data: dict) -> dict | None:
     """Translate a single NDJSON event from Claude CLI into our event schema."""
     msg_type = data.get("type", "")
 
-    # Streaming deltas (real-time text chunks)
+    # Streaming deltas (real-time text chunks, thinking, and tool use starts)
     if msg_type == "stream_event":
         event = data.get("event", {})
-        if event.get("type") == "content_block_delta":
+        etype = event.get("type", "")
+        if etype == "content_block_delta":
             delta = event.get("delta", {})
-            if delta.get("type") == "text_delta":
+            dtype = delta.get("type", "")
+            if dtype == "text_delta":
                 text = delta.get("text", "")
                 if text:
                     return {"type": "text", "content": text}
+            elif dtype == "thinking_delta":
+                thinking = delta.get("thinking", "")
+                if thinking:
+                    return {"type": "thinking", "content": thinking}
+        elif etype == "content_block_start":
+            block = event.get("content_block", {})
+            if block.get("type") == "tool_use":
+                return {"type": "tool_use", "tool": block.get("name", ""), "input": {}}
+            elif block.get("type") == "thinking":
+                return {"type": "thinking", "content": ""}
         return None
 
     # Bare content_block_delta (some CLI versions)
     if msg_type == "content_block_delta":
         delta = data.get("delta", {})
-        if delta.get("type") == "text_delta":
+        dtype = delta.get("type", "")
+        if dtype == "text_delta":
             return {"type": "text", "content": delta.get("text", "")}
+        elif dtype == "thinking_delta":
+            return {"type": "thinking", "content": delta.get("thinking", "")}
         return None
 
-    # Full assistant turn
+    # Full assistant turn — used for DB storage, not streaming
     if msg_type == "assistant":
         blocks = (
             data.get("message", {}).get("content", [])
@@ -190,7 +223,7 @@ def _translate_event(data: dict) -> dict | None:
                     "input": block.get("input", {}),
                 }
         if text_parts:
-            return {"type": "text", "content": "\n\n".join(text_parts)}
+            return {"type": "assistant_complete", "content": "\n\n".join(text_parts)}
         return None
 
     # Result (final summary)

@@ -68,6 +68,7 @@ class UpdateTaskRequest(BaseModel):
     mcp_servers: list[str] | None = None
     subscriptions: list[str] | None = None
     watch_enabled: bool | None = None
+    coalesce_dispatches: bool | None = None
     sort_order: int | None = None
 
 class DispatchRequest(BaseModel):
@@ -328,7 +329,7 @@ async def set_queue_settings(request: Request):
 
 
 @app.post("/api/queue/process")
-async def queue_process(all: bool = False):
+async def queue_process(all: bool = False):    # noqa: A002 — matches frontend query param
     """Manually crank the queue — process next or all pending dispatches."""
     _require_project()
     if all:
