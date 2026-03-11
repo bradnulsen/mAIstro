@@ -185,59 +185,62 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
       )}
 
-      {/* Description & Instructions */}
+      {/* Task Definition — two-column layout */}
       <div className="task-section">
         <h3>Task Definition</h3>
-
-        <div className="field-group">
-          <label>Description</label>
-          <input
-            type="text"
-            value={getVal('description') || ''}
-            onChange={e => edit('description', e.target.value)}
-            placeholder="Short description for the task registry..."
-          />
-        </div>
-
-        <div className="field-group">
-          <label>Model</label>
-          <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
-            <option value="sonnet">Sonnet</option>
-            <option value="opus">Opus</option>
-            <option value="haiku">Haiku</option>
-          </select>
-        </div>
-
-        <div className="field-group">
-          <label>Instructions</label>
-          {editingInstructions || !getVal('instructions') ? (
-            <AutoTextarea
-              value={getVal('instructions') || ''}
-              onChange={e => edit('instructions', e.target.value)}
-              onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
-              placeholder="Detailed instructions for what this task should do..."
-              maxHeight={300}
-              minRows={3}
-              autoFocus={editingInstructions}
-            />
-          ) : (
-            <div className="instructions-preview" onClick={() => setEditingInstructions(true)}>
-              <Markdown>{getVal('instructions')}</Markdown>
+        <div className="task-def-columns">
+          <div className="task-def-left">
+            <div className="field-group">
+              <label>Description</label>
+              <input
+                type="text"
+                value={getVal('description') || ''}
+                onChange={e => edit('description', e.target.value)}
+                placeholder="Short description for the task registry..."
+              />
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* Tools */}
-      <div className="task-section">
-        <h3>Allowed Tools</h3>
-        <div className="field-group">
-          <input
-            type="text"
-            value={(getVal('base_tools') || []).join(', ')}
-            onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-            placeholder="Comma-separated tool names..."
-          />
+            <div className="field-group">
+              <label>Model</label>
+              <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+                <option value="haiku">Haiku</option>
+              </select>
+            </div>
+
+            <div className="field-group">
+              <label>Allowed Tools</label>
+              <input
+                type="text"
+                value={(getVal('base_tools') || []).join(', ')}
+                onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                placeholder="Comma-separated tool names..."
+              />
+            </div>
+          </div>
+
+          <div className="task-def-right">
+            <div className="field-group" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <label>Instructions</label>
+              {editingInstructions || !getVal('instructions') ? (
+                <AutoTextarea
+                  value={getVal('instructions') || ''}
+                  onChange={e => edit('instructions', e.target.value)}
+                  onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
+                  placeholder="Detailed instructions for what this task should do..."
+                  maxHeight={400}
+                  minRows={8}
+                  autoFocus={editingInstructions}
+                  style={{ flex: 1 }}
+                />
+              ) : (
+                <div className="instructions-preview" onClick={() => setEditingInstructions(true)}>
+                  <Markdown>{getVal('instructions')}</Markdown>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -314,7 +317,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   )
 }
 
-function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, minRows = 2, autoFocus }) {
+function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, minRows = 2, autoFocus, style }) {
   const ref = useRef(null)
   const resize = () => {
     const el = ref.current
@@ -334,7 +337,7 @@ function AutoTextarea({ value, onChange, onBlur, placeholder, maxHeight = 200, m
       onBlur={onBlur}
       onInput={resize}
       placeholder={placeholder}
-      style={{ resize: 'none' }}
+      style={{ resize: 'none', ...style }}
     />
   )
 }
