@@ -1,16 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   getDispatchQueue, cancelDispatch, getDispatchOutput,
   getQueueSettings, setQueueSettings, processQueue,
 } from '../api'
-import { formatDate } from '../util'
-
-const TRIGGER_ICONS = {
-  commit: '⚡',
-  task_queue: '↗',
-  manual: '→',
-  auto: '⏱',
-}
+import { formatDate, TRIGGER_ICONS } from '../util'
 
 const STATUS_LABELS = {
   pending: 'Pending',

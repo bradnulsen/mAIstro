@@ -1,15 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { getFeed, getGitDiff } from '../api'
-import { formatDate } from '../util'
-
-const TRIGGER_ICONS = {
-  commit: '⚡',
-  task_queue: '↗',
-  manual: '→',
-  auto: '⏱',
-  human: '👤',
-  task: '🤖',
-}
+import { formatDate, TRIGGER_ICONS } from '../util'
 
 export default function Feed({ tasks }) {
   const [items, setItems] = useState([])

@@ -1,5 +1,14 @@
 /** Shared utilities for mAistro frontend */
 
+export const TRIGGER_ICONS = {
+  commit: '⚡',
+  task_queue: '↗',
+  manual: '→',
+  auto: '⏱',
+  human: '👤',
+  task: '🤖',
+}
+
 /**
  * Format a date string as relative time (e.g. "5m ago").
  * @param {string} dateStr - Date string to format
