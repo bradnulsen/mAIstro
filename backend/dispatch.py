@@ -2,13 +2,17 @@
 
 import asyncio
 import json
+import logging
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
 from backend import database as db
+
+log = logging.getLogger("maistro.dispatch")
 
 
 async def run_dispatch(
@@ -20,6 +24,8 @@ async def run_dispatch(
     """Execute a dispatch: build prompt, invoke Claude CLI, yield SSE events."""
     props = agent["properties"]
     agent_id = agent["id"]
+
+    log.info(f"[dispatch:{dispatch_id}] Starting agent={agent_id} instructions={instructions!r:.80}")
 
     # Mark running
     await db.update_dispatch(dispatch_id, started_at=_now())
@@ -34,6 +40,10 @@ async def run_dispatch(
         system_prompt = build_system_prompt(agent, project_dir)
         user_prompt = build_user_prompt(agent, project_dir, instructions, queue_context)
 
+        log.info(f"[dispatch:{dispatch_id}] System prompt: {len(system_prompt)} chars, User prompt: {len(user_prompt)} chars")
+        log.debug(f"[dispatch:{dispatch_id}] System prompt:\n{system_prompt[:500]}")
+        log.debug(f"[dispatch:{dispatch_id}] User prompt:\n{user_prompt[:500]}")
+
         full_text = []
         async for event in invoke_claude_cli(
             system_prompt=system_prompt,
@@ -44,13 +54,19 @@ async def run_dispatch(
         ):
             if event["type"] == "text":
                 full_text.append(event["content"])
+            elif event["type"] == "error":
+                log.error(f"[dispatch:{dispatch_id}] CLI error: {event.get('message', '')[:200]}")
+            elif event["type"] == "tool_use":
+                log.info(f"[dispatch:{dispatch_id}] Tool use: {event.get('tool', '?')}")
             yield event
 
         # Commit any file changes the agent made
         commit_hash = await commit_agent_changes(agent, project_dir)
         if commit_hash:
+            log.info(f"[dispatch:{dispatch_id}] Committed: {commit_hash[:8]}")
             await db.update_dispatch(dispatch_id, completed_at=_now(), result_commit=commit_hash)
         else:
+            log.info(f"[dispatch:{dispatch_id}] No file changes to commit")
             await db.update_dispatch(dispatch_id, completed_at=_now())
 
         yield _sse("result", {
@@ -59,8 +75,10 @@ async def run_dispatch(
             "dispatch_id": dispatch_id,
             "commit": commit_hash,
         })
+        log.info(f"[dispatch:{dispatch_id}] Completed")
 
     except Exception as e:
+        log.exception(f"[dispatch:{dispatch_id}] Failed: {e}")
         await db.update_dispatch(dispatch_id, completed_at=_now(), error=str(e))
         yield _sse("error", {"message": str(e), "agent_id": agent_id, "dispatch_id": dispatch_id})
     finally:
@@ -155,9 +173,19 @@ async def invoke_claude_cli(
     model: str = "sonnet",
     allowed_tools: list[str] | None = None,
 ) -> AsyncIterator[dict]:
-    """Invoke Claude CLI as subprocess, yield NDJSON events as SSE-shaped dicts."""
+    """Invoke Claude CLI as subprocess, yield NDJSON events as SSE-shaped dicts.
+
+    Uses subprocess.Popen + thread reader instead of asyncio subprocess
+    to avoid Windows ProactorEventLoop NotImplementedError.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        log.error("Claude CLI not found in PATH")
+        yield _sse("error", {"message": "Claude CLI not found in PATH"})
+        return
+
     cmd = [
-        "claude",
+        claude_bin,
         "-p", user_prompt,
         "--output-format", "stream-json",
         "--model", model,
@@ -169,24 +197,55 @@ async def invoke_claude_cli(
         for tool in allowed_tools:
             cmd.extend(["--allowedTools", tool])
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    log.info(f"[cli] Spawning: {claude_bin} -p <{len(user_prompt)} chars> --model {model} --max-turns 50")
+    log.info(f"[cli] Tools: {allowed_tools}")
+    log.info(f"[cli] CWD: {project_dir}")
+
+    # Use Popen + thread to avoid Windows asyncio subprocess issues
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         cwd=project_dir,
     )
 
+    # Read stdout lines in a thread, push to an asyncio queue
+    queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def _reader():
+        try:
+            for raw_line in process.stdout:
+                line = raw_line.decode("utf-8").strip()
+                if line:
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+        except Exception as e:
+            loop.call_soon_threadsafe(queue.put_nowait, f"__ERROR__:{e}")
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
+
+    import threading
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
     try:
-        async for line in process.stdout:
-            line = line.decode("utf-8").strip()
-            if not line:
-                continue
+        line_count = 0
+        while True:
+            line = await queue.get()
+            if line is None:
+                break  # stdout closed
+            if line.startswith("__ERROR__:"):
+                log.error(f"[cli] Reader error: {line}")
+                yield _sse("error", {"message": line[10:]})
+                break
+
+            line_count += 1
             try:
                 event = json.loads(line)
-                # Claude CLI NDJSON events have different types
-                # Map them to our SSE format
-                if event.get("type") == "assistant":
-                    # Text content from assistant
+                etype = event.get("type", "unknown")
+                log.debug(f"[cli] NDJSON #{line_count}: type={etype} keys={list(event.keys())}")
+
+                if etype == "assistant":
                     content = event.get("message", {}).get("content", [])
                     for block in content:
                         if block.get("type") == "text":
@@ -196,28 +255,32 @@ async def invoke_claude_cli(
                                 "tool": block.get("name", ""),
                                 "input": block.get("input", {}),
                             })
-                elif event.get("type") == "result":
-                    # Final result
+                elif etype == "result":
                     text = ""
                     for block in event.get("content", []):
                         if block.get("type") == "text":
                             text += block["text"]
                     if text:
                         yield _sse("text", {"content": text})
-                elif event.get("type") == "content_block_delta":
+                elif etype == "content_block_delta":
                     delta = event.get("delta", {})
                     if delta.get("type") == "text_delta":
                         yield _sse("text", {"content": delta["text"]})
+                else:
+                    log.info(f"[cli] Unhandled event type: {etype} — {str(event)[:200]}")
             except json.JSONDecodeError:
-                # Non-JSON output, treat as raw text
+                log.warning(f"[cli] Non-JSON line: {line[:200]}")
                 yield _sse("text", {"content": line})
 
-        await process.wait()
+        process.wait()
+        log.info(f"[cli] Process exited: code={process.returncode} lines={line_count}")
         if process.returncode != 0:
-            stderr = await process.stderr.read()
-            err_msg = stderr.decode("utf-8").strip() if stderr else f"Claude CLI exited with code {process.returncode}"
+            stderr = process.stderr.read().decode("utf-8").strip()
+            err_msg = stderr or f"Claude CLI exited with code {process.returncode}"
+            log.error(f"[cli] stderr: {err_msg[:500]}")
             yield _sse("error", {"message": err_msg})
     except Exception as e:
+        log.exception(f"[cli] Exception during streaming: {e}")
         process.kill()
         yield _sse("error", {"message": str(e)})
 
@@ -326,11 +389,16 @@ async def invoke_chat_message(
     cli_session_id: str | None = None,
 ) -> AsyncIterator[dict]:
     """Invoke Claude CLI for a chat message, yield SSE events."""
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        yield _sse("error", {"message": "Claude CLI not found in PATH"})
+        return
+
     props = agent["properties"]
     system_prompt = build_system_prompt(agent, project_dir)
 
     cmd = [
-        "claude",
+        claude_bin,
         "-p", message,
         "--output-format", "stream-json",
         "--model", props.get("model", "sonnet"),
@@ -344,18 +412,42 @@ async def invoke_chat_message(
         for tool in props["base_tools"]:
             cmd.extend(["--allowedTools", tool])
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    log.info(f"[chat] Spawning Claude CLI for chat, model={props.get('model', 'sonnet')}")
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         cwd=project_dir,
     )
 
+    chat_queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def _reader():
+        try:
+            for raw_line in process.stdout:
+                line = raw_line.decode("utf-8").strip()
+                if line:
+                    loop.call_soon_threadsafe(chat_queue.put_nowait, line)
+        except Exception as e:
+            loop.call_soon_threadsafe(chat_queue.put_nowait, f"__ERROR__:{e}")
+        finally:
+            loop.call_soon_threadsafe(chat_queue.put_nowait, None)
+
+    import threading
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
     try:
-        async for line in process.stdout:
-            line = line.decode("utf-8").strip()
-            if not line:
-                continue
+        while True:
+            line = await chat_queue.get()
+            if line is None:
+                break
+            if line.startswith("__ERROR__:"):
+                yield _sse("error", {"message": line[10:]})
+                break
+
             try:
                 event = json.loads(line)
                 if event.get("type") == "assistant":
@@ -364,7 +456,6 @@ async def invoke_chat_message(
                         if block.get("type") == "text":
                             yield _sse("text", {"content": block["text"]})
                 elif event.get("type") == "result":
-                    # Extract session ID for resumption
                     sid = event.get("session_id")
                     if sid:
                         yield _sse("session_id", {"cli_session_id": sid})
@@ -381,12 +472,14 @@ async def invoke_chat_message(
             except json.JSONDecodeError:
                 yield _sse("text", {"content": line})
 
-        await process.wait()
+        process.wait()
         if process.returncode != 0:
-            stderr = await process.stderr.read()
-            err_msg = stderr.decode("utf-8").strip() if stderr else f"CLI exited with code {process.returncode}"
+            stderr = process.stderr.read().decode("utf-8").strip()
+            err_msg = stderr or f"CLI exited with code {process.returncode}"
+            log.error(f"[chat] stderr: {err_msg[:500]}")
             yield _sse("error", {"message": err_msg})
     except Exception as e:
+        log.exception(f"[chat] Exception: {e}")
         process.kill()
         yield _sse("error", {"message": str(e)})
 

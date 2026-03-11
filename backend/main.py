@@ -2,11 +2,20 @@
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("maistro")
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware

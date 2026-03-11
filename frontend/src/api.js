@@ -42,12 +42,6 @@ export const getAgentArtifacts = (id) => fetchJSON(`/api/agents/${id}/artifacts`
 
 export function dispatchAgent(agentId, instructions, onEvent) {
   const body = instructions ? JSON.stringify({ instructions }) : '{}'
-  const eventSource = new EventSource(
-    // EventSource only supports GET, so we use fetch for POST SSE
-    `/api/dispatch/${agentId}`
-  )
-
-  // Use fetch with SSE parsing for POST
   return fetchSSE(`/api/dispatch/${agentId}`, { method: 'POST', body }, onEvent)
 }
 
