@@ -247,7 +247,17 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
       {/* Subscriptions config */}
       <div className="task-section">
-        <h3>Subscriptions</h3>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h3 style={{ marginBottom: 0 }}>Subscriptions</h3>
+          <label className="checkbox-label" style={{ marginBottom: 4 }}>
+            <input
+              type="checkbox"
+              checked={getVal('watch_enabled') || false}
+              onChange={e => edit('watch_enabled', e.target.checked)}
+            />
+            Watch mode
+          </label>
+        </div>
 
         <div className="field-group">
           <label>Glob patterns (one per line)</label>
@@ -281,23 +291,6 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             )}
           </div>
         )}
-      </div>
-
-      {/* Behavior */}
-      <div className="task-section">
-        <h3>Behavior</h3>
-
-        <div className="field-group">
-          <label>Watch Mode</label>
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={getVal('watch_enabled') || false}
-              onChange={e => edit('watch_enabled', e.target.checked)}
-            />
-            Auto-enqueue when subscribed files change
-          </label>
-        </div>
       </div>
 
       {isDirty && (
