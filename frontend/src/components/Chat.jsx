@@ -214,12 +214,12 @@ export default function Chat() {
 
   return (
     <div className="chat-layout">
-      {/* Session list (collapsible) */}
-      {sessions.length > 0 && (
-        <div className="chat-sidebar">
-          <div style={{ padding: 6, display: 'flex', gap: 4 }}>
-            <button className="small" style={{ flex: 1 }} onClick={handleNewChat}>+ New</button>
-          </div>
+      {/* Session list */}
+      <div className="chat-sidebar">
+        <div style={{ padding: 6, display: 'flex', gap: 4 }}>
+          <button className="small" style={{ flex: 1 }} onClick={handleNewChat}>+ New</button>
+        </div>
+        {sessions.length > 0 && (
           <div className="scroll-area">
             {sessions.map(s => (
               <div
@@ -239,8 +239,8 @@ export default function Chat() {
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Chat messages */}
       <div className="chat-main">
