@@ -563,7 +563,8 @@ label {
 }
 
 .chat-message.user {
-  text-align: left;
+  margin-left: auto;
+  text-align: right;
 }
 
 .chat-message .bubble {
@@ -637,6 +638,7 @@ label {
 .chat-message.user .bubble {
   background: var(--accent);
   color: #fff;
+  text-align: left;
 }
 
 .chat-message.assistant .bubble {
