@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, getDispatchOutput,
   getQueueSettings, setQueueSettings, processQueue,
@@ -243,21 +244,35 @@ export default function Queue({ tasks }) {
               </div>
             )}
 
-            {output && output.messages && output.messages.length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <label>Output</label>
-                <div className="dispatch-stream">
-                  {output.messages.map((msg, i) => (
-                    <div key={i} style={{ fontSize: 11, marginBottom: 4 }}>
-                      <strong style={{ color: msg.role === 'system' ? 'var(--danger)' : '#888' }}>
-                        {msg.role}:
-                      </strong>{' '}
-                      {msg.content}
-                    </div>
-                  ))}
+            {(() => {
+              const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
+              if (assistantMsgs.length === 0) return null
+              return (
+                <div style={{ marginBottom: 12 }}>
+                  <label>Output</label>
+                  {assistantMsgs.map((msg, i) => {
+                    const content = typeof msg.content === 'string'
+                      ? msg.content
+                      : Array.isArray(msg.content)
+                        ? msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+                        : String(msg.content ?? '')
+                    if (!content.trim()) return null
+                    return (
+                      <div key={i} className="md-content" style={{
+                        fontSize: 12,
+                        padding: '8px 10px',
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border-light)',
+                        borderRadius: 4,
+                        marginBottom: 6,
+                      }}>
+                        <Markdown>{content}</Markdown>
+                      </div>
+                    )
+                  })}
                 </div>
-              </div>
-            )}
+              )
+            })()}
 
             {isUpcoming(selected) && (
               <button className="danger small" onClick={() => handleCancel(selected.id)}>
