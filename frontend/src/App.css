@@ -534,6 +534,25 @@ label {
   flex: 1;
 }
 
+/* ── Recent Projects ── */
+
+.recent-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  margin-bottom: 4px;
+  width: 400px;
+}
+
+.recent-project:hover {
+  background: var(--rail-bg);
+  border-color: var(--border);
+}
+
 /* ── Utilities ── */
 
 .empty-state {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getProject, openProject, listAgents } from './api'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listAgents } from './api'
 import Feed from './components/Feed'
 import Agents from './components/Agents'
 import Chat from './components/Chat'
@@ -84,13 +84,20 @@ function ProjectOpener({ onOpen }) {
   const [path, setPath] = useState('')
   const [error, setError] = useState('')
   const [opening, setOpening] = useState(false)
+  const [browsing, setBrowsing] = useState(false)
+  const [recent, setRecent] = useState([])
 
-  const handleOpen = async () => {
-    if (!path.trim()) return
+  useEffect(() => {
+    getRecentProjects().then(setRecent).catch(() => {})
+  }, [])
+
+  const handleOpen = async (openPath) => {
+    const target = (openPath || path).trim()
+    if (!target) return
     setOpening(true)
     setError('')
     try {
-      await openProject(path.trim())
+      await openProject(target)
       const p = await getProject()
       onOpen(p)
     } catch (e) {
@@ -98,6 +105,28 @@ function ProjectOpener({ onOpen }) {
     } finally {
       setOpening(false)
     }
+  }
+
+  const handleBrowse = async () => {
+    setBrowsing(true)
+    setError('')
+    try {
+      const result = await browseProject()
+      if (result.path) {
+        setPath(result.path)
+        await handleOpen(result.path)
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBrowsing(false)
+    }
+  }
+
+  const handleRemoveRecent = async (e, projectPath) => {
+    e.stopPropagation()
+    await removeRecentProject(projectPath)
+    setRecent(prev => prev.filter(r => r.path !== projectPath))
   }
 
   return (
@@ -112,11 +141,38 @@ function ProjectOpener({ onOpen }) {
           onChange={e => setPath(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleOpen()}
         />
-        <button className="primary" onClick={handleOpen} disabled={opening}>
+        <button className="primary" onClick={() => handleOpen()} disabled={opening}>
           {opening ? '...' : 'Open'}
+        </button>
+        <button onClick={handleBrowse} disabled={browsing || opening}>
+          {browsing ? '...' : 'Browse'}
         </button>
       </div>
       {error && <p style={{ color: '#c44', fontSize: 12 }}>{error}</p>}
+
+      {recent.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <p style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>Recent projects</p>
+          {recent.map(r => (
+            <div
+              key={r.path}
+              className="recent-project"
+              onClick={() => handleOpen(r.path)}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 'bold', fontSize: 13 }}>{r.name}</div>
+                <div style={{ fontSize: 11, color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.path}</div>
+              </div>
+              <button
+                className="small"
+                onClick={(e) => handleRemoveRecent(e, r.path)}
+                title="Remove from recent"
+                style={{ opacity: 0.5, fontSize: 10 }}
+              >✕</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

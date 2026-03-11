@@ -41,11 +41,10 @@ Agents are user-created LLM personas with configurable identity, tools, and disp
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `name` | string | required | Display name |
-| `persona` | string | `''` | System prompt / identity |
+| `persona` | string | `''` | System prompt / identity — what this agent does and how it thinks |
 | `base_tools` | JSON array | `[]` | Allowed CLI tools (Read, Glob, Grep, Edit, Write, Bash, etc.) |
 | `mcp_servers` | JSON array | `[]` | Scoped MCP servers (controls access to queue_agent, subscribe_to, etc.) |
-| `input_artifacts` | JSON array | `[]` | Glob patterns for files this agent reads as input (e.g. `["plan/tasks.md", "src/**"]`) |
-| `output_artifacts` | JSON array | `[]` | Glob patterns for files this agent owns and writes (e.g. `["qa/**"]`) |
+| `subscriptions` | JSON array | `[]` | Glob patterns for files this agent watches and receives as context |
 | `mode` | string | `'manual'` | Dispatch mode: `manual`, `auto`, or `watch` |
 | `cooldown_seconds` | int | `30` | Minimum time between triggered dispatches |
 | `running` | boolean | `false` | Is a dispatch currently in-flight |
@@ -53,26 +52,24 @@ Agents are user-created LLM personas with configurable identity, tools, and disp
 
 Agent IDs are slugified from names.
 
-**Watch patterns are derived from input artifacts.** When an agent is in `watch` mode, its `input_artifacts` globs are used as the commit trigger patterns. There is no separate `watch_patterns` property — if you want an agent to react to file changes, you declare those files as inputs. This enforces the principle that an agent only triggers on things it actually reads.
-
-Agents can dynamically update their own `input_artifacts` via MCP tool (subscribing to new paths). The human can see and override these in the config UI.
+**Subscriptions** serve two purposes: they define what file changes trigger the agent (in watch mode), and they define what file contents are included in the agent's context (in all modes). Agents can modify their own subscriptions at runtime via MCP tool. The human can see and override these in the config UI.
 
 ### Control Model
 
 The human controls agent behavior through two mechanisms:
 
-1. **Tool permissions** — Which MCP servers and tools an agent can access. An agent without `maistro-dispatch` cannot queue other agents or modify its own subscriptions. This is the primary blast radius control. If the Planner shouldn't be queued by other agents, don't give other agents the ability to queue it (or scope the queue tool to exclude it).
+1. **Tool permissions** — Which MCP servers and tools an agent can access. An agent without `maistro-dispatch` cannot queue other agents or modify its own subscriptions. This is the primary blast radius control.
 
 2. **Dispatch mode** — Manual/Watch/Auto determines when the agent runs. Flipping any agent to Manual immediately stops autonomous triggering.
 
-Cooldown is a rate limiter, not an intelligence constraint. It prevents rapid re-firing but doesn't limit the depth of agent coordination. Agents are autonomous workers — the human controls their capabilities, not their decision-making.
+Cooldown is a rate limiter, not an intelligence constraint. Agents are autonomous workers — the human controls their capabilities, not their decision-making.
 
 ### Dispatch Modes
 
 | Mode | Behavior |
 |------|----------|
 | **Manual** | Agent runs only when a human dispatches it via the UI |
-| **Watch** | Agent runs when a commit touches files matching its `input_artifacts`. Subject to cooldown and chain depth limits. |
+| **Watch** | Agent runs when a commit touches files matching its `subscriptions`. Subject to cooldown. |
 | **Auto** | Agent runs on a polling interval, reads current project state, decides what to do. Subject to cooldown. |
 
 All three modes produce the same execution: agent reads project state, does work, commits results. The trigger mechanism varies but the execution model is identical.
@@ -83,82 +80,56 @@ All three modes produce the same execution: agent reads project state, does work
 
 Agents maintain project knowledge as files in the git repository. There is no message board or post/comment system. The filesystem is the collaboration surface.
 
-### Input and Output Artifacts
+### Documentation Is Truth
 
-Each agent has a clear data flow:
+The system enforces one principle via the platform preamble (injected into every agent's prompt, not configurable):
 
-- **Input artifacts** — files the agent reads to know what to do. Other agents' outputs, project intent, specs, code. These are the agent's triggers (in watch mode) and its context (in all modes).
+> Documentation is the source of truth. Your files should be first-principle, as-is representations of current project state — not task lists, not work-in-progress notes. Any reasoning, context, or work management belongs in commit messages, not in documentation. Keep your documentation current, accurate, and useful to anyone reading it cold.
 
-- **Output artifacts** — files the agent owns and maintains. Its bug list, test status, executive summary. These are its contribution to the project. No other agent should write to these files. The agent is expected to keep them current on every run.
+Agents decide for themselves what files to create and maintain based on their persona. The QA agent might maintain `qa/bugs.md` and `qa/test-status.md`. The Architect might maintain `architecture/system-design.md`. The system doesn't prescribe filenames, directories, or structure — the persona does.
 
-This makes the data flow between agents explicit. When you configure an agent, you're wiring a pipeline: "this agent reads from here, writes to here." Across all agents, the input/output declarations form a dependency graph.
+What the system *does* know is each agent's **subscriptions** — the files it watches and receives as context. This is the wiring between agents.
 
-### Executive Summary Requirement
+### Artifacts in the UI
 
-Every agent must maintain an executive summary as one of its output artifacts: `{agent_dir}/summary.md`. This file captures the agent's current understanding of the project from its perspective. It is updated on every run.
+The frontend discovers an agent's authored files from git history (who committed what). This requires no configuration — git already knows. The agent view shows:
 
-The summary serves as a lightweight coordination mechanism. Rather than reading every line of every agent's artifacts, an agent (or human) can read the summaries to get each agent's filtered perspective. The Architect's summary emphasizes structural concerns, QA's summary emphasizes risk, the Planner's summary emphasizes priorities.
-
-Enforcement is via persona instruction. If the LLM can't maintain a summary reliably, it can't do anything else reliably either.
-
-### Artifact Manifest
-
-Every agent receives an artifact manifest in its system prompt context — a listing of all agents and their output artifact paths. Not the file contents, just the registry:
-
-```
-Agents and their output artifacts:
-- Planner → plan/
-- Architect → architecture/
-- QA → qa/
-- Worker → src/
-```
-
-This tells each agent where project knowledge lives, prevents duplication (the agent knows QA owns the bug list, so it doesn't create its own), and lets agents discover what to read without being explicitly told.
-
-### Artifact Roles
-
-Artifacts serve three roles simultaneously:
-
-1. **Agent state** — The agent reads its own output artifacts to remember what it knows. When dispatched, both input and output artifacts are included in its context.
-
-2. **Cross-agent interface** — One agent's output artifacts are another agent's input artifacts. The dependency graph is the team's communication structure.
-
-3. **Human interface** — A human reads an agent's output artifacts to understand what it knows. They can edit any artifact and commit. The owning agent picks up changes on its next run. Editing another agent's inputs triggers that agent if it's in watch mode. The human is just another worker.
-
-### Convention
-
-Each agent with a knowledge-maintenance role owns a directory:
-
-```
-project/
-├── intent.md                  # Human-authored project intent (no owner)
-├── plan/
-│   ├── tasks.md               # Planner output
-│   └── summary.md             # Planner's executive summary
-├── architecture/
-│   ├── system-design.md       # Architect output
-│   └── summary.md             # Architect's executive summary
-├── qa/
-│   ├── bugs.md                # QA output
-│   ├── test-status.md         # QA output
-│   └── summary.md             # QA's executive summary
-├── src/                       # Worker output (code)
-│   └── ...
-└── .maistro/
-    └── maistro.db             # Operational state (not committed)
-```
-
-File ownership is enforced by convention through agent personas and the artifact manifest. Any agent can read any file. Only the owning agent should write to its output artifacts.
+- **Authored files** — files this agent has committed to, derived from `git log --author`. These are the agent's outputs. Editable by the human (edit + save = human commit).
+- **Subscriptions** — files this agent watches, from the `subscriptions` property. Shows what drives this agent.
 
 ### Cross-Agent Coordination
 
-Agents coordinate through the input/output artifact graph. Two mechanisms:
+Two mechanisms:
 
-1. **Pull (watch mode)** — Agent's input artifacts change → agent is triggered → reads new state → does work → commits to its output artifacts → may trigger downstream agents.
+1. **Pull (watch mode)** — A subscribed file changes → agent is triggered → reads current state → does work → commits → may trigger downstream agents.
 
-2. **Push (queue tool)** — Agent explicitly queues another agent via MCP tool with a reason. Used when the relationship isn't captured by file changes (e.g., "Architect, I need you to reconsider the auth design based on what I found").
+2. **Push (queue tool)** — Agent explicitly queues another agent via MCP tool with a reason and handoff context.
 
-Both mechanisms are available simultaneously. Watch handles the routine data flow. Queue handles the exceptions.
+Both are available simultaneously. Watch handles routine data flow. Queue handles the exceptions.
+
+### Human as Worker
+
+A human editing any file and committing is indistinguishable from an agent doing the same. The commit shows up in the feed, may trigger agents via their subscriptions. The human is just another worker in the system, using the same surface.
+
+### Convention (Example)
+
+A typical project might look like this, but the structure is emergent from agent personas, not prescribed by the system:
+
+```
+project/
+├── intent.md                  # Human-authored project intent
+├── architecture/
+│   └── system-design.md       # Maintained by Architect
+├── qa/
+│   ├── bugs.md                # Maintained by QA
+│   └── test-status.md
+├── plan/
+│   └── tasks.md               # Maintained by Planner
+├── src/                       # Code — maintained by Worker
+│   └── ...
+└── .maistro/
+    └── maistro.db             # Operational state (gitignored)
+```
 
 ---
 
@@ -174,12 +145,25 @@ A simple database table. Rows represent pending agent runs. Processed rows are d
 | `agent_id` | string | Which agent to run |
 | `trigger` | string | `commit`, `agent_queue`, `manual`, `auto` |
 | `trigger_detail` | string | Commit hash, queuing agent ID, or null |
-| `instructions` | string | Human-provided instructions (manual only) |
+| `context` | string | Handoff context — varies by trigger type (see below) |
 | `created_at` | datetime | When queued |
 | `started_at` | datetime | When dispatch began (null = pending) |
 | `completed_at` | datetime | When dispatch finished (null = in progress) |
 | `result_commit` | string | Commit hash produced by this dispatch (if any) |
 | `error` | string | Error message if dispatch failed |
+
+### Queue Context
+
+Every dispatch carries context that bootstraps the agent into its task. The source varies by trigger:
+
+| Trigger | Context source |
+|---------|---------------|
+| `commit` | Commit metadata: hash, author, message, changed files |
+| `agent_queue` | Queuing agent's reason + freeform context (the handoff) |
+| `manual` | Human's instructions |
+| `auto` | None — agent reads current state fresh |
+
+When the dispatch executes, the context is injected into the prompt assembly so the agent knows *why* it was triggered and *what to focus on* without having to rediscover everything from scratch.
 
 ### Trigger Mechanisms
 
@@ -189,9 +173,9 @@ A post-commit hook runs after every commit:
 
 1. Get list of changed files from the commit
 2. Query all agents where `mode = 'watch'` and `running = false`
-3. For each agent, check if any changed file matches its `input_artifacts` patterns
+3. For each agent, check if any changed file matches its `subscriptions` patterns
 4. For matching agents, check cooldown (last dispatch within `cooldown_seconds`?)
-5. Queue matching agents that pass cooldown
+5. Queue matching agents that pass cooldown, with commit metadata as context
 
 The post-commit hook is a generic script that calls a backend endpoint. All logic lives in the backend.
 
@@ -200,18 +184,20 @@ The post-commit hook is a generic script that calls a backend endpoint. All logi
 Agents can queue other agents via an MCP tool:
 
 ```
-queue_agent(agent_id, reason)
+queue_agent(agent_id, reason, context?)
 ```
+
+`reason` is a short string for the UI and dispatch log. `context` is the substantive handoff — the queuing agent's findings, pointers to specific files, description of the problem. This gets injected into the target agent's prompt, giving it a running start from where the previous agent left off.
 
 This inserts a dispatch queue row with `trigger = 'agent_queue'`. Only available to agents whose MCP server config includes `maistro-dispatch`. The tool itself can be scoped to limit which target agents are queueable.
 
 #### 3. Manual (Human)
 
-Human clicks "Run" on an agent in the UI, optionally with instructions. Inserts a dispatch queue row with `trigger = 'manual'`. Manual dispatch ignores cooldowns.
+Human clicks "Run" on an agent in the UI, optionally with instructions. Instructions are stored as the dispatch context. Inserts a dispatch queue row with `trigger = 'manual'`. Manual dispatch ignores cooldowns.
 
 #### 4. Auto (Polling)
 
-Background loop checks for agents with `mode = 'auto'` on a configurable interval. If the agent isn't running and cooldown has elapsed, queue it with `trigger = 'auto'`.
+Background loop checks for agents with `mode = 'auto'` on a configurable interval. If the agent isn't running and cooldown has elapsed, queue it with `trigger = 'auto'`. No context — the agent reads current state fresh.
 
 ### Dispatch Execution
 
@@ -222,7 +208,7 @@ When a dispatch queue item is processed:
 3. Build context prompt: agent's input and output artifact contents, recent git log
 4. Invoke LLM via Claude CLI subprocess with MCP servers
 5. Stream response via SSE to frontend
-6. Agent reads files, uses tools, produces output, updates its summary
+6. Agent reads files, uses tools, produces output
 7. Any file changes are committed with a descriptive message authored by the agent
 8. Set `completed_at`, set agent `running = false`
 9. Post-commit hook fires for any new commits, potentially triggering downstream agents
@@ -230,13 +216,12 @@ When a dispatch queue item is processed:
 ### Prompt Assembly
 
 System prompt layers:
-1. **Identity preamble** — "You are {name}, an agent in mAistro. Your role: {persona}"
-2. **Artifact manifest** — All agents and their output artifact paths (prevents duplication, enables discovery)
-3. **Output artifacts** — Current contents of this agent's owned files (its own state)
-4. **Input artifacts** — Current contents of files this agent reads (its context)
+1. **Platform preamble** (invariant, not configurable) — Agent identity, the documentation-as-truth principle, commit message conventions
+2. **Persona** — The agent's user-configured identity and role
+3. **Agent registry** — List of all agents, their personas (summary), and their subscriptions. Enables discovery and prevents duplication.
+4. **Subscription contents** — Current contents of files matching this agent's `subscriptions` (its context)
 5. **Recent activity** — Recent git log entries so the agent knows what's happened
-6. **Summary requirement** — "You must update your summary.md with your current perspective on the project"
-7. **Instructions** — If manually dispatched with human instructions, append them
+6. **Queue context** — Why this dispatch was triggered. For agent-queued: the handoff from the previous agent. For commit-triggered: the commit metadata. For manual: the human's instructions.
 
 ### Guardrails
 
@@ -292,12 +277,12 @@ Agent coordination and self-configuration tools.
 
 | Tool | Description |
 |------|-------------|
-| `queue_agent` | Queue another agent to run, with a reason |
+| `queue_agent` | Queue another agent to run, with a reason and optional handoff context |
 | `get_dispatch_status` | Check if an agent is currently running |
 | `get_recent_activity` | Get recent dispatch history |
-| `get_artifact_manifest` | Returns all agents' input/output artifact declarations — the team registry |
-| `subscribe_to` | Add a glob pattern to this agent's `input_artifacts` (self-subscription) |
-| `unsubscribe_from` | Remove a glob pattern from this agent's `input_artifacts` |
+| `get_agent_registry` | Returns all agents with their personas and subscriptions |
+| `subscribe_to` | Add a glob pattern to this agent's `subscriptions` (self-subscription) |
+| `unsubscribe_from` | Remove a glob pattern from this agent's `subscriptions` |
 
 ### maistro-git
 
@@ -380,28 +365,26 @@ The activity feed is driven by git log enhanced with dispatch metadata.
 
 #### 2. Agents
 
-The agent view is split: artifacts on top, config below. Artifacts are what the agent knows and produces. Config is how it behaves. Most visits are to read or edit artifacts, not to change config.
+The agent view shows what the agent has done and what it watches. Agent list on left, detail on right.
 
-**Agent list** on left. Selecting an agent shows:
+**Selecting an agent shows:**
 
-**Artifacts panel** (primary, tabbed into Outputs and Inputs):
-- **Outputs** — files this agent owns and maintains. Resolved from `output_artifacts` globs. Editable inline. Each file shows: path, last commit message snippet, last modified time. Click to open inline viewer/editor. Edit + save = git commit attributed to the human. Includes the agent's `summary.md` prominently.
-- **Inputs** — files this agent reads as context. Resolved from `input_artifacts` globs. Read-only view (these are owned by other agents or the human). Shows which agent owns each file. Useful for understanding what's driving this agent's behavior.
+**Artifacts panel** (primary):
+- **Authored files** — files this agent has committed to, derived from git history. Editable inline. Each file shows: path, last commit message snippet, last modified time. Click to open inline viewer/editor. Edit + save = git commit attributed to the human.
+- **Subscriptions** — file patterns this agent watches and receives as context. Shows resolved files with last commit info. Useful for understanding what drives this agent.
 - File git history accessible per-artifact (commit log filtered to that path)
 
 **Config panel** (secondary, collapsible):
 - Identity (name, persona/system prompt)
 - Model selection
 - Tools (CLI tools + MCP servers)
-- Output artifacts (glob editor — what files this agent owns)
-- Input artifacts (glob editor — what files this agent reads and watches)
+- Subscriptions (glob pattern editor)
 - Dispatch mode (Manual / Watch / Auto toggle)
-- Guardrails (cooldown, chain depth, timeout, error threshold)
+- Guardrails (cooldown, timeout)
 
 **Actions:**
 - **Run** — dispatch the agent immediately
 - **Chat** — open a chat session with this agent
-- **Test Run** — dispatch once with current config without saving
 
 #### 3. Chat
 
@@ -469,7 +452,7 @@ CREATE TABLE dispatch_queue (
     agent_id TEXT NOT NULL REFERENCES agents(id),
     trigger TEXT NOT NULL, -- 'commit', 'agent_queue', 'manual', 'auto'
     trigger_detail TEXT,   -- commit hash, queuing agent id, or null
-    instructions TEXT,     -- human-provided instructions (manual only)
+    context TEXT,          -- handoff context: commit metadata, agent reason+context, human instructions, or null
     created_at DATETIME DEFAULT (datetime('now')),
     started_at DATETIME,
     completed_at DATETIME,
@@ -547,6 +530,7 @@ Significantly reduced from v1. No boards, posts, comments, or notifications.
 | GET | `/api/project/` | Current project info |
 | POST | `/api/project/open` | Open/initialize project directory |
 | POST | `/api/project/close` | Unload current project |
+| POST | `/api/project/browse` | OS-native directory picker (requires Electron/Tauri shell) |
 
 ### Agents
 
@@ -558,8 +542,7 @@ Significantly reduced from v1. No boards, posts, comments, or notifications.
 | PATCH | `/api/agents/{id}` | Update agent properties |
 | DELETE | `/api/agents/{id}` | Delete agent |
 | POST | `/api/agents/reorder` | Reorder agent list |
-| GET | `/api/agents/{id}/artifacts` | Resolve agent's `output_artifacts` and `input_artifacts` globs → grouped file lists with metadata (path, owner agent, last commit, last modified) |
-| GET | `/api/agents/{id}/artifacts/manifest` | Artifact manifest: all agents' input/output declarations |
+| GET | `/api/agents/{id}/artifacts` | Authored files (from git log --author) + resolved subscription files, with metadata |
 
 ### Dispatch
 

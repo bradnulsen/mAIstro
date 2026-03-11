@@ -21,6 +21,14 @@ export const getProject = () => fetchJSON('/api/project/')
 export const openProject = (path) =>
   fetchJSON('/api/project/open', { method: 'POST', body: JSON.stringify({ path }) })
 
+export const browseProject = () =>
+  fetchJSON('/api/project/browse', { method: 'POST' })
+
+export const getRecentProjects = () => fetchJSON('/api/project/recent')
+
+export const removeRecentProject = (path) =>
+  fetchJSON(`/api/project/recent?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+
 // ── Agents ──
 
 export const listAgents = () => fetchJSON('/api/agents/')
@@ -40,8 +48,8 @@ export const getAgentArtifacts = (id) => fetchJSON(`/api/agents/${id}/artifacts`
 
 // ── Dispatch ──
 
-export function dispatchAgent(agentId, instructions, onEvent) {
-  const body = instructions ? JSON.stringify({ instructions }) : '{}'
+export function dispatchAgent(agentId, context, onEvent) {
+  const body = context ? JSON.stringify({ context }) : '{}'
   return fetchSSE(`/api/dispatch/${agentId}`, { method: 'POST', body }, onEvent)
 }
 

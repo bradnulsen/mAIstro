@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS dispatch_queue (
     agent_id TEXT NOT NULL REFERENCES agents(id),
     trigger TEXT NOT NULL,
     trigger_detail TEXT,
-    instructions TEXT,
+    context TEXT,
     created_at DATETIME DEFAULT (datetime('now')),
     started_at DATETIME,
     completed_at DATETIME,
@@ -103,10 +103,10 @@ SEED_SQL = """
 INSERT OR IGNORE INTO agent_property_defs (key, default_value, type) VALUES
     ('persona', '', 'string'),
     ('model', 'sonnet', 'string'),
-    ('base_tools', '["Read","Write","Edit","Glob","Grep","Bash"]', 'json'),
+    ('base_tools', '[]', 'json'),
+    ('disallowed_tools', '[]', 'json'),
     ('mcp_servers', '[]', 'json'),
-    ('input_artifacts', '[]', 'json'),
-    ('output_artifacts', '[]', 'json'),
+    ('subscriptions', '[]', 'json'),
     ('mode', 'manual', 'string'),
     ('cooldown_seconds', '30', 'integer'),
     ('running', 'false', 'boolean'),
@@ -225,13 +225,13 @@ async def delete_agent(agent_id: str) -> bool:
 
 async def enqueue_dispatch(agent_id: str, trigger: str,
                            trigger_detail: str | None = None,
-                           instructions: str | None = None) -> int:
+                           context: str | None = None) -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            """INSERT INTO dispatch_queue (agent_id, trigger, trigger_detail, instructions)
+            """INSERT INTO dispatch_queue (agent_id, trigger, trigger_detail, context)
                VALUES (?, ?, ?, ?)""",
-            (agent_id, trigger, trigger_detail, instructions)
+            (agent_id, trigger, trigger_detail, context)
         )
         await db.commit()
         return cursor.lastrowid
@@ -284,6 +284,22 @@ async def set_agent_running(agent_id: str, running: bool):
             (agent_id, str(running).lower())
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_last_dispatch_time(agent_id: str):
+    """Get the most recent dispatch time for an agent. Returns datetime or None."""
+    from datetime import datetime, timezone
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            "SELECT created_at FROM dispatch_queue WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1",
+            (agent_id,)
+        )
+        if rows:
+            return datetime.fromisoformat(rows[0]["created_at"]).replace(tzinfo=timezone.utc)
+        return None
     finally:
         await db.close()
 
@@ -352,6 +368,47 @@ async def update_chat_session(session_id: str, **kwargs):
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         vals = list(kwargs.values()) + [session_id]
         await db.execute(f"UPDATE chat_sessions SET {sets} WHERE id = ?", vals)
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_chat_session(session_id: str):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── MCP Servers ────────────────────────────────────────────
+
+async def list_mcp_servers() -> list[dict]:
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall("SELECT * FROM mcp_servers")
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def create_mcp_server(name: str, command: str, args: list | None = None, env: dict | None = None):
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO mcp_servers (name, command, args, env) VALUES (?, ?, ?, ?)",
+            (name, command, json.dumps(args or []), json.dumps(env or {}))
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_mcp_server(name: str):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM mcp_servers WHERE name = ?", (name,))
         await db.commit()
     finally:
         await db.close()

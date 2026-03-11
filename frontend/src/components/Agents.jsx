@@ -187,18 +187,17 @@ function AgentDetail({ agent, onRefresh, onDelete }) {
       {/* Artifacts */}
       {artifacts && (
         <div className="agent-section">
-          <h3>Output Artifacts</h3>
-          {artifacts.outputs.length === 0 && <div style={{ fontSize: 11, color: '#888' }}>No output artifacts</div>}
-          {artifacts.outputs.map(f => (
-            <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
-              <span>{f.path}</span>
-              <span style={{ color: '#888' }}>{formatSize(f.size)}</span>
+          <h3>Authored Files</h3>
+          {artifacts.authored.length === 0 && <div style={{ fontSize: 11, color: '#888' }}>No authored files yet</div>}
+          {artifacts.authored.map(f => (
+            <div key={f} style={{ fontSize: 11, padding: '2px 0' }}>
+              {f}
             </div>
           ))}
 
-          <h3 style={{ marginTop: 12 }}>Input Artifacts</h3>
-          {artifacts.inputs.length === 0 && <div style={{ fontSize: 11, color: '#888' }}>No input artifacts</div>}
-          {artifacts.inputs.map(f => (
+          <h3 style={{ marginTop: 12 }}>Subscriptions</h3>
+          {artifacts.subscriptions.length === 0 && <div style={{ fontSize: 11, color: '#888' }}>No subscriptions</div>}
+          {artifacts.subscriptions.map(f => (
             <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
               <span>{f.path}</span>
               <span style={{ color: '#888' }}>{formatSize(f.size)}</span>
@@ -245,20 +244,11 @@ function AgentDetail({ agent, onRefresh, onDelete }) {
         </div>
 
         <div className="field-group">
-          <label>Output Artifacts (one glob per line)</label>
+          <label>Subscriptions (one glob per line)</label>
           <textarea
             rows={3}
-            value={arrayToLines(getVal('output_artifacts'))}
-            onChange={e => edit('output_artifacts', linesToArray(e.target.value))}
-          />
-        </div>
-
-        <div className="field-group">
-          <label>Input Artifacts (one glob per line)</label>
-          <textarea
-            rows={3}
-            value={arrayToLines(getVal('input_artifacts'))}
-            onChange={e => edit('input_artifacts', linesToArray(e.target.value))}
+            value={arrayToLines(getVal('subscriptions'))}
+            onChange={e => edit('subscriptions', linesToArray(e.target.value))}
           />
         </div>
 
