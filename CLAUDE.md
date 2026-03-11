@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Quick Start
 
 ```bash
-# Backend
+# Backend (from repo root)
 pip install -r requirements.txt
 python run.py
 
@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-Backend runs on http://localhost:8420, frontend on http://localhost:5173. No test suite exists.
+Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on http://localhost:5173. No test suite or linter is configured.
 
 ## Architecture
 
@@ -36,20 +36,24 @@ Backend runs on http://localhost:8420, frontend on http://localhost:5173. No tes
 
 ### Key Design Decisions
 - **Git as source of truth**: all project content lives in git. The SQLite DB (`.maistro/` dir, gitignored) holds only operational state — agent configs, dispatch queue, chat sessions
+- **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db` (async via aiosqlite) holds agent/dispatch/chat state; app DB at `<repo>/.maistro/app.db` (sync, `appstate.py`) holds recent-projects list
 - **Agent properties are EAV**: `agent_property_defs` table defines keys with defaults and types; `agent_properties` stores per-agent overrides. Types: `string`, `json`, `integer`, `boolean`
-- **Claude CLI via Popen+thread**: uses `subprocess.Popen` with a thread reader pushing to `asyncio.Queue` to avoid Windows ProactorEventLoop issues (not asyncio subprocess)
+- **Claude CLI via Popen+threads**: `cli.py` uses `subprocess.Popen` with thread readers pushing to `asyncio.Queue` (avoids Windows ProactorEventLoop issues). Pipes prompt and system prompt via stdin to avoid cmd arg quoting issues. Reads NDJSON from both stdout and stderr (CLI writes to stderr on `--resume`)
 - **Vite proxies `/api` to backend**: frontend makes API calls to same origin, Vite dev server proxies to port 8420
 
 ## Key Files
 
-- `backend/main.py` — FastAPI app, all API routes, git helpers, post-commit hook installer
-- `backend/database.py` — SQLite schema, EAV property system, all CRUD helpers
-- `backend/git.py` — Git subprocess abstraction (log, diff, commit, authored_files)
-- `backend/cli.py` — Claude CLI subprocess invocation with NDJSON streaming
-- `backend/dispatch.py` — prompt assembly (`build_system_prompt`/`build_user_prompt`), dispatch lifecycle, watch trigger matching, agent commit logic
+- `run.py` — Uvicorn launcher (hot-reload on `backend/`)
+- `backend/main.py` — FastAPI app, all API routes, global `PROJECT_DIR` state, CORS, lifespan
+- `backend/database.py` — Project SQLite schema, EAV property system, all CRUD helpers (async)
+- `backend/appstate.py` — App-level SQLite DB for recent-projects list (sync, separate from project DB)
+- `backend/git.py` — Git subprocess abstraction (log, diff, commit, authored_files, hook installer)
+- `backend/cli.py` — Claude CLI subprocess invocation: stdin piping, NDJSON parsing, event schema
+- `backend/dispatch.py` — Prompt assembly (`build_system_prompt`/`build_user_prompt`), dispatch lifecycle, watch trigger matching, agent commit logic
 - `frontend/src/App.jsx` — Shell with rail navigation, project opener, view router
 - `frontend/src/api.js` — API client with `fetchJSON` and `fetchSSE` helpers
 - `frontend/src/components/` — `Feed.jsx` (git activity), `Agents.jsx` (config + dispatch), `Chat.jsx` (chat interface)
+- `maistro_spec.md` — Detailed functional spec (authoritative reference for intended behavior)
 
 ## Conventions
 

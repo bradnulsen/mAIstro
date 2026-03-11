@@ -41,15 +41,20 @@ curl -s -X POST http://localhost:{port}/api/hooks/post-commit \\
         pass
 
 
-def ensure_gitignore(project_dir: str, entry: str = ".maistro/"):
-    """Add an entry to .gitignore if not already present."""
+def ensure_gitignore(project_dir: str, entries: list[str] | None = None):
+    """Add entries to .gitignore if not already present."""
+    if entries is None:
+        entries = [".maistro/", ".claude/"]
     gitignore = os.path.join(project_dir, ".gitignore")
+    existing = ""
     if os.path.exists(gitignore):
         with open(gitignore, "r") as f:
-            if entry in f.read():
-                return
-    with open(gitignore, "a") as f:
-        f.write(f"\n{entry}\n")
+            existing = f.read()
+    to_add = [e for e in entries if e not in existing]
+    if to_add:
+        with open(gitignore, "a") as f:
+            for entry in to_add:
+                f.write(f"\n{entry}\n")
 
 
 # ── Log parsing ─────────────────────────────────────────────
