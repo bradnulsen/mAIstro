@@ -184,18 +184,10 @@ function AgentDetail({ agent, onRefresh, onDelete }) {
         </div>
       )}
 
-      {/* Artifacts */}
+      {/* Subscriptions */}
       {artifacts && (
         <div className="agent-section">
-          <h3>Authored Files</h3>
-          {artifacts.authored.length === 0 && <div style={{ fontSize: 11, color: '#888' }}>No authored files yet</div>}
-          {artifacts.authored.map(f => (
-            <div key={f} style={{ fontSize: 11, padding: '2px 0' }}>
-              {f}
-            </div>
-          ))}
-
-          <h3 style={{ marginTop: 12 }}>Subscriptions</h3>
+          <h3>Subscriptions</h3>
           {artifacts.subscriptions.length === 0 && <div style={{ fontSize: 11, color: '#888' }}>No subscriptions</div>}
           {artifacts.subscriptions.map(f => (
             <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>

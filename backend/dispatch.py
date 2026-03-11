@@ -131,7 +131,7 @@ def build_user_prompt(agent: dict, project_dir: str, context: str | None = None,
     if queue_context:
         sections.append(queue_context)
 
-    if manifest:
+    if manifest and manifest.strip():
         sections.append(f"## Agent Registry\n{manifest}")
 
     # Subscription contents — files this agent watches and receives as context
@@ -146,12 +146,12 @@ def build_user_prompt(agent: dict, project_dir: str, context: str | None = None,
         sections.append(f"## Recent Activity\n```\n{recent}\n```")
 
     if context:
-        sections.append(f"## Context\n{context}")
+        sections.append(f"## Task\n{context}")
     else:
         sections.append(
             "## Task\n"
-            "Review your subscriptions and the recent activity. "
-            "Do your work and update your documentation."
+            "Review the project state — subscriptions, recent activity, and any files in your working directory. "
+            "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
         )
 
     return "\n\n".join(sections)

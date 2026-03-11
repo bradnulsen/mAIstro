@@ -159,25 +159,6 @@ def changed_files_in_commit(cwd: str, commit_hash: str) -> list[str]:
     return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
 
 
-def authored_files(cwd: str, email: str) -> list[str]:
-    """Get unique file paths committed by a given author email."""
-    result = run_git(
-        "log", "--author", email, "--name-only", "--format=", "--diff-filter=ACMR",
-        cwd=cwd,
-    )
-    if result.returncode != 0:
-        return []
-    seen = set()
-    files = []
-    for line in result.stdout.strip().split("\n"):
-        f = line.strip()
-        if f and f not in seen:
-            seen.add(f)
-            # Only include files that still exist
-            if os.path.isfile(os.path.join(cwd, f)):
-                files.append(f)
-    return files
-
 
 def head_hash(cwd: str) -> str | None:
     """Get current HEAD commit hash."""

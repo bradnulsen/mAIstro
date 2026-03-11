@@ -258,15 +258,8 @@ async def get_agent_artifacts(agent_id: str):
     if not agent:
         raise HTTPException(404, "Agent not found")
     props = agent["properties"]
-    # Authored files: derived from git log --author
-    email = f"{agent_id}@maistro.local"
-    authored = git.authored_files(PROJECT_DIR, email)
-    # Subscriptions: resolved from glob patterns
     subs = resolve_glob_files(PROJECT_DIR, props.get("subscriptions") or [])
-    return {
-        "authored": authored,
-        "subscriptions": subs,
-    }
+    return {"subscriptions": subs}
 
 
 @app.get("/api/agents/{agent_id}/artifacts/manifest")
