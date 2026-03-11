@@ -23,8 +23,8 @@ async def run_dispatch(
     dispatch_id: int,
     task: dict,
     project_dir: str,
-    context: str | None = None,
     cancel_event=None,
+    dispatch_method: str = "manual",
 ) -> AsyncIterator[dict]:
     """Build prompts, invoke Claude CLI, yield events.
 
@@ -42,15 +42,12 @@ async def run_dispatch(
     # Build dispatch metadata for prompt injection
     dispatch_meta = None
     if dispatch_record:
-        auto_setting = await db.get_config("queue_auto_dispatch")
         dispatch_meta = {
-            "trigger": dispatch_record.get("trigger", "unknown"),
-            "trigger_detail": dispatch_record.get("trigger_detail", ""),
-            "auto_dispatched": auto_setting == "true",
+            "auto_dispatched": dispatch_method == "auto",
         }
 
     system_prompt = build_dispatch_system_prompt(task, project_dir)
-    user_prompt = build_user_prompt(task, project_dir, context, queue_context, manifest, dispatch_meta=dispatch_meta)
+    user_prompt = build_user_prompt(task, project_dir, queue_context, manifest, dispatch_meta=dispatch_meta)
 
     log.info(f"[dispatch:{dispatch_id}] System: {len(system_prompt)} chars, User: {len(user_prompt)} chars")
 
@@ -104,7 +101,7 @@ def build_dispatch_system_prompt(task: dict, project_dir: str) -> str:
     )
 
 
-def build_user_prompt(task: dict, project_dir: str, context: str | None = None,
+def build_user_prompt(task: dict, project_dir: str,
                       queue_context: str | None = None, manifest: str | None = None,
                       dispatch_meta: dict | None = None) -> str:
     props = task["properties"]
@@ -119,14 +116,9 @@ def build_user_prompt(task: dict, project_dir: str, context: str | None = None,
     if description:
         identity_parts.append(description)
     if dispatch_meta:
-        trigger = dispatch_meta.get("trigger", "unknown")
-        detail = dispatch_meta.get("trigger_detail", "")
         auto = dispatch_meta.get("auto_dispatched", False)
         mode = "auto-dispatched" if auto else "manually dispatched"
-        trigger_line = f"**Dispatch:** {trigger} ({mode})"
-        if detail:
-            trigger_line += f" — `{detail}`"
-        identity_parts.append(trigger_line)
+        identity_parts.append(f"**Dispatch:** {mode}")
     sections.append("\n".join(identity_parts))
 
     if instructions:
@@ -146,18 +138,11 @@ def build_user_prompt(task: dict, project_dir: str, context: str | None = None,
             file_list = "\n".join(f"- `{f['path']}` ({f['size']}B)" for f in sub_files)
             sections.append(f"## Subscribed Files\nThese files are relevant to your task. Read them as needed.\n{file_list}")
 
-    recent = git.log_oneline(project_dir)
-    if recent:
-        sections.append(f"## Recent Activity\n```\n{recent}\n```")
-
-    if context:
-        sections.append(f"## Context\n{context}")
-    else:
-        sections.append(
-            "## Your Turn\n"
-            "Review the project state — your instructions, subscriptions, and recent activity. "
-            "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
-        )
+    sections.append(
+        "## Your Turn\n"
+        "Review the project state — your instructions, subscriptions, and context above. "
+        "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
+    )
 
     return "\n\n".join(sections)
 
@@ -183,42 +168,54 @@ async def build_task_manifest() -> str:
 # ── Queue context ───────────────────────────────────────────
 
 async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str | None:
-    """Build context from the queuing task for task-queued dispatches."""
+    """Build context from the dispatch's triggers array."""
     if not dispatch:
         return None
 
-    trigger = dispatch.get("trigger")
-    trigger_detail = dispatch.get("trigger_detail")
-    context = dispatch.get("context")
+    triggers = dispatch.get("triggers")
+    if not triggers:
+        # Fallback: build single-entry triggers from scalar fields
+        triggers = [{"trigger": dispatch.get("trigger"),
+                     "detail": dispatch.get("trigger_detail"),
+                     "context": dispatch.get("context")}]
+
     sections = []
+    for entry in triggers:
+        trigger = entry.get("trigger")
+        detail = entry.get("detail")
+        ctx = entry.get("context")
 
-    if trigger == "task_queue" and trigger_detail:
-        queuing_task = await db.get_task(trigger_detail)
-        if queuing_task:
-            sections.append(
-                f"## Queued by: {queuing_task['name']}\n"
-                f"Task `{queuing_task['name']}` has queued you to run."
-            )
-            if context:
-                sections.append(f"**Reason:** {context}")
+        if trigger == "task_queue" and detail:
+            queuing_task = await db.get_task(detail)
+            if queuing_task:
+                sections.append(
+                    f"## Queued by: {queuing_task['name']}\n"
+                    f"Task `{queuing_task['name']}` has queued you to run."
+                )
+                if ctx:
+                    sections.append(f"**Reason:** {ctx}")
 
-            # Read the queuing task's subscribed files for summary context
-            q_subs = queuing_task["properties"].get("subscriptions") or []
-            for pattern in q_subs:
-                for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
-                    if fpath.endswith("summary.md") and os.path.isfile(fpath):
-                        content = git.read_file(project_dir, os.path.relpath(fpath, project_dir))
-                        if content:
-                            rel = os.path.relpath(fpath, project_dir)
-                            sections.append(
-                                f"### {queuing_task['name']}'s Current Summary\n"
-                                f"(from `{rel}`):\n```\n{content[:4000]}\n```"
-                            )
+                # Read the queuing task's subscribed files for summary context
+                q_subs = queuing_task["properties"].get("subscriptions") or []
+                for pattern in q_subs:
+                    for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
+                        if fpath.endswith("summary.md") and os.path.isfile(fpath):
+                            content = git.read_file(project_dir, os.path.relpath(fpath, project_dir))
+                            if content:
+                                rel = os.path.relpath(fpath, project_dir)
+                                sections.append(
+                                    f"### {queuing_task['name']}'s Current Summary\n"
+                                    f"(from `{rel}`):\n```\n{content[:4000]}\n```"
+                                )
 
-    elif trigger == "commit" and trigger_detail:
-        info = git.show(project_dir, trigger_detail, stat=True)
-        if info:
-            sections.append(f"## Triggered by commit\n```\n{info.strip()}\n```")
+        elif trigger == "commit" and detail:
+            info = git.show(project_dir, detail, stat=True)
+            if info:
+                sections.append(f"## Triggered by commit `{detail[:8]}`\n```\n{info.strip()}\n```")
+
+        elif trigger == "manual":
+            if ctx:
+                sections.append(f"## Manual trigger\n{ctx}")
 
     return "\n\n".join(sections) if sections else None
 
@@ -250,10 +247,11 @@ async def check_watch_triggers(commit_hash: str, project_dir: str) -> list[dict]
 
 
 def _any_file_matches(files: list[str], patterns: list[str]) -> bool:
-    """Check if any file matches any glob pattern."""
+    """Check if any file matches any glob pattern (supports ** recursive)."""
+    from pathlib import PurePath
     for pattern in patterns:
         for f in files:
-            if fnmatch.fnmatch(f, pattern):
+            if PurePath(f).match(pattern):
                 return True
     return False
 
