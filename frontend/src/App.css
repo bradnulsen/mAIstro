@@ -384,6 +384,27 @@ label {
   padding: 0;
 }
 
+.collapsible-label {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.collapsible-label:hover { color: var(--accent); }
+.collapse-arrow {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  font-size: 10px;
+}
+.collapse-arrow.open { transform: rotate(90deg); }
+.resolved-files-list {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 4px 0;
+}
+
 .task-section {
   margin-bottom: 16px;
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from 'react-markdown'
 import {
   createTask, updateTask, deleteTask, getTaskSubscriptions,
@@ -93,6 +93,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   const [lastDispatchId, setLastDispatchId] = useState(null)
   const [context, setContext] = useState('')
   const [subs, setSubs] = useState(null)
+  const [subsOpen, setSubsOpen] = useState(false)
   const props = task.properties || {}
 
   useEffect(() => {
@@ -201,11 +202,12 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
         <div className="field-group">
           <label>Instructions</label>
-          <textarea
-            rows={4}
+          <AutoTextarea
             value={getVal('instructions') || ''}
             onChange={e => edit('instructions', e.target.value)}
             placeholder="Detailed instructions for what this task should do..."
+            maxHeight={300}
+            minRows={3}
           />
         </div>
       </div>
@@ -216,23 +218,34 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
         <div className="field-group">
           <label>Glob patterns (one per line)</label>
-          <textarea
-            rows={3}
+          <AutoTextarea
             value={arrayToLines(getVal('subscriptions'))}
             onChange={e => edit('subscriptions', linesToArray(e.target.value))}
+            maxHeight={150}
+            minRows={2}
           />
         </div>
 
-        {/* Resolved files */}
+        {/* Resolved files (collapsible) */}
         {subs && subs.subscriptions.length > 0 && (
           <div className="field-group">
-            <label>Resolved files</label>
-            {subs.subscriptions.map(f => (
-              <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
-                <span>{f.path}</span>
-                <span style={{ color: '#888' }}>{formatSize(f.size)}</span>
+            <label
+              className="collapsible-label"
+              onClick={() => setSubsOpen(o => !o)}
+            >
+              <span className={`collapse-arrow ${subsOpen ? 'open' : ''}`}>▸</span>
+              Resolved files ({subs.subscriptions.length})
+            </label>
+            {subsOpen && (
+              <div className="resolved-files-list">
+                {subs.subscriptions.map(f => (
+                  <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{f.path}</span>
+                    <span style={{ color: '#888' }}>{formatSize(f.size)}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         )}
       </div>
@@ -278,6 +291,29 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         <button className="danger small" onClick={handleDelete}>Delete Task</button>
       </div>
     </div>
+  )
+}
+
+function AutoTextarea({ value, onChange, placeholder, maxHeight = 200, minRows = 2 }) {
+  const ref = useRef(null)
+  const resize = () => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px'
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  }
+  useEffect(() => { resize() }, [value])
+  return (
+    <textarea
+      ref={ref}
+      rows={minRows}
+      value={value}
+      onChange={onChange}
+      onInput={resize}
+      placeholder={placeholder}
+      style={{ resize: 'none' }}
+    />
   )
 }
 
