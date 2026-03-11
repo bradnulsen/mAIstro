@@ -10,7 +10,6 @@ const STATUS_LABELS = {
   pending: 'Pending',
   running: 'Running',
   completed: 'Completed',
-  coalesced: 'Coalesced',
   error: 'Error',
   cancelled: 'Cancelled',
 }
@@ -18,12 +17,24 @@ const STATUS_LABELS = {
 function getStatus(item) {
   if (item.error) {
     if (item.error === 'cancelled') return 'cancelled'
-    if (item.error.startsWith('coalesced')) return 'coalesced'
     return 'error'
   }
   if (item.completed_at) return 'completed'
   if (item.started_at) return 'running'
   return 'pending'
+}
+
+function formatDuration(startStr, endStr) {
+  const start = new Date(startStr + 'Z')
+  const end = endStr ? new Date(endStr + 'Z') : new Date()
+  const secs = Math.max(0, Math.round((end - start) / 1000))
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  const remSecs = secs % 60
+  if (mins < 60) return `${mins}m ${remSecs}s`
+  const hrs = Math.floor(mins / 60)
+  const remMins = mins % 60
+  return `${hrs}h ${remMins}m`
 }
 
 function isUpcoming(item) {
@@ -148,6 +159,14 @@ export default function Queue() {
           )}
           {filtered.map(item => {
             const status = getStatus(item)
+            const triggers = item.triggers && item.triggers.length > 0
+              ? item.triggers
+              : [{ trigger: item.trigger, detail: item.trigger_detail, context: item.context }]
+            // Show unique trigger type icons
+            const triggerTypes = [...new Set(triggers.map(t => t.trigger))]
+            // First context that has content, for preview
+            const previewCtx = triggers.find(t => t.context)?.context
+            const triggerCount = triggers.length > 1 ? ` (${triggers.length})` : ''
             return (
               <div
                 key={item.id}
@@ -161,21 +180,18 @@ export default function Queue() {
                   <div className="feed-meta">
                     <span className="feed-author">{item.task_name}</span>
                     <span className="feed-trigger">
-                      {TRIGGER_ICONS[item.trigger] || ''}
+                      {triggerTypes.map(t => TRIGGER_ICONS[t] || '').join('')}{triggerCount}
                     </span>
                     <span className={`queue-status ${status}`}>
                       {STATUS_LABELS[status]}
                     </span>
-                    <span>{formatDate(item.created_at, true)}</span>
+                    <span>{formatDate(isUpcoming(item) ? item.created_at : (item.completed_at || item.created_at), true)}</span>
                   </div>
                   <div className="feed-message">
-                    {item.context
-                      ? item.context.length > 80 ? item.context.slice(0, 80) + '...' : item.context
+                    {previewCtx
+                      ? previewCtx.length > 80 ? previewCtx.slice(0, 80) + '...' : previewCtx
                       : `${item.trigger} dispatch`}
                   </div>
-                  {item.trigger_detail && (
-                    <div className="feed-files">{item.trigger_detail}</div>
-                  )}
                 </div>
               </div>
             )
@@ -191,73 +207,110 @@ export default function Queue() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-                #{selected.id} — {selected.task_name}
-              </div>
+              {(() => {
+                const status = getStatus(selected)
+                // Parse triggers array — each entry has {trigger, detail, context}
+                const triggers = selected.triggers && selected.triggers.length > 0
+                  ? selected.triggers
+                  : [{ trigger: selected.trigger, detail: selected.trigger_detail, context: selected.context }]
 
-              <div style={{ marginBottom: 12 }}>
-                <label>Status</label>
-                <span className={`queue-status ${getStatus(selected)}`} style={{ fontSize: 12 }}>
-                  {STATUS_LABELS[getStatus(selected)]}
-                </span>
-              </div>
+                const TRIGGER_LABELS = {
+                  manual: 'User',
+                  commit: 'Commit',
+                  task_queue: 'Task',
+                }
 
-              <div style={{ marginBottom: 12 }}>
-                <label>Trigger</label>
-                <div style={{ fontSize: 12 }}>
-                  {TRIGGER_ICONS[selected.trigger] || ''} {selected.trigger}
-                  {selected.trigger_detail && (
-                    <span style={{ color: '#888' }}> — {selected.trigger_detail}</span>
-                  )}
-                </div>
-              </div>
+                const triggerLabel = (entry) => {
+                  const base = TRIGGER_LABELS[entry.trigger] || entry.trigger
+                  if (entry.trigger === 'commit' && entry.detail) return `${base} (${entry.detail.slice(0, 8)})`
+                  if (entry.trigger === 'task_queue' && entry.detail) return `${base} (${entry.detail})`
+                  if (entry.trigger === 'manual' && entry.detail) return `${base} @ ${entry.detail.slice(0, 8)}`
+                  return base
+                }
 
-              {selected.context && (
-                <div style={{ marginBottom: 12 }}>
-                  <label>Context</label>
-                  <pre style={{
-                    fontSize: 11, background: '#f5f5f0', padding: 8,
-                    borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                    border: '1px solid #ddd',
-                  }}>
-                    {selected.context}
-                  </pre>
-                </div>
-              )}
+                return (
+                  <>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+                      #{selected.id} — {selected.task_name}
+                    </div>
 
-              <div style={{ marginBottom: 12 }}>
-                <label>Timeline</label>
-                <div style={{ fontSize: 11 }}>
-                  <div>Created: {formatDate(selected.created_at, true)}</div>
-                  {selected.started_at && <div>Started: {formatDate(selected.started_at, true)}</div>}
-                  {selected.completed_at && <div>Completed: {formatDate(selected.completed_at, true)}</div>}
-                </div>
-              </div>
+                    <div style={{ marginBottom: 12 }}>
+                      <label>Status</label>
+                      <span className={`queue-status ${status}`} style={{ fontSize: 12 }}>
+                        {STATUS_LABELS[status]}
+                      </span>
+                    </div>
 
-              {selected.result_commit && (
-                <div style={{ marginBottom: 12 }}>
-                  <label>Result Commit</label>
-                  <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                    {selected.result_commit.slice(0, 8)}
-                  </div>
-                </div>
-              )}
+                    <div style={{ marginBottom: 12 }}>
+                      <label>Queued by</label>
+                      <div style={{ fontSize: 12 }}>
+                        {triggers.map((entry, i) => (
+                          <div key={i}>
+                            {TRIGGER_ICONS[entry.trigger] || ''} {triggerLabel(entry)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
 
-              {selected.error && getStatus(selected) !== 'coalesced' && (
-                <div style={{ marginBottom: 12 }}>
-                  <label>Error</label>
-                  <div style={{ fontSize: 11, color: 'var(--danger)' }}>{selected.error}</div>
-                </div>
-              )}
+                    <div style={{ marginBottom: 12 }}>
+                      <label>Dispatched</label>
+                      <div style={{ fontSize: 12 }}>
+                        {selected.dispatch_method || '—'}
+                      </div>
+                    </div>
 
-              {getStatus(selected) === 'coalesced' && selected.error && (
-                <div style={{ marginBottom: 12 }}>
-                  <label>Note</label>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                    {selected.error}
-                  </div>
-                </div>
-              )}
+                    <div style={{ marginBottom: 12 }}>
+                      <label>Context</label>
+                      {triggers.map((entry, i) => (
+                        <pre key={i} style={{
+                          fontSize: 11, background: '#f5f5f0', padding: 8,
+                          borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                          border: '1px solid #ddd', marginBottom: triggers.length > 1 ? 4 : 0,
+                          color: entry.context ? 'inherit' : '#aaa',
+                          fontStyle: entry.context ? 'normal' : 'italic',
+                        }}>
+                          {entry.context || 'not provided'}
+                        </pre>
+                      ))}
+                    </div>
+
+                    <div style={{ marginBottom: 12 }}>
+                      <label>Timeline</label>
+                      <div style={{ fontSize: 11 }}>
+                        <div>Created: {formatDate(selected.created_at, true)}</div>
+                        {selected.started_at && <div>Started: {formatDate(selected.started_at, true)}</div>}
+                        {selected.completed_at && <div>Completed: {formatDate(selected.completed_at, true)}</div>}
+                        {selected.started_at && selected.completed_at && (
+                          <div style={{ marginTop: 2, color: 'var(--text)' }}>
+                            Duration: {formatDuration(selected.started_at, selected.completed_at)}
+                          </div>
+                        )}
+                        {selected.started_at && !selected.completed_at && (
+                          <div style={{ marginTop: 2, color: 'var(--running)' }}>
+                            Running for {formatDuration(selected.started_at)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {selected.result_commit && (
+                      <div style={{ marginBottom: 12 }}>
+                        <label>Result Commit</label>
+                        <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                          {selected.result_commit.slice(0, 8)}
+                        </div>
+                      </div>
+                    )}
+
+                    {selected.error && status !== 'cancelled' && (
+                      <div style={{ marginBottom: 12 }}>
+                        <label>Error</label>
+                        <div style={{ fontSize: 11, color: 'var(--danger)' }}>{selected.error}</div>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
 
               {(() => {
                 const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
