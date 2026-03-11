@@ -2,7 +2,6 @@
 
 import os
 import subprocess
-from datetime import datetime, timezone
 
 
 def run_git(*args, cwd: str) -> subprocess.CompletedProcess:
