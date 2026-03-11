@@ -28,3 +28,9 @@ export function formatDate(dateStr, utc = false) {
     return dateStr
   }
 }
+
+/** Convert single newlines to double so markdown renders them as paragraph breaks */
+export function mdBreaks(text) {
+  if (!text) return text
+  return text.replace(/\n(?!\n)/g, '\n\n')
+}

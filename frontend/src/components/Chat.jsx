@@ -4,6 +4,7 @@ import {
   sendChatMessage, getChatSessions, getChatMessages, deleteChatSession,
   getChatSessionStatus,
 } from '../api'
+import { mdBreaks } from '../util'
 
 export default function Chat() {
   const [sessions, setSessions] = useState([])
@@ -310,8 +311,3 @@ export default function Chat() {
   )
 }
 
-// Convert single newlines to double so markdown renders them as paragraph breaks
-function mdBreaks(text) {
-  if (!text) return text
-  return text.replace(/\n(?!\n)/g, '\n\n')
-}

@@ -4,7 +4,7 @@ import {
   getDispatchQueue, cancelDispatch, getDispatchOutput,
   getQueueSettings, setQueueSettings, processQueue,
 } from '../api'
-import { formatDate, TRIGGER_ICONS } from '../util'
+import { formatDate, TRIGGER_ICONS, mdBreaks } from '../util'
 
 const STATUS_LABELS = {
   pending: 'Pending',
@@ -254,7 +254,7 @@ export default function Queue({ tasks }) {
                     const content = typeof msg.content === 'string'
                       ? msg.content
                       : Array.isArray(msg.content)
-                        ? msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+                        ? msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
                         : String(msg.content ?? '')
                     if (!content.trim()) return null
                     return (
@@ -266,7 +266,7 @@ export default function Queue({ tasks }) {
                         borderRadius: 4,
                         marginBottom: 6,
                       }}>
-                        <Markdown>{content}</Markdown>
+                        <Markdown>{mdBreaks(content)}</Markdown>
                       </div>
                     )
                   })}
@@ -285,4 +285,5 @@ export default function Queue({ tasks }) {
     </>
   )
 }
+
 
