@@ -151,6 +151,12 @@ function TaskDetail({ task, onRefresh, onDelete }) {
     setDispatching(false)
   }
 
+  useEffect(() => {
+    if (!lastDispatchId) return
+    const t = setTimeout(() => setLastDispatchId(null), 4000)
+    return () => clearTimeout(t)
+  }, [lastDispatchId])
+
   const isDirty = Object.keys(editing).length > 0
 
   return (
@@ -185,6 +191,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
           placeholder="Optional context..."
           value={context}
           onChange={e => setContext(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !dispatching && !props.running && handleDispatch()}
           style={{ flex: 1 }}
         />
       </div>
