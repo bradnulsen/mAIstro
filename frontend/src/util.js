@@ -4,7 +4,6 @@ export const TRIGGER_ICONS = {
   commit: '⚡',
   task_queue: '↗',
   manual: '→',
-  auto: '⏱',
   human: '👤',
   task: '🤖',
 }
