@@ -249,25 +249,24 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       <div className="task-section">
         <h3>Subscriptions</h3>
 
-        <div className="field-group">
-          <label className="checkbox-label">
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+          <div className="field-group" style={{ flex: 1 }}>
+            <label>Glob patterns (one per line)</label>
+            <AutoTextarea
+              value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
+              onChange={e => edit('subscriptions', e.target.value)}
+              maxHeight={150}
+              minRows={2}
+            />
+          </div>
+          <label className="checkbox-label" style={{ marginTop: 22, whiteSpace: 'nowrap' }}>
             <input
               type="checkbox"
               checked={getVal('watch_enabled') || false}
               onChange={e => edit('watch_enabled', e.target.checked)}
             />
-            Auto-dispatch when matched files are committed
+            Auto-dispatch on commit
           </label>
-        </div>
-
-        <div className="field-group">
-          <label>Glob patterns (one per line)</label>
-          <AutoTextarea
-            value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
-            onChange={e => edit('subscriptions', e.target.value)}
-            maxHeight={150}
-            minRows={2}
-          />
         </div>
 
         {/* Resolved files (collapsible) */}
