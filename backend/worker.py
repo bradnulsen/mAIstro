@@ -148,6 +148,19 @@ async def _process_dispatch(dispatch: dict):
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=f"task '{task_id}' not found")
         return
 
+    # Coalesce: grab all pending dispatches for same task and merge context
+    coalesced_ids = []
+    context = dispatch.get("context")
+    if task["properties"].get("coalesce_dispatches"):
+        siblings = await db.get_pending_dispatches_for_task(task_id)
+        # siblings includes the current dispatch (it's still pending); skip it
+        extras = [s for s in siblings if s["id"] != dispatch_id]
+        if extras:
+            coalesced_ids = [s["id"] for s in extras]
+            context = _merge_contexts([dispatch] + extras)
+            log.info("[worker] Coalescing %d dispatches for task %s: %s",
+                     len(extras), task_id, coalesced_ids)
+
     # Create a chat session for this dispatch's output
     session = await db.create_chat_session(
         task_id=task_id,
@@ -161,13 +174,19 @@ async def _process_dispatch(dispatch: dict):
     _cancel_event = asyncio.Event()
     _active_dispatch_id = dispatch_id
     await db.update_dispatch(dispatch_id, started_at=utcnow(), session_id=session_id)
+
+    # Mark coalesced siblings as completed (absorbed into this dispatch)
+    now = utcnow()
+    for cid in coalesced_ids:
+        await db.update_dispatch(cid, started_at=now, completed_at=now,
+                                 session_id=session_id, error=f"coalesced into #{dispatch_id}")
+
     log.info("[worker] Processing dispatch #%d (task=%s)", dispatch_id, task_id)
 
     full_response = []
     streaming_text = []
 
     try:
-        context = dispatch.get("context")
         async for event in run_dispatch(dispatch_id, task, PROJECT_DIR, context, cancel_event=_cancel_event):
             etype = event.get("type")
 
@@ -205,3 +224,19 @@ async def _process_dispatch(dispatch: dict):
     finally:
         _active_dispatch_id = None
         _cancel_event = None
+
+
+def _merge_contexts(dispatches: list[dict]) -> str:
+    """Merge context from multiple dispatches into a single prompt section."""
+    parts = []
+    for d in dispatches:
+        trigger = d.get("trigger", "unknown")
+        detail = d.get("trigger_detail", "")
+        ctx = d.get("context", "")
+        label = f"Dispatch #{d['id']} ({trigger}"
+        if detail:
+            label += f": {detail}"
+        label += ")"
+        body = ctx or "(no context)"
+        parts.append(f"### {label}\n{body}")
+    return "\n\n".join(parts)

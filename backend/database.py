@@ -119,6 +119,7 @@ INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES
     ('mcp_servers', '[]', 'json'),
     ('subscriptions', '[]', 'json'),
     ('watch_enabled', 'false', 'boolean'),
+    ('coalesce_dispatches', 'false', 'boolean'),
     ('sort_order', '0', 'integer');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
@@ -328,6 +329,22 @@ async def get_oldest_pending_dispatch() -> dict | None:
                ORDER BY dq.created_at ASC LIMIT 1"""
         )
         return dict(rows[0]) if rows else None
+    finally:
+        await db.close()
+
+
+async def get_pending_dispatches_for_task(task_id: str) -> list[dict]:
+    """Get all pending (not started, no error) dispatches for a task, oldest first."""
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            """SELECT dq.*, t.name as task_name FROM dispatch_queue dq
+               JOIN tasks t ON t.id = dq.task_id
+               WHERE dq.task_id = ? AND dq.started_at IS NULL AND dq.error IS NULL
+               ORDER BY dq.created_at ASC""",
+            (task_id,)
+        )
+        return [dict(r) for r in rows]
     finally:
         await db.close()
 
