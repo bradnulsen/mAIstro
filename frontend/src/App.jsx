@@ -69,7 +69,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <nav className="rail">
-        <div className="rail-logo">⬡</div>
+        <div className="rail-logo" onClick={() => { setProject(null); setTasks([]) }} title="Switch project">⬡</div>
         <button
           className={`rail-icon ${view === VIEWS.queue ? 'active' : ''}`}
           onClick={() => setView(VIEWS.queue)}
