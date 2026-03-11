@@ -110,8 +110,12 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   const handleSave = async () => {
     if (Object.keys(editing).length === 0) return
     setSaving(true)
+    const payload = { ...editing }
+    if (typeof payload.subscriptions === 'string') {
+      payload.subscriptions = linesToArray(payload.subscriptions)
+    }
     try {
-      await updateTask(task.id, editing)
+      await updateTask(task.id, payload)
       setEditing({})
       await onRefresh()
     } catch (e) {
@@ -237,8 +241,8 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         <div className="field-group">
           <label>Glob patterns (one per line)</label>
           <AutoTextarea
-            value={arrayToLines(getVal('subscriptions'))}
-            onChange={e => edit('subscriptions', linesToArray(e.target.value))}
+            value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
+            onChange={e => edit('subscriptions', e.target.value)}
             maxHeight={150}
             minRows={2}
           />
