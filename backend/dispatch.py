@@ -212,6 +212,11 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
             if info:
                 sections.append(f"## Triggered by commit `{detail[:8]}`\n```\n{info.strip()}\n```")
 
+        elif trigger == "schedule":
+            sections.append(f"## Triggered by schedule\n**Dispatch:** scheduled (`{detail or 'cron'}`)")
+            if ctx:
+                sections.append(ctx)
+
         elif trigger == "manual":
             if ctx:
                 sections.append(f"## Manual trigger\n{ctx}")

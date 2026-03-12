@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from croniter import croniter
 
-from backend import database as db
+from backend import database as db, worker
 
 log = logging.getLogger("maistro.scheduler")
 
@@ -101,7 +101,7 @@ async def _loop():
 
                 if next_fire <= now:
                     # Check for pending (not-yet-started) dispatches to avoid piling up
-                    pending = await _has_pending_dispatch(task["id"])
+                    pending = await db.has_pending_dispatch(task["id"])
                     if pending:
                         log.debug("[scheduler] %s already has pending dispatch, skipping", task["id"])
                         await _set_last_fire(task["id"], now)
@@ -116,9 +116,7 @@ async def _loop():
                     )
                     await _set_last_fire(task["id"], now)
 
-                    # Notify the worker
-                    from backend.worker import notify
-                    notify()
+                    worker.notify()
 
         except asyncio.CancelledError:
             raise
@@ -126,16 +124,3 @@ async def _loop():
             log.exception("[scheduler] Error in loop")
 
         await asyncio.sleep(_CHECK_INTERVAL)
-
-
-async def _has_pending_dispatch(task_id: str) -> bool:
-    """Check if a task has any pending (not started) dispatches."""
-    d = await db.get_db()
-    try:
-        rows = await d.execute_fetchall(
-            "SELECT 1 FROM dispatch_queue WHERE task_id = ? AND started_at IS NULL AND error IS NULL LIMIT 1",
-            (task_id,),
-        )
-        return bool(rows)
-    finally:
-        await d.close()
