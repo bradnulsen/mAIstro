@@ -190,13 +190,30 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=f"task '{task_id}' not found")
         return
 
-    # Create a chat session for this dispatch's output
-    session = await db.create_chat_session(
-        task_id=task_id,
-        dispatch_id=dispatch_id,
-        title=f"{task['name']} #{dispatch_id}",
-    )
-    session_id = session["id"]
+    # For resume dispatches, reuse the original chat session; otherwise create a new one
+    resume_session_id = dispatch.get("resume_session_id")
+    if resume_session_id:
+        # Find the chat session from the original dispatch that has this CLI session
+        d = await db.get_db()
+        rows = await d.execute_fetchall(
+            "SELECT id FROM chat_sessions WHERE cli_session_id = ? LIMIT 1",
+            (resume_session_id,)
+        )
+        if rows:
+            session_id = rows[0]["id"]
+            log.info("[worker] Resuming into existing chat session %s", session_id)
+        else:
+            session = await db.create_chat_session(
+                task_id=task_id, dispatch_id=dispatch_id,
+                title=f"{task['name']} #{dispatch_id} (resume)",
+            )
+            session_id = session["id"]
+    else:
+        session = await db.create_chat_session(
+            task_id=task_id, dispatch_id=dispatch_id,
+            title=f"{task['name']} #{dispatch_id}",
+        )
+        session_id = session["id"]
 
     # Mark dispatch as started, set up cancellation
     global _active_dispatch_id, _cancel_event
@@ -243,7 +260,12 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
                 full_response.append(event.get("content", ""))
                 continue
 
-            if etype == "text":
+            if etype == "session_id":
+                # Capture CLI session ID for future resume
+                cli_sid = event.get("cli_session_id")
+                if cli_sid:
+                    await db.update_chat_session(session_id, cli_session_id=cli_sid)
+            elif etype == "text":
                 streaming_text.append(event.get("content", ""))
             elif etype == "error":
                 await db.add_chat_message(session_id, "system", event.get("message", "error"))

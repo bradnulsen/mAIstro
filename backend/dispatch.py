@@ -31,6 +31,7 @@ async def run_dispatch(
     dispatch_record = await db.get_dispatch(dispatch_id)
     queue_context = await _build_queue_context(dispatch_record, project_dir)
     manifest = await build_task_manifest()
+    resume_session_id = dispatch_record.get("resume_session_id") if dispatch_record else None
 
     # Build dispatch metadata for prompt injection
     dispatch_meta = None
@@ -42,7 +43,8 @@ async def run_dispatch(
     system_prompt = build_dispatch_system_prompt(task, project_dir)
     user_prompt = build_user_prompt(task, project_dir, queue_context, manifest, dispatch_meta=dispatch_meta)
 
-    log.info(f"[dispatch:{dispatch_id}] System: {len(system_prompt)} chars, User: {len(user_prompt)} chars")
+    log.info(f"[dispatch:{dispatch_id}] System: {len(system_prompt)} chars, User: {len(user_prompt)} chars"
+             + (f", resuming session {resume_session_id}" if resume_session_id else ""))
 
     async for event in cli.invoke(
         prompt=user_prompt,
@@ -52,6 +54,7 @@ async def run_dispatch(
         allowed_tools=props.get("base_tools") or None,
         disallowed_tools=props.get("disallowed_tools") or None,
         cancel_event=cancel_event,
+        resume_session=resume_session_id,
     ):
         if event["type"] == "error":
             log.error(f"[dispatch:{dispatch_id}] CLI error: {event.get('message', '')[:200]}")
@@ -212,6 +215,12 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
                                     f"### {task_name}'s Summary\n"
                                     f"(from `{rel}`):\n```\n{content[:4000]}\n```"
                                 )
+
+        elif trigger == "resume":
+            reasons.append(f"- **Resume** — continuing from a previous dispatch")
+
+        elif trigger == "retry":
+            reasons.append(f"- **Retry** — fresh re-dispatch of a previous run")
 
         elif trigger == "schedule":
             reasons.append(f"- **Schedule** (`{detail or 'cron'}`)")

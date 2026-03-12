@@ -380,6 +380,59 @@ async def cancel_dispatch(dispatch_id: int):
     return {"status": "cancelled", "was_running": was_running}
 
 
+@app.post("/api/dispatch/{dispatch_id}/resume")
+async def resume_dispatch(dispatch_id: int):
+    """Resume a failed/timed-out dispatch using its CLI session ID."""
+    require_project()
+    dispatch = await db.get_dispatch(dispatch_id)
+    if not dispatch:
+        raise HTTPException(404, "Dispatch not found")
+    if not dispatch.get("completed_at"):
+        raise HTTPException(409, "Dispatch is not completed")
+
+    # Find the CLI session ID from the chat session
+    session_id = dispatch.get("session_id")
+    if not session_id:
+        raise HTTPException(409, "No session found for this dispatch")
+    chat_session = await db.get_chat_session(session_id)
+    cli_session_id = chat_session.get("cli_session_id") if chat_session else None
+    if not cli_session_id:
+        raise HTTPException(409, "No CLI session ID available — cannot resume")
+
+    # Enqueue a new dispatch with resume_session_id
+    head = git.head_hash(state.PROJECT_DIR)
+    new_id = await db.enqueue_dispatch(
+        dispatch["task_id"], "resume",
+        trigger_detail=head,
+        context=f"Resuming dispatch #{dispatch_id}",
+    )
+    await db.update_dispatch(new_id, resume_session_id=cli_session_id)
+    worker.notify()
+    return {"dispatch_id": new_id, "resuming_from": dispatch_id}
+
+
+@app.post("/api/dispatch/{dispatch_id}/retry")
+async def retry_dispatch(dispatch_id: int):
+    """Retry a completed dispatch from scratch with the same context."""
+    require_project()
+    dispatch = await db.get_dispatch(dispatch_id)
+    if not dispatch:
+        raise HTTPException(404, "Dispatch not found")
+    if not dispatch.get("completed_at"):
+        raise HTTPException(409, "Dispatch is not completed")
+
+    # Re-enqueue with the original trigger context
+    original_context = dispatch.get("context") or ""
+    head = git.head_hash(state.PROJECT_DIR)
+    new_id = await db.enqueue_dispatch(
+        dispatch["task_id"], "retry",
+        trigger_detail=head,
+        context=original_context or f"Retrying dispatch #{dispatch_id}",
+    )
+    worker.notify()
+    return {"dispatch_id": new_id, "retrying_from": dispatch_id}
+
+
 # ── Queue Control ──────────────────────────────────────────
 
 @app.get("/api/queue/settings")

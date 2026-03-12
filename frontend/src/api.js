@@ -63,6 +63,12 @@ export const updateDispatch = (id, updates) =>
 export const cancelDispatch = (id) =>
   fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
 
+export const resumeDispatch = (id) =>
+  fetchJSON(`/api/dispatch/${id}/resume`, { method: 'POST' })
+
+export const retryDispatch = (id) =>
+  fetchJSON(`/api/dispatch/${id}/retry`, { method: 'POST' })
+
 export const streamDispatch = (dispatchId, onEvent) =>
   fetchSSE(`/api/dispatch/${dispatchId}/stream`, {}, onEvent)  // returns { abort, done }
 

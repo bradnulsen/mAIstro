@@ -6,6 +6,8 @@ export const TRIGGER_ICONS = {
   manual: '→',
   human: '👤',
   task: '🤖',
+  resume: '↻',
+  retry: '⟳',
 }
 
 /**

@@ -3,6 +3,7 @@ import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
   getQueueSettings, setQueueSettings, processQueue, streamDispatch,
+  resumeDispatch, retryDispatch,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
@@ -19,6 +20,8 @@ const TRIGGER_LABELS = {
   manual: 'User',
   commit: 'Commit',
   task_queue: 'Task',
+  resume: 'Resume',
+  retry: 'Retry',
 }
 
 function getStatus(item) {
@@ -192,6 +195,31 @@ export default function Queue() {
     } catch {}
   }
 
+  const handleResume = async (id) => {
+    try {
+      const result = await resumeDispatch(id)
+      await refresh()
+      // Select the new dispatch
+      const queue = await getDispatchQueue()
+      const newItem = queue.find(q => q.id === result.dispatch_id)
+      if (newItem) { setSelected(newItem); setFilter('upcoming') }
+    } catch (e) {
+      alert(e.message)
+    }
+  }
+
+  const handleRetry = async (id) => {
+    try {
+      const result = await retryDispatch(id)
+      await refresh()
+      const queue = await getDispatchQueue()
+      const newItem = queue.find(q => q.id === result.dispatch_id)
+      if (newItem) { setSelected(newItem); setFilter('upcoming') }
+    } catch (e) {
+      alert(e.message)
+    }
+  }
+
   const filtered = items.filter(item =>
     filter === 'upcoming' ? isUpcoming(item) : !isUpcoming(item)
   )
@@ -305,6 +333,18 @@ export default function Queue() {
                     Cancel Dispatch
                   </button>
                 )}
+              </div>
+            )}
+            {!isUpcoming(selected) && (
+              <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0, display: 'flex', gap: 8 }}>
+                {selected.error && selected.error !== 'cancelled' && (
+                  <button className="small primary" onClick={() => handleResume(selected.id)}>
+                    ↻ Resume
+                  </button>
+                )}
+                <button className="small" onClick={() => handleRetry(selected.id)}>
+                  ⟳ Retry
+                </button>
               </div>
             )}
           </div>

@@ -173,6 +173,10 @@ async def _migrate_db(db: aiosqlite.Connection):
     if "triggers" not in dq_cols:
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN triggers TEXT")
 
+    # Add resume_session_id for dispatch continuity (resume from CLI session)
+    if "resume_session_id" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN resume_session_id TEXT")
+
     await db.commit()
 
 
