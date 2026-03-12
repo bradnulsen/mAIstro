@@ -245,6 +245,16 @@ async def set_queue_settings(req: QueueSettingsRequest):
     return {"status": "ok"}
 
 
+@router.post("/api/queue/process/{dispatch_id}")
+async def queue_process_one(dispatch_id: int):
+    """Manually process a specific pending dispatch by ID."""
+    require_project()
+    dispatch = await worker.process_one(dispatch_id)
+    if dispatch is None:
+        raise HTTPException(404, "Dispatch not found or not pending")
+    return {"processed": [dispatch["id"]]}
+
+
 @router.post("/api/queue/process")
 async def queue_process(all: bool = False):    # noqa: A002 — matches frontend query param
     """Manually crank the queue — process next or all pending dispatches."""

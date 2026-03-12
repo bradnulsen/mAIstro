@@ -102,6 +102,19 @@ async def process_next() -> dict | None:
         return dispatch
 
 
+async def process_one(dispatch_id: int) -> dict | None:
+    """Manually process a specific pending dispatch by ID."""
+    async with _lock:
+        dispatch = await db.get_dispatch(dispatch_id)
+        if not dispatch:
+            return None
+        # Must still be pending (not started, no error)
+        if dispatch.get("started_at") or dispatch.get("error"):
+            return None
+        await _process_dispatch(dispatch, dispatch_method="manual")
+        return dispatch
+
+
 async def process_all() -> list[int]:
     """Manually process all pending dispatches sequentially."""
     processed = []
