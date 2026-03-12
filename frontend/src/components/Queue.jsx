@@ -243,11 +243,11 @@ export default function Queue() {
         <div className="mode-toggle">
           <button
             className={filter === 'upcoming' ? 'active' : ''}
-            onClick={() => { setFilter('upcoming'); setSelected(null) }}
+            onClick={() => { if (filter !== 'upcoming') { setFilter('upcoming'); setSelected(null) } }}
           >Upcoming</button>
           <button
             className={filter === 'past' ? 'active' : ''}
-            onClick={() => { setFilter('past'); setSelected(null) }}
+            onClick={() => { if (filter !== 'past') { setFilter('past'); setSelected(null) } }}
           >Past</button>
         </div>
         <button className="small" onClick={handleRefresh} disabled={refreshing}>
@@ -531,7 +531,9 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         <div style={{ marginBottom: 12 }}>
           <label>
             Live Output
-            {isStreaming && <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>● streaming</span>}
+            {isStreaming && <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>
+              <span style={{ display: 'inline-block', animation: 'dot-pulse 1.4s ease-in-out infinite' }}>●</span> streaming
+            </span>}
           </label>
           {liveTools.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
