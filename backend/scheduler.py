@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from croniter import croniter
 
-from backend import database as db, git, worker
+from backend import database as db, git, state, worker
 
 log = logging.getLogger("maistro.scheduler")
 
@@ -61,8 +61,7 @@ async def _loop():
     """Main scheduler loop — checks all task schedules periodically."""
     while True:
         try:
-            from backend.state import PROJECT_DIR
-            if not PROJECT_DIR or not db.DB_PATH:
+            if not state.PROJECT_DIR or not db.DB_PATH:
                 await asyncio.sleep(_CHECK_INTERVAL)
                 continue
 
@@ -101,7 +100,7 @@ async def _loop():
 
                 if next_fire <= now:
                     # Include HEAD commit so the dispatch knows codebase state at queue time
-                    head = git.head_hash(PROJECT_DIR)
+                    head = git.head_hash(state.PROJECT_DIR)
                     head_note = f" at {head[:8]}" if head else ""
 
                     log.info("[scheduler] Firing %s (schedule: %s)", task["id"], schedule)

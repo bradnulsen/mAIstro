@@ -7,7 +7,7 @@ All feeders (manual, watch, timer) just create queue records.
 import asyncio
 import logging
 
-from backend import database as db, git
+from backend import database as db, git, state
 from backend.dispatch import run_dispatch
 from backend.state import utcnow
 
@@ -152,14 +152,13 @@ async def _loop():
             _wake_event.clear()
 
             # Need a project to be open
-            from backend.state import PROJECT_DIR
-            if not PROJECT_DIR:
+            if not state.PROJECT_DIR:
                 continue
 
             # Sweep stale dispatches once per project open (re-sweeps on project switch)
-            if _swept_project != PROJECT_DIR:
+            if _swept_project != state.PROJECT_DIR:
                 await _sweep_stale()
-                _swept_project = PROJECT_DIR
+                _swept_project = state.PROJECT_DIR
 
             # Check auto_dispatch setting
             auto = await db.get_config("queue_auto_dispatch")
@@ -184,8 +183,7 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     dispatch_id = dispatch["id"]
     task_id = dispatch["task_id"]
 
-    from backend.state import PROJECT_DIR
-    if not PROJECT_DIR:
+    if not state.PROJECT_DIR:
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error="no project open")
         return
 
@@ -218,7 +216,7 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     global _active_dispatch_id, _cancel_event
     _cancel_event = asyncio.Event()
     _active_dispatch_id = dispatch_id
-    start_commit = git.head_hash(PROJECT_DIR)
+    start_commit = git.head_hash(state.PROJECT_DIR)
     await db.update_dispatch(dispatch_id, started_at=utcnow(), session_id=session_id,
                              dispatch_method=dispatch_method, start_commit=start_commit)
 
@@ -243,7 +241,7 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     streaming_text = []
 
     try:
-        async for event in run_dispatch(dispatch_id, task, PROJECT_DIR,
+        async for event in run_dispatch(dispatch_id, task, state.PROJECT_DIR,
                                         cancel_event=_cancel_event, dispatch_method=dispatch_method):
             etype = event.get("type")
 
@@ -276,12 +274,12 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
             await db.add_chat_message(session_id, "assistant", response_text)
 
         if _timed_out:
-            head = git.head_hash(PROJECT_DIR)
+            head = git.head_hash(state.PROJECT_DIR)
             await db.update_dispatch(dispatch_id, completed_at=utcnow(),
                                      result_commit=head, error="timed out")
             log.info("[worker] Dispatch #%d timed out (partial commit=%s)", dispatch_id, head[:8])
         else:
-            head = git.head_hash(PROJECT_DIR)
+            head = git.head_hash(state.PROJECT_DIR)
             await db.update_dispatch(dispatch_id, completed_at=utcnow(), result_commit=head)
             log.info("[worker] Dispatch #%d completed (commit=%s)", dispatch_id, head[:8])
 

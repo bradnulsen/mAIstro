@@ -238,6 +238,7 @@ export default function Queue() {
     }
   }
 
+  const anyRunning = items.some(i => getStatus(i) === 'running')
   const filtered = items.filter(item =>
     filter === 'upcoming' ? isUpcoming(item) : !isUpcoming(item)
   )
@@ -348,19 +349,16 @@ export default function Queue() {
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    {getStatus(selected) === 'pending' && (() => {
-                      const anyRunning = items.some(i => getStatus(i) === 'running')
-                      return (
-                        <button
-                          className="small primary"
-                          onClick={() => handleProcessOne(selected.id)}
-                          disabled={anyRunning}
-                          title={anyRunning ? 'Another dispatch is running' : 'Run this dispatch now'}
-                        >
-                          ▶ Run Now
-                        </button>
-                      )
-                    })()}
+                    {getStatus(selected) === 'pending' && (
+                      <button
+                        className="small primary"
+                        onClick={() => handleProcessOne(selected.id)}
+                        disabled={anyRunning}
+                        title={anyRunning ? 'Another dispatch is running' : 'Run this dispatch now'}
+                      >
+                        ▶ Run Now
+                      </button>
+                    )}
                     <button className="danger small" onClick={() => setConfirmCancel(selected.id)}>
                       Cancel
                     </button>
