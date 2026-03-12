@@ -2,25 +2,25 @@
 
 ## Current State
 
-mAistro is a working, self-sustaining orchestration platform. The core loop is closed, observable, and now **robust**: tasks configure, queue, dispatch via Claude CLI, stream output in real-time, enforce timeouts, and commit results to git. Watch, schedule, and task-to-task triggers fire automatically. Live SSE streaming gives full visibility into running dispatches.
+mAistro is a working, self-sustaining orchestration platform. The core loop is closed, observable, and **robust**: tasks configure, queue, dispatch via Claude CLI, stream output in real-time, enforce timeouts, and commit results to git. Watch, schedule, and task-to-task triggers fire automatically. Live SSE streaming gives full visibility into running dispatches. The frontend UX has been progressively polished — cancel confirmations, context editing, loading states, and rendering fixes are all in place.
 
 What's in place:
-- **Queue-first dispatch** — background worker, auto/manual processing, stale sweep, cancellation flag
-- **Live dispatch streaming** — SSE endpoint with real-time text, tool use, and thinking indicators in the Queue detail panel
+- **Queue-first dispatch** — background worker, auto/manual processing, stale sweep, cancellation with confirmation UX
+- **Live dispatch streaming** — SSE endpoint with real-time text, tool use, and thinking indicator in the Queue detail panel
 - **Timeout enforcement** — configurable per-task timeout with watchdog, graceful terminate then kill, partial output preserved
 - **Watch mode** — post-commit hook, glob subscription matching, per-task toggle, cooldown
 - **Task-to-task dispatch** — `task_queue` trigger with context passing and upstream summary injection
 - **Cron scheduling** — timed dispatch with fire tracking that survives restarts
 - **Coalesced dispatches** — multiple triggers merge into one queue entry
-- **Rich Queue UI** — upcoming/past filtering, editable context, live streaming, stored output as markdown
-- **Task config** — two-column layout, markdown preview, auto-resize textareas, subscription file preview
+- **Rich Queue UI** — upcoming/past filtering, editable context, live streaming, stored output as markdown, cancel confirmation
+- **Task config** — two-column layout, markdown preview, auto-resize textareas, subscription file preview, dispatch spinner
 - **Chat with session persistence** — SSE streaming, session list, dispatch-linked audit trail
 - **Git feed** — commit diffs with file/line stats, live polling
 - **Persistent DB connection** — pooled async SQLite, eliminates connection-per-call overhead
 
 ## What Matters Now
 
-The platform is observable and stable. Dispatches run, stream, timeout, and cancel correctly. The next phase is about **resilience** (recovering from failures without losing progress), **visibility** (seeing what agents actually did to the code), and **control** (exposing existing configuration through UI).
+The platform is observable and stable. Dispatches run, stream, timeout, and cancel correctly. The frontend is polished enough to use without friction. The next phase is about **resilience** (recovering from failures without losing progress), **visibility** (seeing what agents actually did to the code), and **control** (exposing existing configuration through UI).
 
 The overarching theme: **make mAistro trustworthy enough to leave running unattended.** That requires knowing dispatches won't silently fail without recourse, being able to see exactly what changed, and configuring behavior without touching the API.
 
@@ -28,15 +28,15 @@ The overarching theme: **make mAistro trustworthy enough to leave running unatte
 
 **The problem:** If a dispatch fails partway through — tool error, context limit, timeout — the only option is re-dispatching from scratch. This wastes all progress. Claude CLI supports `--resume` with a session ID, and dispatch records already store session IDs.
 
-**Why first:** This is the biggest reliability gap. A single timeout or transient failure shouldn't negate 10 minutes of agent work. The infrastructure is 80% ready — CLI supports `--resume`, database has session IDs, chat sessions link to dispatches. The remaining work is wiring.
+**Why first:** This is the biggest reliability gap. A single timeout or transient failure shouldn't negate 10 minutes of agent work. The infrastructure is 90% ready — `cli.invoke()` already accepts `resume_session`, the database stores `cli_session_id` on chat sessions, and chat sessions link to dispatches. The remaining work is wiring the UI and creating the queue entries.
 
 **Specifically:**
-- "Resume" action on failed/timed-out dispatches: creates a new queue entry that invokes CLI with `--resume` and the stored session ID
+- "Resume" action on failed/timed-out dispatches: creates a new queue entry that invokes CLI with `--resume` and the stored CLI session ID
 - "Retry" action: creates a fresh dispatch with the same trigger context
 - Queue detail panel shows both actions on completed/failed dispatches
 - Resume dispatch linked to the same chat session; retry creates a new session
 
-**Implementation path:** Add `resume_session_id` column to `dispatch_queue`. When present, `run_dispatch` passes `--resume <session_id>` to the CLI. The worker creates a new queue entry but reuses the chat session. Frontend adds Resume/Retry buttons to the dispatch detail panel for non-pending dispatches.
+**Implementation path:** Add `resume_session_id` column to `dispatch_queue`. When present, `run_dispatch` passes it through to `cli.invoke(resume_session=...)`. The worker creates a new queue entry but reuses the chat session. Frontend adds Resume/Retry buttons to the dispatch detail panel for non-pending dispatches. The `chat_sessions.cli_session_id` field already captures the CLI session from the `session_id` event type — just need to read it back for resume.
 
 ## Priority 2: Dispatch Diff View
 
@@ -46,9 +46,12 @@ The overarching theme: **make mAistro trustworthy enough to leave running unatte
 
 **Specifically:**
 - Queue detail panel shows a collapsible diff section for completed dispatches with a `result_commit`
-- Diff computed between the commit before dispatch started and `result_commit` (may span multiple commits)
+- Diff computed between the commit at dispatch start and `result_commit` (may span multiple commits)
 - File-level summary (files changed, insertions, deletions) with expandable per-file diffs
-- Reuse the git diff infrastructure already in `backend/git.py`
+- Reuse the git diff infrastructure already in `backend/git.py` — `git.diff()` and `git.show()` are both available
+- Need: record `start_commit` when dispatch begins (the HEAD at `started_at` time) to compute the range
+
+**Implementation path:** Add `start_commit` column to `dispatch_queue`, populated in worker alongside `started_at`. Add an API endpoint or extend `/api/dispatch/{id}/output` to include a diff between `start_commit` and `result_commit`. Frontend renders the diff in the detail panel using the same styling as Feed's commit diffs.
 
 ## Priority 3: Settings and Configuration UI
 
@@ -82,7 +85,7 @@ The overarching theme: **make mAistro trustworthy enough to leave running unatte
 
 **Specifically:**
 - Add optional `require_approval` boolean task property (default: false)
-- Approved-gated dispatches enter a `pending_approval` status instead of being immediately processable
+- Approval-gated dispatches enter a `pending_approval` status instead of being immediately processable
 - Queue UI shows approval-pending items with approve/reject actions
 - Approved dispatches proceed normally; rejected dispatches are marked as skipped
 - Manual dispatches bypass approval (you already chose to run it)
@@ -96,8 +99,8 @@ Valuable but not blocking the current phase:
 - **Multi-project orchestration** — cross-project dispatch. Needs careful design around DB isolation and the global `PROJECT_DIR` state.
 - **Parallel dispatch** — concurrent dispatch execution. Valuable for independent tasks but introduces git conflict complexity. Sequential is correct until it's the bottleneck.
 - **Cost tracking** — token usage and API costs per dispatch. Claude CLI doesn't expose this cleanly yet.
-- **Route modularization** — `main.py` is the largest file (550+ lines). Breaking out dispatch, queue, task, and git routes into separate routers would improve maintainability. Not urgent at current scale.
-- **Structured error types** — dispatch errors are strings. An error classification system (timeout, cancelled, context_limit, tool_error, unknown) would improve observability and enable smarter retry logic.
+- **Route modularization** — `main.py` has shrunk with the chat router extraction, but could still benefit from breaking out dispatch, queue, task, and git routes. Not urgent at current scale.
+- **Structured error types** — dispatch errors are strings. An error classification system (timeout, cancelled, context_limit, tool_error, unknown) would improve observability and enable smarter retry logic. Natural companion to P1 (Resume/Retry).
 - **Dark mode** — the monospace aesthetic works. Nice-to-have.
 
 ## Non-Goals
