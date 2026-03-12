@@ -13,6 +13,7 @@
   --danger: #c44;
   --success: #4a4;
   --running: #e90;
+  --warning: #e6a117;
   --font: 'Courier New', monospace;
 }
 
@@ -556,6 +557,26 @@ label {
 
 .context-display {
   border: 1px solid var(--border-light);
+}
+
+/* Edit affordance for pending context */
+.context-pending-wrap {
+  position: relative;
+}
+
+.context-edit-hint {
+  position: absolute;
+  top: 5px;
+  right: 7px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+
+.context-pending-wrap:hover .context-edit-hint {
+  opacity: 1;
 }
 
 .context-editor {
