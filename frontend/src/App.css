@@ -232,23 +232,12 @@ label {
 }
 
 .feed-item {
-  position: relative;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-light);
   cursor: pointer;
   display: flex;
   gap: 10px;
   align-items: flex-start;
-}
-
-.feed-weight-bar {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--accent);
-  pointer-events: none;
 }
 
 .feed-item:hover {
@@ -308,6 +297,25 @@ label {
   color: var(--text-muted);
   margin-top: 2px;
 }
+
+.feed-stats {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 48px;
+}
+
+.feed-stat-lines {
+  display: flex;
+  gap: 4px;
+}
+
+.feed-stat-add { color: #4a4; }
+.feed-stat-del { color: #c44; }
 
 /* ── Queue Status ── */
 

@@ -59,10 +59,6 @@ export default function Feed() {
               className={`feed-item ${selected?.hash === item.hash ? 'active' : ''}`}
               onClick={() => selectItem(item)}
             >
-              <div
-                className="feed-weight-bar"
-                style={{ opacity: Math.max(0.12, Math.min((item.files?.length || 0) / 8, 1)) }}
-              />
               <div className="feed-avatar">
                 {(item.author || '?')[0].toUpperCase()}
               </div>
@@ -82,6 +78,17 @@ export default function Feed() {
                   </div>
                 )}
               </div>
+              {(item.files?.length > 0 || item.insertions > 0 || item.deletions > 0) && (
+                <div className="feed-stats">
+                  <span className="feed-stat-files">{item.files?.length || 0} {item.files?.length === 1 ? 'file' : 'files'}</span>
+                  {(item.insertions > 0 || item.deletions > 0) && (
+                    <span className="feed-stat-lines">
+                      {item.insertions > 0 && <span className="feed-stat-add">+{item.insertions}</span>}
+                      {item.deletions > 0 && <span className="feed-stat-del">-{item.deletions}</span>}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

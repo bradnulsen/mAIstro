@@ -87,7 +87,7 @@ def parse_log_output(output: str) -> list[dict]:
 
 
 def parse_log_with_files(output: str) -> list[dict]:
-    """Parse git log --name-only output (format lines interleaved with file lists)."""
+    """Parse git log --numstat output (format lines interleaved with file stats)."""
     entries = []
     current = None
     for line in output.strip().split("\n"):
@@ -100,9 +100,18 @@ def parse_log_with_files(output: str) -> list[dict]:
         if parsed:
             if current:
                 entries.append(current)
-            current = {**parsed, "files": []}
+            current = {**parsed, "files": [], "insertions": 0, "deletions": 0}
         elif current:
-            current["files"].append(line.strip())
+            parts = line.split("\t")
+            if len(parts) == 3:
+                add, delete, filename = parts
+                current["files"].append(filename.strip())
+                if add != "-":
+                    current["insertions"] += int(add)
+                if delete != "-":
+                    current["deletions"] += int(delete)
+            else:
+                current["files"].append(line.strip())
     if current:
         entries.append(current)
     return entries
@@ -115,7 +124,7 @@ def log(cwd: str, limit: int = 50, skip: int = 0, path: str | None = None,
     """Get git log entries as structured dicts."""
     args = ["log", f"--max-count={limit}", f"--skip={skip}", f"--format={LOG_FORMAT}"]
     if name_only:
-        args.append("--name-only")
+        args.append("--numstat")
     if path:
         args.extend(["--", path])
 
