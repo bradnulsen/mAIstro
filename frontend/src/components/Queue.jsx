@@ -81,8 +81,11 @@ export default function Queue() {
         const updated = queue.find(q => q.id === prev.id)
         return updated || null
       })
+      setLoading(false)
+      return queue
     } catch {}
     setLoading(false)
+    return []
   }, [])
 
   const handleRefresh = useCallback(async () => {
@@ -198,9 +201,7 @@ export default function Queue() {
   const handleResume = async (id) => {
     try {
       const result = await resumeDispatch(id)
-      await refresh()
-      // Select the new dispatch
-      const queue = await getDispatchQueue()
+      const queue = await refresh()
       const newItem = queue.find(q => q.id === result.dispatch_id)
       if (newItem) { setSelected(newItem); setFilter('upcoming') }
     } catch (e) {
@@ -211,8 +212,7 @@ export default function Queue() {
   const handleRetry = async (id) => {
     try {
       const result = await retryDispatch(id)
-      await refresh()
-      const queue = await getDispatchQueue()
+      const queue = await refresh()
       const newItem = queue.find(q => q.id === result.dispatch_id)
       if (newItem) { setSelected(newItem); setFilter('upcoming') }
     } catch (e) {
