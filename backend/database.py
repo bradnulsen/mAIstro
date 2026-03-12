@@ -454,6 +454,17 @@ async def add_chat_message(session_id: str, role: str, content: str):
         await db.close()
 
 
+async def get_chat_session(session_id: str) -> dict | None:
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            "SELECT * FROM chat_sessions WHERE id = ?", (session_id,)
+        )
+        return dict(rows[0]) if rows else None
+    finally:
+        await db.close()
+
+
 async def get_chat_sessions() -> list[dict]:
     db = await get_db()
     try:

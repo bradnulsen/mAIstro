@@ -327,7 +327,6 @@ label {
 .queue-status.running { color: var(--running); animation: dot-pulse 1.4s ease-in-out infinite; }
 .queue-status.completed { color: var(--success); }
 .queue-status.error { color: var(--danger); }
-.queue-status.coalesced { color: var(--text-muted); font-style: italic; }
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
 
 /* ── Task List + Detail ── */
@@ -549,21 +548,6 @@ label {
 .mode-toggle button.active {
   background: var(--accent);
   color: #fff;
-}
-
-/* ── Dispatch Stream ── */
-
-.dispatch-stream {
-  background: #1a1a1a;
-  color: #e0e0e0;
-  padding: 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  max-height: 400px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin-top: 12px;
 }
 
 /* ── Dispatch Context Areas ── */

@@ -106,7 +106,7 @@ async def _loop():
             _wake_event.clear()
 
             # Need a project to be open
-            from backend.main import PROJECT_DIR
+            from backend.state import PROJECT_DIR
             if not PROJECT_DIR:
                 continue
 
@@ -138,7 +138,7 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     dispatch_id = dispatch["id"]
     task_id = dispatch["task_id"]
 
-    from backend.main import PROJECT_DIR
+    from backend.state import PROJECT_DIR
     if not PROJECT_DIR:
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error="no project open")
         return

@@ -61,7 +61,7 @@ async def _loop():
     """Main scheduler loop — checks all task schedules periodically."""
     while True:
         try:
-            from backend.main import PROJECT_DIR
+            from backend.state import PROJECT_DIR
             if not PROJECT_DIR or not db.DB_PATH:
                 await asyncio.sleep(_CHECK_INTERVAL)
                 continue

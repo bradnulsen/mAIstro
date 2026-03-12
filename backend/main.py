@@ -25,10 +25,7 @@ from backend.dispatch import (
     resolve_glob_files,
     utcnow,
 )
-
-# ── State ───────────────────────────────────────────────────
-
-PROJECT_DIR: str | None = None
+from backend import state
 
 
 # ── Lifespan ────────────────────────────────────────────────
@@ -103,31 +100,30 @@ class ConfigRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "project": PROJECT_DIR}
+    return {"status": "ok", "project": state.PROJECT_DIR}
 
 
 # ── Project Routes ──────────────────────────────────────────
 
 @app.get("/api/project/")
 async def get_project():
-    if not PROJECT_DIR:
+    if not state.PROJECT_DIR:
         return {"loaded": False}
     return {
         "loaded": True,
-        "path": PROJECT_DIR,
-        "name": os.path.basename(PROJECT_DIR),
+        "path": state.PROJECT_DIR,
+        "name": os.path.basename(state.PROJECT_DIR),
     }
 
 
 @app.post("/api/project/open")
 async def open_project(req: OpenProjectRequest):
-    global PROJECT_DIR
     path = os.path.abspath(req.path)
     if not os.path.isdir(path):
         raise HTTPException(404, "Directory not found")
 
     git.ensure_repo(path)
-    PROJECT_DIR = path
+    state.PROJECT_DIR = path
     await db.init_db(path)
     git.install_post_commit_hook(path)
     git.ensure_gitignore(path)
@@ -194,8 +190,7 @@ async def remove_recent_project(path: str):
 
 @app.post("/api/project/close")
 async def close_project():
-    global PROJECT_DIR
-    PROJECT_DIR = None
+    state.PROJECT_DIR = None
     return {"status": "ok"}
 
 
@@ -257,7 +252,7 @@ async def get_task_subscriptions(task_id: str):
     if not task:
         raise HTTPException(404, "Task not found")
     props = task["properties"]
-    subs = resolve_glob_files(PROJECT_DIR, props.get("subscriptions") or [])
+    subs = resolve_glob_files(state.PROJECT_DIR, props.get("subscriptions") or [])
     return {"subscriptions": subs}
 
 
@@ -274,7 +269,7 @@ async def dispatch_task(task_id: str, req: DispatchRequest | None = None):
         raise HTTPException(409, "Task is already running")
 
     context = req.context if req else None
-    head = git.head_hash(PROJECT_DIR)
+    head = git.head_hash(state.PROJECT_DIR)
     dispatch_id = await db.enqueue_dispatch(task_id, "manual", trigger_detail=head, context=context)
     worker.notify()
     return {"dispatch_id": dispatch_id}
@@ -378,7 +373,7 @@ async def queue_process(all: bool = False):    # noqa: A002 — matches frontend
 @app.get("/api/feed/")
 async def get_feed(limit: int = 50, offset: int = 0, task_id: str | None = None, path: str | None = None):
     _require_project()
-    entries = git.log(PROJECT_DIR, limit=limit, skip=offset, path=path, with_stats=True)
+    entries = git.log(state.PROJECT_DIR, limit=limit, skip=offset, path=path, with_stats=True)
 
     queue = await db.get_dispatch_queue(limit=200)
     dispatch_by_commit = {d["result_commit"]: d for d in queue if d.get("result_commit")}
@@ -404,12 +399,12 @@ async def get_feed(limit: int = 50, offset: int = 0, task_id: str | None = None,
 @app.get("/api/feed/{commit_hash}")
 async def get_feed_item(commit_hash: str):
     _require_project()
-    details = git.show(PROJECT_DIR, commit_hash, stat=True)
+    details = git.show(state.PROJECT_DIR, commit_hash, stat=True)
     if not details:
         raise HTTPException(404, "Commit not found")
     return {
         "details": details,
-        "diff": git.diff(PROJECT_DIR, commit_hash),
+        "diff": git.diff(state.PROJECT_DIR, commit_hash),
     }
 
 
@@ -458,10 +453,10 @@ async def _build_chat_context() -> str:
         dispatch_lines.append(f"- #{d['id']} {d.get('task_name', '?')} [{status}] {d.get('created_at', '')}")
     dispatch_summary = "\n".join(dispatch_lines) if dispatch_lines else "(no recent dispatches)"
 
-    git_summary = git.log_oneline(PROJECT_DIR) or "(no commits)"
+    git_summary = git.log_oneline(state.PROJECT_DIR) or "(no commits)"
 
     return CHAT_SYSTEM_PROMPT.format(
-        project_dir=PROJECT_DIR,
+        project_dir=state.PROJECT_DIR,
         task_summary=task_summary,
         dispatch_summary=dispatch_summary,
         git_summary=git_summary,
@@ -480,11 +475,9 @@ async def chat(req: ChatRequest):
     session_id = req.session_id
     cli_session_id = None
     if session_id:
-        sessions = await db.get_chat_sessions()
-        for s in sessions:
-            if s["id"] == session_id:
-                cli_session_id = s.get("cli_session_id")
-                break
+        session = await db.get_chat_session(session_id)
+        if session:
+            cli_session_id = session.get("cli_session_id")
     else:
         session = await db.create_chat_session(title=req.message[:50])
         session_id = session["id"]
@@ -510,7 +503,7 @@ async def chat(req: ChatRequest):
             async for event in cli.invoke(
                 prompt=message,
                 system_prompt=system_prompt,
-                cwd=PROJECT_DIR,
+                cwd=state.PROJECT_DIR,
                 model="opus",
                 resume_session=cli_session_id,
             ):
@@ -609,25 +602,25 @@ async def delete_chat_session(session_id: str):
 @app.get("/api/git/log")
 async def git_log_route(limit: int = 50, path: str | None = None):
     _require_project()
-    return git.log(PROJECT_DIR, limit=limit, path=path)
+    return git.log(state.PROJECT_DIR, limit=limit, path=path)
 
 
 @app.get("/api/git/diff/{commit_hash}")
 async def git_diff_route(commit_hash: str):
     _require_project()
-    return {"diff": git.diff(PROJECT_DIR, commit_hash)}
+    return {"diff": git.diff(state.PROJECT_DIR, commit_hash)}
 
 
 @app.get("/api/git/status")
 async def git_status_route():
     _require_project()
-    return {"status": git.status(PROJECT_DIR)}
+    return {"status": git.status(state.PROJECT_DIR)}
 
 
 @app.get("/api/git/file/{path:path}")
 async def read_git_file(path: str):
     _require_project()
-    content = git.read_file(PROJECT_DIR, path)
+    content = git.read_file(state.PROJECT_DIR, path)
     if content is None:
         raise HTTPException(404, "File not found")
     return {"path": path, "content": content}
@@ -636,9 +629,9 @@ async def read_git_file(path: str):
 @app.put("/api/git/file/{path:path}")
 async def write_git_file(path: str, req: FileWriteRequest):
     _require_project()
-    git.write_file(PROJECT_DIR, path, req.content)
+    git.write_file(state.PROJECT_DIR, path, req.content)
     message = req.message or f"Update {path}"
-    commit_hash = git.commit_file(PROJECT_DIR, path, message)
+    commit_hash = git.commit_file(state.PROJECT_DIR, path, message)
     return {"path": path, "commit": commit_hash}
 
 
@@ -646,10 +639,10 @@ async def write_git_file(path: str, req: FileWriteRequest):
 
 @app.post("/api/hooks/post-commit")
 async def post_commit_hook(req: PostCommitRequest):
-    if not PROJECT_DIR:
+    if not state.PROJECT_DIR:
         return {"status": "no project"}
 
-    triggered = await check_watch_triggers(req.commit_hash, PROJECT_DIR)
+    triggered = await check_watch_triggers(req.commit_hash, state.PROJECT_DIR)
     dispatched = []
 
     for task in triggered:
@@ -710,5 +703,5 @@ async def set_config(key: str, req: ConfigRequest):
 # ── Helpers ─────────────────────────────────────────────────
 
 def _require_project():
-    if not PROJECT_DIR:
+    if not state.PROJECT_DIR:
         raise HTTPException(400, "No project loaded. POST /api/project/open first.")
