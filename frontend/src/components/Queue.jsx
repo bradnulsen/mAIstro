@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
-  getDispatchDiff, getQueueSettings, setQueueSettings, processQueue,
+  getDispatchDiff, getQueueSettings, setQueueSettings, processQueue, processOne,
   streamDispatch, resumeDispatch, retryDispatch,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
@@ -193,6 +193,15 @@ export default function Queue() {
     await refresh()
   }
 
+  const handleProcessOne = async (id) => {
+    try {
+      await processOne(id)
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
   const handleCancel = async (id) => {
     try {
       await cancelDispatch(id)
@@ -338,9 +347,24 @@ export default function Queue() {
                     <button className="small" onClick={() => setConfirmCancel(null)}>No</button>
                   </div>
                 ) : (
-                  <button className="danger small" onClick={() => setConfirmCancel(selected.id)}>
-                    Cancel Dispatch
-                  </button>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {getStatus(selected) === 'pending' && (() => {
+                      const anyRunning = items.some(i => getStatus(i) === 'running')
+                      return (
+                        <button
+                          className="small primary"
+                          onClick={() => handleProcessOne(selected.id)}
+                          disabled={anyRunning}
+                          title={anyRunning ? 'Another dispatch is running' : 'Run this dispatch now'}
+                        >
+                          ▶ Run Now
+                        </button>
+                      )
+                    })()}
+                    <button className="danger small" onClick={() => setConfirmCancel(selected.id)}>
+                      Cancel
+                    </button>
+                  </div>
                 )}
               </div>
             )}

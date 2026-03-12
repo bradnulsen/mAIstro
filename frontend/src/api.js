@@ -88,6 +88,9 @@ export const setQueueSettings = (settings) =>
 export const processQueue = (all = false) =>
   fetchJSON(`/api/queue/process?all=${all}`, { method: 'POST' })
 
+export const processOne = (dispatchId) =>
+  fetchJSON(`/api/queue/process/${dispatchId}`, { method: 'POST' })
+
 // ── Feed ──
 
 export const getFeed = (params = {}) => {
