@@ -26,6 +26,9 @@ class DispatchRequest(BaseModel):
 class UpdateDispatchRequest(BaseModel):
     context: str | None = None
 
+class RetryRequest(BaseModel):
+    context: str | None = None
+
 class QueueSettingsRequest(BaseModel):
     auto_dispatch: bool = False
 
@@ -201,8 +204,8 @@ async def resume_dispatch(dispatch_id: int):
 
 
 @router.post("/api/dispatch/{dispatch_id}/retry")
-async def retry_dispatch(dispatch_id: int):
-    """Retry a completed dispatch from scratch with the same context."""
+async def retry_dispatch(dispatch_id: int, req: RetryRequest | None = None):
+    """Retry a completed dispatch from scratch, optionally with new context."""
     require_project()
     dispatch = await db.get_dispatch(dispatch_id)
     if not dispatch:
@@ -210,13 +213,15 @@ async def retry_dispatch(dispatch_id: int):
     if not dispatch.get("completed_at"):
         raise HTTPException(409, "Dispatch is not completed")
 
-    # Re-enqueue with the original trigger context
-    original_context = dispatch.get("context") or ""
+    # Use provided context override, or fall back to original
+    context = (req.context if req and req.context is not None else None)
+    if context is None:
+        context = dispatch.get("context") or f"Retrying dispatch #{dispatch_id}"
     head = git.head_hash(state.PROJECT_DIR)
     new_id = await db.enqueue_dispatch(
         dispatch["task_id"], "retry",
         trigger_detail=head,
-        context=original_context or f"Retrying dispatch #{dispatch_id}",
+        context=context,
     )
     worker.notify()
     return {"dispatch_id": new_id, "retrying_from": dispatch_id}

@@ -114,7 +114,7 @@ export default function Queue() {
   const [isStreaming, setIsStreaming] = useState(false)
 
   // Clear transient action error when selection changes
-  useEffect(() => { setActionError('') }, [selected?.id])
+  useEffect(() => { setActionError(''); setRetryContext(null) }, [selected?.id])
 
   // Load output when selection changes — SSE for running, stored for completed
   useEffect(() => {
@@ -214,10 +214,13 @@ export default function Queue() {
     }
   }
 
-  const handleRetry = async (id) => {
+  const [retryContext, setRetryContext] = useState(null) // null = not editing
+
+  const handleRetry = async (id, context) => {
     setActionError('')
     try {
-      const result = await retryDispatch(id)
+      const result = await retryDispatch(id, context)
+      setRetryContext(null)
       const queue = await refresh()
       const newItem = queue.find(q => q.id === result.dispatch_id)
       if (newItem) { setSelected(newItem); setFilter('upcoming') }
@@ -343,24 +346,42 @@ export default function Queue() {
             )}
             {!isUpcoming(selected) && (
               <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {selected.error && selected.error !== 'cancelled' && (
+                {retryContext !== null ? (
+                  <>
+                    <label style={{ fontSize: 11 }}>Edit context before retrying</label>
+                    <textarea
+                      value={retryContext}
+                      onChange={e => setRetryContext(e.target.value)}
+                      className="context-editor"
+                      autoFocus
+                    />
+                    <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center' }}>
+                      <button className="small primary" onClick={() => handleRetry(selected.id, retryContext)}>
+                        ↺ Retry
+                      </button>
+                      <button className="small" onClick={() => setRetryContext(null)}>Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {selected.error && selected.error !== 'cancelled' && (
+                      <button
+                        className="small primary"
+                        onClick={() => handleResume(selected.id)}
+                        title="Continue from the last Claude session checkpoint (--resume)"
+                      >
+                        ↻ Resume
+                      </button>
+                    )}
                     <button
-                      className="small primary"
-                      onClick={() => handleResume(selected.id)}
-                      title="Continue from the last Claude session checkpoint (--resume)"
+                      className="small"
+                      onClick={() => setRetryContext(selected.context || '')}
+                      title="Queue a fresh dispatch — edit context first"
                     >
-                      ↻ Resume
+                      ↺ Retry
                     </button>
-                  )}
-                  <button
-                    className="small"
-                    onClick={() => handleRetry(selected.id)}
-                    title="Queue a fresh dispatch with the same task and context"
-                  >
-                    ↺ Retry
-                  </button>
-                </div>
+                  </div>
+                )}
                 {actionError && (
                   <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{actionError}</div>
                 )}

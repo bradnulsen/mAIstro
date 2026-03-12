@@ -68,8 +68,12 @@ export const cancelDispatch = (id) =>
 export const resumeDispatch = (id) =>
   fetchJSON(`/api/dispatch/${id}/resume`, { method: 'POST' })
 
-export const retryDispatch = (id) =>
-  fetchJSON(`/api/dispatch/${id}/retry`, { method: 'POST' })
+export const retryDispatch = (id, context) =>
+  fetchJSON(`/api/dispatch/${id}/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ context }),
+  })
 
 export const streamDispatch = (dispatchId, onEvent) =>
   fetchSSE(`/api/dispatch/${dispatchId}/stream`, {}, onEvent)  // returns { abort, done }
