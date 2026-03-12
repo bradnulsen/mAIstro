@@ -49,7 +49,8 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 ## Key Files
 
 - `run.py` — Uvicorn launcher (hot-reload on `backend/`)
-- `backend/main.py` — FastAPI app, all API routes, global `PROJECT_DIR` state, CORS, lifespan
+- `backend/main.py` — FastAPI app, lifespan, CORS, remaining routes (project, task, feed, git, hook, MCP, config)
+- `backend/queue_routes.py` — Dispatch and queue control routes (APIRouter, extracted from main.py)
 - `backend/database.py` — Project SQLite schema, EAV property system, migrations, all CRUD helpers (async)
 - `backend/appstate.py` — App-level SQLite DB for recent-projects list (sync, separate from project DB)
 - `backend/git.py` — Git subprocess abstraction (log, diff, commit, hook installer)
