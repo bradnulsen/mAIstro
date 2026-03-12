@@ -8,12 +8,13 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from backend import cli, database as db, git
 from backend import state
+from backend.state import require_project
 
 log = logging.getLogger("maistro.chat")
 
@@ -88,16 +89,11 @@ async def _build_chat_context() -> str:
 _active_chats: dict[str, asyncio.Queue] = {}
 
 
-def _require_project():
-    if not state.PROJECT_DIR:
-        raise HTTPException(400, "No project loaded. POST /api/project/open first.")
-
-
 # ── Routes ─────────────────────────────────────────────────
 
 @router.post("/")
 async def chat(req: ChatRequest):
-    _require_project()
+    require_project()
 
     session_id = req.session_id
     cli_session_id = None
@@ -201,24 +197,24 @@ async def chat(req: ChatRequest):
 @router.get("/sessions/{session_id}/status")
 async def chat_session_status(session_id: str):
     """Check if a chat session is currently processing."""
-    _require_project()
+    require_project()
     return {"processing": session_id in _active_chats}
 
 
 @router.get("/sessions")
 async def list_chat_sessions():
-    _require_project()
+    require_project()
     return await db.get_chat_sessions()
 
 
 @router.get("/sessions/{session_id}/messages")
 async def get_chat_messages(session_id: str):
-    _require_project()
+    require_project()
     return await db.get_chat_messages(session_id)
 
 
 @router.delete("/sessions/{session_id}")
 async def delete_chat_session(session_id: str):
-    _require_project()
+    require_project()
     await db.delete_chat_session(session_id)
     return {"status": "deleted"}

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from backend import appstate, database as db, git, scheduler, worker
 from backend.chat import router as chat_router
 from backend.dispatch import check_watch_triggers
-from backend.state import utcnow
+from backend.state import utcnow, require_project
 from backend import state
 
 
@@ -191,19 +191,19 @@ async def close_project():
 
 @app.get("/api/tasks/")
 async def list_tasks():
-    _require_project()
+    require_project()
     return await db.list_tasks()
 
 
 @app.post("/api/tasks/")
 async def create_task(req: CreateTaskRequest):
-    _require_project()
+    require_project()
     return await db.create_task(req.name, req.properties or {})
 
 
 @app.get("/api/tasks/{task_id}")
 async def get_task(task_id: str):
-    _require_project()
+    require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -212,7 +212,7 @@ async def get_task(task_id: str):
 
 @app.patch("/api/tasks/{task_id}")
 async def update_task(task_id: str, req: UpdateTaskRequest):
-    _require_project()
+    require_project()
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No updates provided")
@@ -224,7 +224,7 @@ async def update_task(task_id: str, req: UpdateTaskRequest):
 
 @app.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str):
-    _require_project()
+    require_project()
     ok = await db.delete_task(task_id)
     if not ok:
         raise HTTPException(404, "Task not found")
@@ -233,14 +233,14 @@ async def delete_task(task_id: str):
 
 @app.post("/api/tasks/reorder")
 async def reorder_tasks(req: ReorderRequest):
-    _require_project()
+    require_project()
     await db.reorder_tasks(req.task_ids)
     return {"status": "ok"}
 
 
 @app.get("/api/tasks/{task_id}/subscriptions")
 async def get_task_subscriptions(task_id: str):
-    _require_project()
+    require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -254,7 +254,7 @@ async def get_task_subscriptions(task_id: str):
 @app.post("/api/dispatch/{task_id}")
 async def dispatch_task(task_id: str, req: DispatchRequest | None = None):
     """Enqueue a dispatch. The worker processes it."""
-    _require_project()
+    require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -270,14 +270,14 @@ async def dispatch_task(task_id: str, req: DispatchRequest | None = None):
 
 @app.get("/api/dispatch/queue")
 async def get_dispatch_queue():
-    _require_project()
+    require_project()
     return await db.get_dispatch_queue()
 
 
 @app.get("/api/dispatch/{dispatch_id}/output")
 async def get_dispatch_output(dispatch_id: int):
     """Get stored output for a dispatch."""
-    _require_project()
+    require_project()
     dispatch = await db.get_dispatch(dispatch_id)
     if not dispatch:
         raise HTTPException(404, "Dispatch not found")
@@ -297,7 +297,7 @@ class UpdateDispatchRequest(BaseModel):
 @app.patch("/api/dispatch/{dispatch_id}")
 async def update_dispatch_route(dispatch_id: int, req: UpdateDispatchRequest):
     """Edit a pending dispatch (only before it starts running)."""
-    _require_project()
+    require_project()
     dispatch = await db.get_dispatch(dispatch_id)
     if not dispatch:
         raise HTTPException(404, "Dispatch not found")
@@ -322,7 +322,7 @@ async def update_dispatch_route(dispatch_id: int, req: UpdateDispatchRequest):
 
 @app.post("/api/dispatch/cancel/{dispatch_id}")
 async def cancel_dispatch(dispatch_id: int):
-    _require_project()
+    require_project()
     # Kill the running process if this dispatch is active
     was_running = worker.cancel(dispatch_id)
     # Mark as cancelled in DB (worker will also mark it, but this covers pending dispatches)
@@ -334,14 +334,14 @@ async def cancel_dispatch(dispatch_id: int):
 
 @app.get("/api/queue/settings")
 async def get_queue_settings():
-    _require_project()
+    require_project()
     auto = await db.get_config("queue_auto_dispatch")
     return {"auto_dispatch": auto == "true"}
 
 
 @app.post("/api/queue/settings")
 async def set_queue_settings(request: Request):
-    _require_project()
+    require_project()
     data = await request.json()
     value = "true" if data.get("auto_dispatch") else "false"
     await db.set_config("queue_auto_dispatch", value)
@@ -352,7 +352,7 @@ async def set_queue_settings(request: Request):
 @app.post("/api/queue/process")
 async def queue_process(all: bool = False):    # noqa: A002 — matches frontend query param
     """Manually crank the queue — process next or all pending dispatches."""
-    _require_project()
+    require_project()
     if all:
         processed = await worker.process_all()
         return {"processed": processed}
@@ -365,7 +365,7 @@ async def queue_process(all: bool = False):    # noqa: A002 — matches frontend
 
 @app.get("/api/feed/")
 async def get_feed(limit: int = 50, offset: int = 0, task_id: str | None = None, path: str | None = None):
-    _require_project()
+    require_project()
     entries = git.log(state.PROJECT_DIR, limit=limit, skip=offset, path=path, with_stats=True)
 
     queue = await db.get_dispatch_queue(limit=200)
@@ -391,7 +391,7 @@ async def get_feed(limit: int = 50, offset: int = 0, task_id: str | None = None,
 
 @app.get("/api/feed/{commit_hash}")
 async def get_feed_item(commit_hash: str):
-    _require_project()
+    require_project()
     details = git.show(state.PROJECT_DIR, commit_hash, stat=True)
     if not details:
         raise HTTPException(404, "Commit not found")
@@ -405,25 +405,25 @@ async def get_feed_item(commit_hash: str):
 
 @app.get("/api/git/log")
 async def git_log_route(limit: int = 50, path: str | None = None):
-    _require_project()
+    require_project()
     return git.log(state.PROJECT_DIR, limit=limit, path=path)
 
 
 @app.get("/api/git/diff/{commit_hash}")
 async def git_diff_route(commit_hash: str):
-    _require_project()
+    require_project()
     return {"diff": git.diff(state.PROJECT_DIR, commit_hash)}
 
 
 @app.get("/api/git/status")
 async def git_status_route():
-    _require_project()
+    require_project()
     return {"status": git.status(state.PROJECT_DIR)}
 
 
 @app.get("/api/git/file/{path:path}")
 async def read_git_file(path: str):
-    _require_project()
+    require_project()
     content = git.read_file(state.PROJECT_DIR, path)
     if content is None:
         raise HTTPException(404, "File not found")
@@ -432,7 +432,7 @@ async def read_git_file(path: str):
 
 @app.put("/api/git/file/{path:path}")
 async def write_git_file(path: str, req: FileWriteRequest):
-    _require_project()
+    require_project()
     git.write_file(state.PROJECT_DIR, path, req.content)
     message = req.message or f"Update {path}"
     commit_hash = git.commit_file(state.PROJECT_DIR, path, message)
@@ -465,13 +465,13 @@ async def post_commit_hook(req: PostCommitRequest):
 
 @app.get("/api/mcp/servers")
 async def list_mcp_servers():
-    _require_project()
+    require_project()
     return await db.list_mcp_servers()
 
 
 @app.post("/api/mcp/servers")
 async def create_mcp_server(request: Request):
-    _require_project()
+    require_project()
     data = await request.json()
     await db.create_mcp_server(
         name=data["name"],
@@ -484,7 +484,7 @@ async def create_mcp_server(request: Request):
 
 @app.delete("/api/mcp/servers/{name}")
 async def delete_mcp_server(name: str):
-    _require_project()
+    require_project()
     await db.delete_mcp_server(name)
     return {"status": "deleted"}
 
@@ -493,19 +493,12 @@ async def delete_mcp_server(name: str):
 
 @app.get("/api/config/")
 async def get_config():
-    _require_project()
+    require_project()
     return await db.get_config()
 
 
 @app.post("/api/config/{key}")
 async def set_config(key: str, req: ConfigRequest):
-    _require_project()
+    require_project()
     await db.set_config(key, req.value)
     return {"status": "ok"}
-
-
-# ── Helpers ─────────────────────────────────────────────────
-
-def _require_project():
-    if not state.PROJECT_DIR:
-        raise HTTPException(400, "No project loaded. POST /api/project/open first.")
