@@ -70,6 +70,7 @@ class UpdateTaskRequest(BaseModel):
     watch_enabled: bool | None = None
     coalesce_dispatches: bool | None = None
     schedule: str | None = None
+    timeout: int | None = None
     sort_order: int | None = None
 
 class DispatchRequest(BaseModel):
