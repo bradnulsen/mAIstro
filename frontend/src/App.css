@@ -292,11 +292,6 @@ label {
   text-overflow: ellipsis;
 }
 
-.feed-files {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
 
 .feed-stats {
   flex-shrink: 0;

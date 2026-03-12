@@ -71,12 +71,6 @@ export default function Feed() {
                   <span>{formatDate(item.date)}</span>
                 </div>
                 <div className="feed-message">{item.message}</div>
-                {item.files && item.files.length > 0 && (
-                  <div className="feed-files">
-                    {item.files.slice(0, 3).join(', ')}
-                    {item.files.length > 3 && ` +${item.files.length - 3} more`}
-                  </div>
-                )}
               </div>
               {(item.files?.length > 0 || item.insertions > 0 || item.deletions > 0) && (
                 <div className="feed-stats">
