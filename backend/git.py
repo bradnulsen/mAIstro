@@ -1,7 +1,9 @@
 """Git operations — single abstraction over git subprocess calls."""
 
+import glob as globmod
 import os
 import subprocess
+from datetime import datetime, timezone
 
 
 def run_git(*args, cwd: str) -> subprocess.CompletedProcess:
@@ -244,3 +246,25 @@ def write_file(cwd: str, path: str, content: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
+
+
+# ── Glob helpers ───────────────────────────────────────────
+
+def resolve_glob_files(project_dir: str, patterns: list[str]) -> list[dict]:
+    """Resolve glob patterns to file metadata dicts."""
+    files = []
+    seen = set()
+    for pattern in patterns:
+        for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
+            if fpath in seen or not os.path.isfile(fpath):
+                continue
+            seen.add(fpath)
+            rel = os.path.relpath(fpath, project_dir).replace("\\", "/")
+            stat = os.stat(fpath)
+            files.append({
+                "path": rel,
+                "pattern": pattern,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            })
+    return files

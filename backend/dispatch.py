@@ -3,17 +3,11 @@
 import glob as globmod
 import logging
 import os
-from datetime import datetime, timezone
 from typing import AsyncIterator
 
 from backend import cli, database as db, git
 
 log = logging.getLogger("maistro.dispatch")
-
-
-def utcnow() -> str:
-    """UTC timestamp string for database storage."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ── Dispatch lifecycle ──────────────────────────────────────
@@ -132,7 +126,7 @@ def build_user_prompt(task: dict, project_dir: str,
     # Subscription file list — agent reads contents via tools as needed
     sub_globs = props.get("subscriptions")
     if sub_globs:
-        sub_files = resolve_glob_files(project_dir, sub_globs)
+        sub_files = git.resolve_glob_files(project_dir, sub_globs)
         if sub_files:
             file_list = "\n".join(f"- `{f['path']}` ({f['size']}B)" for f in sub_files)
             sections.append(f"## Subscribed Files\nThese files are relevant to your task. Read them as needed.\n{file_list}")
@@ -266,23 +260,3 @@ def _any_file_matches(files: list[str], patterns: list[str]) -> bool:
     return False
 
 
-# ── File helpers ────────────────────────────────────────────
-
-def resolve_glob_files(project_dir: str, patterns: list[str]) -> list[dict]:
-    """Resolve glob patterns to file metadata dicts."""
-    files = []
-    seen = set()
-    for pattern in patterns:
-        for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
-            if fpath in seen or not os.path.isfile(fpath):
-                continue
-            seen.add(fpath)
-            rel = os.path.relpath(fpath, project_dir).replace("\\", "/")
-            stat = os.stat(fpath)
-            files.append({
-                "path": rel,
-                "pattern": pattern,
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-            })
-    return files

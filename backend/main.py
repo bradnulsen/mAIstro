@@ -20,11 +20,8 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from backend import appstate, cli, database as db, git, scheduler, worker
-from backend.dispatch import (
-    check_watch_triggers,
-    resolve_glob_files,
-    utcnow,
-)
+from backend.dispatch import check_watch_triggers
+from backend.state import utcnow
 from backend import state
 
 
@@ -252,7 +249,7 @@ async def get_task_subscriptions(task_id: str):
     if not task:
         raise HTTPException(404, "Task not found")
     props = task["properties"]
-    subs = resolve_glob_files(state.PROJECT_DIR, props.get("subscriptions") or [])
+    subs = git.resolve_glob_files(state.PROJECT_DIR, props.get("subscriptions") or [])
     return {"subscriptions": subs}
 
 

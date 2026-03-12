@@ -8,7 +8,8 @@ import asyncio
 import logging
 
 from backend import database as db, git
-from backend.dispatch import run_dispatch, utcnow
+from backend.dispatch import run_dispatch
+from backend.state import utcnow
 
 log = logging.getLogger("maistro.worker")
 

@@ -33,3 +33,20 @@ export function mdBreaks(text) {
   if (!text) return text
   return text.replace(/\n(?!\n)/g, '\n\n')
 }
+
+/**
+ * Format a duration between two date strings as a human-readable string.
+ * If endStr is null, uses the current time.
+ */
+export function formatDuration(startStr, endStr) {
+  const start = new Date(startStr + 'Z')
+  const end = endStr ? new Date(endStr + 'Z') : new Date()
+  const secs = Math.max(0, Math.round((end - start) / 1000))
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  const remSecs = secs % 60
+  if (mins < 60) return `${mins}m ${remSecs}s`
+  const hrs = Math.floor(mins / 60)
+  const remMins = mins % 60
+  return `${hrs}h ${remMins}m`
+}

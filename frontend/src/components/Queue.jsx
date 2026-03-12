@@ -4,7 +4,7 @@ import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
   getQueueSettings, setQueueSettings, processQueue,
 } from '../api'
-import { formatDate, TRIGGER_ICONS, mdBreaks } from '../util'
+import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
 const STATUS_LABELS = {
   pending: 'Pending',
@@ -28,19 +28,6 @@ function getStatus(item) {
   if (item.completed_at) return 'completed'
   if (item.started_at) return 'running'
   return 'pending'
-}
-
-function formatDuration(startStr, endStr) {
-  const start = new Date(startStr + 'Z')
-  const end = endStr ? new Date(endStr + 'Z') : new Date()
-  const secs = Math.max(0, Math.round((end - start) / 1000))
-  if (secs < 60) return `${secs}s`
-  const mins = Math.floor(secs / 60)
-  const remSecs = secs % 60
-  if (mins < 60) return `${mins}m ${remSecs}s`
-  const hrs = Math.floor(mins / 60)
-  const remMins = mins % 60
-  return `${hrs}h ${remMins}m`
 }
 
 function isUpcoming(item) {
