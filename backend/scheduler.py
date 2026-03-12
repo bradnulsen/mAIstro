@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from croniter import croniter
 
-from backend import database as db, worker
+from backend import database as db, git, worker
 
 log = logging.getLogger("maistro.scheduler")
 
@@ -100,19 +100,18 @@ async def _loop():
                     next_fire = next_fire.replace(tzinfo=timezone.utc)
 
                 if next_fire <= now:
-                    # Check for pending (not-yet-started) dispatches to avoid piling up
-                    pending = await db.has_pending_dispatch(task["id"])
-                    if pending:
-                        log.debug("[scheduler] %s already has pending dispatch, skipping", task["id"])
-                        await _set_last_fire(task["id"], now)
-                        continue
+                    # Include HEAD commit so the dispatch knows codebase state at queue time
+                    head = git.head_hash(PROJECT_DIR)
+                    head_note = f" at {head[:8]}" if head else ""
 
                     log.info("[scheduler] Firing %s (schedule: %s)", task["id"], schedule)
+                    # enqueue_dispatch auto-coalesces for schedule triggers,
+                    # so repeated fires merge into a single pending dispatch
                     await db.enqueue_dispatch(
                         task["id"],
                         "schedule",
                         trigger_detail=schedule,
-                        context=f"Scheduled dispatch ({schedule})",
+                        context=f"Scheduled dispatch ({schedule}){head_note}",
                     )
                     await _set_last_fire(task["id"], now)
 

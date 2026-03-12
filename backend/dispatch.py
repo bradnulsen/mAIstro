@@ -224,7 +224,8 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
             reasons.append("- **Retry** — fresh re-dispatch of a previous run")
 
         elif trigger == "schedule":
-            reasons.append(f"- **Schedule** (`{detail or 'cron'}`)")
+            ctx_note = f": {ctx}" if ctx else ""
+            reasons.append(f"- **Schedule** (`{detail or 'cron'}`){ctx_note}")
 
     if not reasons:
         return None

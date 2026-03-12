@@ -302,13 +302,19 @@ async def delete_task(task_id: str) -> bool:
 async def enqueue_dispatch(task_id: str, trigger: str,
                            trigger_detail: str | None = None,
                            context: str | None = None) -> int:
-    """Enqueue a dispatch, coalescing into an existing pending record if enabled."""
+    """Enqueue a dispatch, coalescing into an existing pending record if applicable.
+
+    Coalescing happens when:
+    - The task has coalesce_dispatches enabled, OR
+    - The trigger is 'schedule' (always coalesces — repeated scheduled fires are functionally identical)
+    """
     new_entry = {"trigger": trigger, "detail": trigger_detail, "context": context}
     db = await get_db()
 
-    # Check if coalescing is enabled and there's an existing pending dispatch
+    # Check if coalescing applies
     task = await get_task(task_id)
-    if task and task["properties"].get("coalesce_dispatches"):
+    should_coalesce = (trigger == "schedule") or (task and task["properties"].get("coalesce_dispatches"))
+    if should_coalesce:
         rows = await db.execute_fetchall(
             """SELECT id, trigger, trigger_detail, context, triggers
                FROM dispatch_queue
