@@ -86,7 +86,6 @@ export default function App() {
           title="Tasks"
         >◉</button>
         <div className="rail-spacer" />
-        <button className="rail-icon" title="Settings">⚙</button>
       </nav>
 
       <div className="main-area">
@@ -97,7 +96,7 @@ export default function App() {
               {t.name}
             </div>
           ))}
-          {tasks.length === 0 && <span style={{ color: '#888' }}>No tasks configured</span>}
+          {tasks.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No tasks configured</span>}
         </div>
 
         {view === VIEWS.feed && <Feed />}
@@ -173,7 +172,7 @@ function ProjectOpener({ onOpen }) {
   return (
     <div className="project-opener">
       <h1>⬡ mAistro</h1>
-      <p style={{ color: '#888' }}>Open a project directory to begin</p>
+      <p style={{ color: 'var(--text-muted)' }}>Open a project directory to begin</p>
       <div className="input-row">
         <input
           type="text"
@@ -189,11 +188,11 @@ function ProjectOpener({ onOpen }) {
           {browsing ? '...' : 'Browse'}
         </button>
       </div>
-      {error && <p style={{ color: '#c44', fontSize: 12 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{error}</p>}
 
       {recent.length > 0 && (
         <div style={{ marginTop: 24 }}>
-          <p style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>Recent projects</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>Recent projects</p>
           {recent.map(r => (
             <div
               key={r.path}
@@ -202,7 +201,7 @@ function ProjectOpener({ onOpen }) {
             >
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 'bold', fontSize: 13 }}>{r.name}</div>
-                <div style={{ fontSize: 11, color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.path}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.path}</div>
               </div>
               <button
                 className="small"

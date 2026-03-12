@@ -9,6 +9,7 @@ export default function Tasks({ tasks, onRefresh }) {
   const [selected, setSelected] = useState(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [createError, setCreateError] = useState('')
 
   useEffect(() => {
     if (!selected && tasks.length > 0) {
@@ -18,6 +19,7 @@ export default function Tasks({ tasks, onRefresh }) {
 
   const handleCreate = async () => {
     if (!newName.trim()) return
+    setCreateError('')
     try {
       const task = await createTask(newName.trim())
       setNewName('')
@@ -25,7 +27,7 @@ export default function Tasks({ tasks, onRefresh }) {
       await onRefresh()
       setSelected(task.id)
     } catch (e) {
-      alert(e.message)
+      setCreateError(e.message)
     }
   }
 
@@ -53,18 +55,21 @@ export default function Tasks({ tasks, onRefresh }) {
           </div>
           <div className="task-list-footer">
             {creating ? (
-              <div style={{ display: 'flex', gap: 4 }}>
-                <input
-                  type="text"
-                  placeholder="Task name"
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleCreate()}
-                  autoFocus
-                  style={{ flex: 1 }}
-                />
-                <button className="small primary" onClick={handleCreate}>+</button>
-                <button className="small" onClick={() => setCreating(false)}>✕</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <input
+                    type="text"
+                    placeholder="Task name"
+                    value={newName}
+                    onChange={e => { setNewName(e.target.value); setCreateError('') }}
+                    onKeyDown={e => e.key === 'Enter' && handleCreate()}
+                    autoFocus
+                    style={{ flex: 1 }}
+                  />
+                  <button className="small primary" onClick={handleCreate}>+</button>
+                  <button className="small" onClick={() => { setCreating(false); setCreateError('') }}>✕</button>
+                </div>
+                {createError && <span style={{ fontSize: 11, color: 'var(--danger)' }}>{createError}</span>}
               </div>
             ) : (
               <button className="small" style={{ width: '100%' }} onClick={() => setCreating(true)}>
@@ -89,12 +94,16 @@ export default function Tasks({ tasks, onRefresh }) {
 function TaskDetail({ task, onRefresh, onDelete }) {
   const [editing, setEditing] = useState({})
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [dispatching, setDispatching] = useState(false)
+  const [dispatchError, setDispatchError] = useState('')
   const [lastDispatchId, setLastDispatchId] = useState(null)
   const [context, setContext] = useState('')
   const [subs, setSubs] = useState(null)
   const [subsOpen, setSubsOpen] = useState(false)
   const [editingInstructions, setEditingInstructions] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const props = task.properties || {}
 
   const refreshSubs = useCallback(() => {
@@ -103,7 +112,14 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
   useEffect(() => { refreshSubs() }, [refreshSubs])
 
-  useEffect(() => { setEditing({}); setEditingInstructions(false) }, [task.id])
+  useEffect(() => {
+    setEditing({})
+    setEditingInstructions(false)
+    setSaveError('')
+    setDispatchError('')
+    setConfirmDelete(false)
+    setDeleteError('')
+  }, [task.id])
 
   const edit = (key, value) => setEditing(prev => ({ ...prev, [key]: value }))
 
@@ -112,6 +128,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   const handleSave = async () => {
     if (Object.keys(editing).length === 0) return
     setSaving(true)
+    setSaveError('')
     const payload = { ...editing }
     if (typeof payload.subscriptions === 'string') {
       payload.subscriptions = linesToArray(payload.subscriptions)
@@ -122,31 +139,33 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       await onRefresh()
       refreshSubs()
     } catch (e) {
-      alert(e.message)
+      setSaveError(e.message)
     }
     setSaving(false)
   }
 
   const handleDelete = async () => {
-    if (!confirm(`Delete task "${task.name}"?`)) return
+    setDeleteError('')
     try {
       await deleteTask(task.id)
       onDelete()
       await onRefresh()
     } catch (e) {
-      alert(e.message)
+      setDeleteError(e.message)
+      setConfirmDelete(false)
     }
   }
 
   const handleDispatch = async () => {
     setDispatching(true)
+    setDispatchError('')
     try {
       const result = await dispatchTask(task.id, context || undefined)
       setLastDispatchId(result.dispatch_id)
       setContext('')
       await onRefresh()
     } catch (e) {
-      alert(e.message)
+      setDispatchError(e.message)
     }
     setDispatching(false)
   }
@@ -164,7 +183,8 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       {isDirty && (
         <div className="task-save-bar">
           <span className="task-save-bar-label">Unsaved changes</span>
-          <button onClick={() => setEditing({})}>Discard</button>
+          {saveError && <span style={{ fontSize: 11, color: 'var(--danger)', flex: 1 }}>{saveError}</span>}
+          <button onClick={() => { setEditing({}); setSaveError('') }}>Discard</button>
           <button className="primary" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
           </button>
@@ -173,7 +193,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: props.description ? 4 : 12 }}>
         <h2 style={{ flex: 1 }}>{task.name}</h2>
-        <span style={{ fontSize: 11, color: '#888' }}>id: {task.id}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>id: {task.id}</span>
       </div>
       {props.description && (
         <div className="task-description-display md-content">
@@ -197,8 +217,14 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             }
           }}
         />
-        <button className="primary" onClick={handleDispatch} disabled={dispatching || props.running} style={{ alignSelf: 'flex-end' }}>
-          {dispatching ? 'Queuing...' : '▶ Queue'}
+        <button
+          className="primary"
+          onClick={handleDispatch}
+          disabled={dispatching || props.running}
+          title={props.running ? 'Task is currently running' : undefined}
+          style={{ alignSelf: 'flex-end' }}
+        >
+          {dispatching ? 'Queuing...' : props.running ? '● Running' : '▶ Queue'}
         </button>
       </div>
 
@@ -206,6 +232,9 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         <div style={{ fontSize: 11, color: 'var(--success)', marginBottom: 8 }}>
           ✓ Queued as dispatch #{lastDispatchId}
         </div>
+      )}
+      {dispatchError && (
+        <div style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 8 }}>{dispatchError}</div>
       )}
 
       {/* Task Definition — two-column layout */}
@@ -305,7 +334,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
               style={{ flex: 1, fontFamily: 'monospace' }}
             />
             {getVal('schedule') && (
-              <span style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                 {describeCron(getVal('schedule'))}
               </span>
             )}
@@ -337,7 +366,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
                 {subs.subscriptions.map(f => (
                   <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
                     <span>{f.path}</span>
-                    <span style={{ color: '#888' }}>{formatSize(f.size)}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>{formatSize(f.size)}</span>
                   </div>
                 ))}
               </div>
@@ -349,7 +378,16 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       {/* Danger zone */}
       <div className="task-section">
         <h3>Danger Zone</h3>
-        <button className="danger small" onClick={handleDelete}>Delete Task</button>
+        {confirmDelete ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12 }}>Delete "{task.name}"?</span>
+            <button className="danger small" onClick={handleDelete}>Confirm</button>
+            <button className="small" onClick={() => setConfirmDelete(false)}>Cancel</button>
+          </div>
+        ) : (
+          <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Task</button>
+        )}
+        {deleteError && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{deleteError}</div>}
       </div>
     </div>
   )

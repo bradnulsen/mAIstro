@@ -63,6 +63,8 @@ export default function Queue() {
   const [autoDispatch, setAutoDispatch] = useState(false)
   const [output, setOutput] = useState(null)
 
+  const [refreshing, setRefreshing] = useState(false)
+
   const refresh = useCallback(async () => {
     try {
       const queue = await getDispatchQueue()
@@ -76,6 +78,12 @@ export default function Queue() {
     } catch {}
     setLoading(false)
   }, [])
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    await refresh()
+    setRefreshing(false)
+  }, [refresh])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -201,8 +209,10 @@ export default function Queue() {
             onClick={() => { setFilter('past'); setSelected(null) }}
           >Past</button>
         </div>
-        <button className="small" onClick={refresh}>↻</button>
-        <div style={{ borderLeft: '1px solid #ccc', height: 16, margin: '0 4px' }} />
+        <button className="small" onClick={handleRefresh} disabled={refreshing}>
+          {refreshing ? <span className="tool-spinner" /> : '↻'}
+        </button>
+        <div style={{ borderLeft: '1px solid var(--border-light)', height: 16, margin: '0 4px' }} />
         <label className="checkbox-label" style={{ fontSize: 11, marginBottom: 0, width: 'auto' }}>
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
           Auto
@@ -298,17 +308,19 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
   // Editable context for pending dispatches
   const lastCtx = triggers.length > 0 ? (triggers[triggers.length - 1].context || '') : ''
   const [editingContext, setEditingContext] = useState(null)
+  const [saveError, setSaveError] = useState('')
 
   // Reset editing state when item changes
-  useEffect(() => { setEditingContext(null) }, [item.id])
+  useEffect(() => { setEditingContext(null); setSaveError('') }, [item.id])
 
   const handleSaveContext = async () => {
     if (editingContext === null) return
+    setSaveError('')
     try {
       await updateDispatch(item.id, { context: editingContext })
       setEditingContext(null)
       if (onUpdate) await onUpdate()
-    } catch (e) { alert(e.message) }
+    } catch (e) { setSaveError(e.message) }
   }
 
   // Tick every second while running so duration stays current
@@ -349,9 +361,10 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
               className="context-editor"
               autoFocus
             />
-            <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+            <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center' }}>
               <button className="small primary" onClick={handleSaveContext}>Save</button>
-              <button className="small" onClick={() => setEditingContext(null)}>Cancel</button>
+              <button className="small" onClick={() => { setEditingContext(null); setSaveError('') }}>Cancel</button>
+              {saveError && <span style={{ fontSize: 11, color: 'var(--danger)' }}>{saveError}</span>}
             </div>
           </>
         ) : isPending ? (

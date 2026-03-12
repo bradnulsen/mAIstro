@@ -5,6 +5,7 @@ import { formatDate, TRIGGER_ICONS } from '../util'
 export default function Feed() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [selected, setSelected] = useState(null)
   const [diff, setDiff] = useState('')
   const [loadingDiff, setLoadingDiff] = useState(false)
@@ -16,6 +17,12 @@ export default function Feed() {
     } catch {}
     setLoading(false)
   }, [])
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    await refresh()
+    setRefreshing(false)
+  }, [refresh])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -43,7 +50,9 @@ export default function Feed() {
       <div className="header-bar">
         <h1>Activity Feed</h1>
         <div className="spacer" />
-        <button className="small" onClick={refresh}>↻</button>
+        <button className="small" onClick={handleRefresh} disabled={refreshing}>
+          {refreshing ? <span className="tool-spinner" /> : '↻'}
+        </button>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -94,7 +103,7 @@ export default function Feed() {
               <h3>Commit Detail</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
-            <div style={{ fontSize: 11, color: '#888', marginBottom: 4, flexShrink: 0 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4, flexShrink: 0 }}>
               {selected.hash?.slice(0, 8)} by {selected.author}
             </div>
             <div style={{ fontSize: 12, marginBottom: 12, fontWeight: 'bold', flexShrink: 0 }}>
@@ -109,7 +118,7 @@ export default function Feed() {
               </div>
             )}
             {loadingDiff && (
-              <div style={{ fontSize: 11, color: '#888', padding: '8px 0' }}>Loading diff...</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '8px 0' }}>Loading diff...</div>
             )}
             {diff && (
               <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
