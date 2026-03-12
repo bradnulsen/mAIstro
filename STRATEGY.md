@@ -2,82 +2,105 @@
 
 ## Current State
 
-mAistro has crossed from "functional prototype" to "working orchestration platform." The core dispatch loop is solid: tasks get configured, queued, dispatched via Claude CLI, and results are committed to git. The queue-first architecture works — manual, watch, and task-to-task triggers all funnel through `dispatch_queue`, a background worker processes them sequentially, and the UI shows live status and stored output.
+mAistro is a working orchestration platform with a clean, well-factored codebase. The core loop is closed: tasks get configured, queued, dispatched via Claude CLI, and results committed to git. Downstream tasks trigger automatically via watch or schedule. The architecture is sound — queue-first dispatch, sequential processing, git as source of truth.
 
-What's been delivered since the last strategy:
-- **Queue-first dispatch** is the backbone. Background worker with auto/manual processing, stale sweep on startup, cancellation support.
-- **Watch mode** works end-to-end. Post-commit hook triggers tasks based on subscription glob matching. Auto-queue toggles per-task.
-- **Task-to-task dispatch** via `task_queue` trigger type with context passing and handoff awareness in the prompt.
-- **Coalesced dispatches** — multiple triggers for the same task merge into one queue entry.
-- **Rich Queue UI** — dispatch output rendered as markdown, detail panel with scroll, status polling, error display.
-- **Polished task config** — two-column layout, markdown preview for instructions, auto-resize textareas, inline subscription toggles.
-- **Chat with session persistence** — each dispatch creates a linked chat session as an audit trail.
-- **Feed view** with live git activity polling.
+What's in place:
+- **Queue-first dispatch** — background worker with auto/manual processing, stale sweep on startup, cancellation flag
+- **Watch mode** — post-commit hook triggers tasks based on subscription glob matching, per-task toggle, cooldown
+- **Task-to-task dispatch** — `task_queue` trigger with context passing and handoff awareness in the prompt
+- **Cron scheduling** — tasks can run on a cron schedule with fire tracking that survives restarts
+- **Coalesced dispatches** — multiple triggers for the same task merge into one queue entry
+- **Rich Queue UI** — dispatch output rendered as markdown, detail panel with scroll, status polling
+- **Polished task config** — two-column layout, markdown preview, auto-resize textareas, subscription toggles
+- **Chat with session persistence** — SSE streaming, session resume, dispatch-linked audit trail
+- **Git feed** — live polling, commit diffs with file/line stats
+- **Clean module structure** — chat, state, dispatch, worker, scheduler all extracted into focused modules
 
-The system is now self-sustaining: a human or task commit can trigger downstream tasks, which commit their own changes, which trigger further tasks. The coordination loop is closed.
+The coordination loop is self-sustaining. The codebase is ready for the next phase of work.
 
 ## What Matters Now
 
-The platform works. The next phase is about making it **trustworthy enough to leave running** and **expressive enough for real workflows**. The priorities below reflect this shift from building infrastructure to building confidence.
+The platform works but you can't trust it unsupervised. The next phase is about **observability** (seeing what's happening), **control** (stopping what shouldn't happen), and **continuity** (recovering from failures). These three capabilities are the gate to autonomous operation.
 
-## Priority 1: Dispatch Observability
+## Priority 1: Dispatch Observability — Live Streaming
 
-**Why:** The biggest barrier to leaving mAistro running autonomously is not knowing what it's doing. The Queue shows stored output after completion, but there's no live streaming view during execution. Users can't see tool calls happening in real-time, can't judge whether a task is productive or stuck, and can't intervene intelligently.
+**The problem:** Running dispatches are black boxes. The Queue shows "Running" with no visibility into what the agent is doing. Users can't tell if a task is productive, stuck, or going sideways until it finishes. This is the single biggest barrier to leaving mAistro running unattended.
 
-**Approach:** Stream dispatch events to the frontend in real-time via SSE. The worker already yields events from `run_dispatch`; the missing piece is a live endpoint that the Queue detail panel subscribes to when a dispatch is running.
+**The solution:** Stream dispatch events to the frontend in real-time via SSE. The worker already yields events from `run_dispatch` and the chat system already proves the SSE pattern works end-to-end. The missing piece is a live endpoint that the Queue detail panel subscribes to for running dispatches.
 
-**Deliverable:** When a dispatch is in-progress, the Queue detail view shows a live stream of text output and tool calls. The user sees what the agent is reading, writing, and thinking as it happens. After completion, the stored session output replaces the stream seamlessly.
+**Specifically:**
+- Add `/api/dispatch/{id}/stream` SSE endpoint that taps into the worker's event stream for the active dispatch
+- Queue detail panel subscribes to this endpoint when viewing a running dispatch
+- Show text output, tool calls (file reads/writes), and thinking indicators as they happen
+- On completion, seamlessly transition to the stored session output
+- Show elapsed time on running dispatches
 
-## Priority 2: Process Control — Timeouts and Kill
+**Why first:** Everything else (kill, timeout, retry) is less useful without being able to see what's happening. Observability informs all other decisions.
 
-**Why:** Cancel sets an event flag but doesn't kill the Claude CLI subprocess. A hung or runaway dispatch blocks the entire queue indefinitely. There's no timeout mechanism. These are prerequisites for unattended operation.
+## Priority 2: Process Control — Kill and Timeout
 
-**Deliverable:**
-- CLI subprocess PID tracked by the worker; cancel sends SIGTERM/SIGKILL
-- Configurable per-task timeout (default: 15 minutes) as a task property
+**The problem:** Cancel sets an event flag but doesn't kill the Claude CLI subprocess. A hung dispatch blocks the entire queue indefinitely. There's no timeout. These are prerequisites for unattended operation — without them, one bad dispatch can halt all work.
+
+**Specifically:**
+- Track CLI subprocess PID in the worker; cancel sends SIGTERM then SIGKILL after grace period
+- Add configurable per-task timeout as a task property (default: 15 minutes)
 - Timed-out dispatches marked as errors with partial output preserved
-- Queue UI shows elapsed time on running dispatches
+- Stale dispatch sweep on startup should also kill orphaned subprocesses (best-effort on Windows)
 
-## Priority 3: Dispatch Continuity (Resume/Retry)
+**Design note:** On Windows, `SIGTERM` doesn't work the same way. Use `process.terminate()` / `process.kill()` which map to `TerminateProcess`. The worker should store the `Popen` object, not just the PID.
 
-**Why:** Tasks frequently need multiple turns to complete complex work, especially when they hit tool errors or context limits. Currently, each dispatch is a one-shot invocation. If a dispatch fails partway through, the only option is to re-dispatch from scratch — losing all progress and context.
+## Priority 3: Dispatch Continuity — Resume and Retry
 
-**Approach:** Claude CLI supports `--resume` with a session ID. The worker already stores session IDs per dispatch. Add a "resume" action on failed/completed dispatches that re-invokes with the same session, letting the agent continue where it left off. Separately, add a "retry" that re-dispatches with the same context but a fresh session.
+**The problem:** If a dispatch fails partway through — tool error, context limit, timeout — the only option is re-dispatching from scratch. This loses all progress and context. Claude CLI supports `--resume` with a session ID, and the worker already stores session IDs per dispatch.
 
-**Deliverable:** Queue UI shows "Resume" and "Retry" actions on completed/failed dispatches. Resume continues the CLI session; retry creates a fresh dispatch with the same trigger context.
+**Specifically:**
+- "Resume" action on failed/completed dispatches: re-invokes CLI with `--resume` and the stored session ID, continuing where the agent left off
+- "Retry" action: creates a fresh dispatch with the same trigger context
+- Queue UI shows both actions on completed/failed dispatches
+- Resume creates a new queue entry linked to the same chat session
 
-## Priority 4: Task Dependencies and Workflows
+## Priority 4: Settings and Configuration UI
 
-**Why:** Task-to-task dispatch works via curl from within a running task, but there's no declarative way to express "Architect always runs after Strategist" or "Frontend runs after Architect on the same trigger." This limits mAistro to ad-hoc chains rather than repeatable workflows.
+**The problem:** MCP server management, model defaults, and project-level config have backend support but no UI. The settings button in the rail is a dead end. Users must know the API to configure these.
 
-**Approach:** Add optional `depends_on` task property — a list of task IDs. When a task completes, auto-enqueue any tasks that list it in `depends_on` (with the completing dispatch's commit as context). This is simpler and more predictable than having agents curl endpoints.
+**Specifically:**
+- Settings view accessible from the rail with sections for:
+  - Queue behavior (auto-dispatch toggle, default timeout)
+  - Default model selection
+  - MCP server management (add/remove/edit)
+  - Project path display and recent projects
+- Keep it simple — a single scrollable page with sections, not a tabbed interface
 
-**Deliverable:** Tasks can declare dependencies. Completion of an upstream task auto-enqueues downstream dependents. The Queue shows the chain relationship. Watch triggers and dependency triggers coexist cleanly.
+**Why before dependencies:** Settings UI unlocks existing backend capabilities with minimal new code. Task dependencies require new architecture. Ship the easy win first.
 
-## Priority 5: Settings and Configuration UI
+## Priority 5: Task Dependencies and Workflows
 
-**Why:** MCP server management, model defaults, and queue settings have backend support but no UI. Users must know the API to configure these. A settings view turns hidden capabilities into accessible ones.
+**The problem:** Task-to-task dispatch works via curl from within a running task, but there's no declarative way to express "Architect always runs after Strategist." This limits the platform to ad-hoc chains rather than repeatable workflows.
 
-**Deliverable:** A settings view accessible from the rail with sections for:
-- Queue behavior (auto-dispatch toggle, default timeout)
-- Default model selection
-- MCP server management (add/remove/test)
-- Project-level configuration
+**Specifically:**
+- Add optional `depends_on` task property — a list of task IDs
+- When a task completes successfully, auto-enqueue any tasks that declare it as a dependency
+- Pass the completing dispatch's context downstream
+- Queue UI shows chain relationships
+- Watch triggers and dependency triggers coexist: a task can trigger on both file changes and upstream completion
+
+**Design consideration:** This should compose with, not replace, the existing watch and schedule triggers. A task with `depends_on: ["strategist"]` and `watch_enabled: true` fires on either condition. Deduplication via coalescing handles the overlap.
 
 ## Deferred
 
-These are valuable but not blocking the current phase:
+Valuable but not blocking the current phase:
 
-- **Multi-project orchestration** — Running tasks across multiple project directories from one mAistro instance. The app DB already tracks recent projects, but cross-project dispatch would need careful design.
-- **Parallel dispatch** — Running multiple dispatches concurrently instead of sequentially. Valuable for independent tasks but introduces git conflict complexity. Sequential is correct for now.
-- **Inline file editor** — Editing project files through the UI. Most users will use their IDE; the feed and queue views provide sufficient visibility into changes.
-- **Cost tracking** — Tracking token usage and API costs per dispatch. Useful for budgeting but Claude CLI doesn't expose this cleanly yet.
-- **Dark mode** — The monospace aesthetic is clean. Dark mode is a nice-to-have.
+- **Multi-project orchestration** — cross-project dispatch from one mAistro instance. App DB tracks recent projects; cross-project would need careful design around DB isolation.
+- **Parallel dispatch** — running multiple dispatches concurrently. Valuable for independent tasks but introduces git conflict complexity. Sequential is correct until it's demonstrably the bottleneck.
+- **Inline file editor** — editing project files through the UI. Most users have their IDE open alongside.
+- **Cost tracking** — token usage and API costs per dispatch. Useful for budgeting but Claude CLI doesn't expose this cleanly yet.
+- **Dark mode** — the monospace aesthetic is clean. Nice-to-have.
+- **Dispatch diff view** — showing the git diff produced by a dispatch directly in the Queue detail panel, rather than requiring users to check the Feed. Would close the feedback loop.
 
 ## Non-Goals
 
-- **TypeScript migration** — The frontend is small and React 19 JSX is fine. Type safety isn't the bottleneck.
-- **State management library** — The app's state is simple enough for useState/useEffect. Don't add Redux/Zustand until there's a real problem.
-- **Test suite** — The codebase is small and changing fast. Tests would slow iteration without proportional value at this stage.
-- **Electron/Tauri packaging** — The Vite dev server + Python backend works fine for the target user (developers). Desktop packaging is a distribution concern, not a capability concern.
-- **Custom agent runtime** — The Claude CLI subprocess model works. Building a custom LLM invocation layer would be massive engineering for marginal gain at this stage.
+- **TypeScript migration** — the frontend is small. Type safety isn't the bottleneck.
+- **State management library** — useState/useEffect is sufficient. Don't add complexity until there's a real problem.
+- **Test suite** — the codebase is small and changing fast. Tests would slow iteration without proportional value at this stage.
+- **Electron/Tauri packaging** — Vite + Python works for the target user. Distribution is a later concern.
+- **Custom agent runtime** — Claude CLI subprocess model works. Building a custom LLM invocation layer would be massive engineering for marginal gain.
