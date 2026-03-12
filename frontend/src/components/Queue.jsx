@@ -167,7 +167,7 @@ export default function Queue() {
       load()
       return () => { cancelled = true }
     }
-  }, [selected?.id, selected?.completed_at])
+  }, [selected?.id, selected?.started_at, selected?.completed_at])
 
   const handleToggleAuto = async (val) => {
     await setQueueSettings({ auto_dispatch: val })

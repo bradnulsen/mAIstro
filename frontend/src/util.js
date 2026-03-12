@@ -28,10 +28,23 @@ export function formatDate(dateStr, utc = false) {
   }
 }
 
-/** Convert single newlines to double so markdown renders them as paragraph breaks */
+/** Convert single newlines to double so markdown renders paragraph breaks,
+ *  but preserve single newlines inside markdown table blocks (consecutive | rows). */
 export function mdBreaks(text) {
   if (!text) return text
-  return text.replace(/\n(?!\n)/g, '\n\n')
+  const lines = text.split('\n')
+  let result = lines[0]
+  for (let i = 1; i < lines.length; i++) {
+    const prev = lines[i - 1]
+    const curr = lines[i]
+    const inTable = prev.trimStart().startsWith('|') && curr.trimStart().startsWith('|')
+    if (curr === '' || prev === '' || inTable) {
+      result += '\n' + curr
+    } else {
+      result += '\n\n' + curr
+    }
+  }
+  return result
 }
 
 /**
