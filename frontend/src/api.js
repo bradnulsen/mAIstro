@@ -120,6 +120,26 @@ export const deleteChatSession = (sessionId) =>
 export const getChatSessionStatus = (sessionId) =>
   fetchJSON(`/api/chat/sessions/${sessionId}/status`)
 
+// ── Config ──
+
+export const getConfig = () => fetchJSON('/api/config/')
+
+export const setConfig = (key, value) =>
+  fetchJSON(`/api/config/${key}`, { method: 'POST', body: JSON.stringify({ value }) })
+
+// ── MCP Servers ──
+
+export const listMcpServers = () => fetchJSON('/api/mcp/servers')
+
+export const createMcpServer = (name, command, args, env) =>
+  fetchJSON('/api/mcp/servers', {
+    method: 'POST',
+    body: JSON.stringify({ name, command, args: args || [], env: env || {} }),
+  })
+
+export const deleteMcpServer = (name) =>
+  fetchJSON(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+
 // ── Git ──
 
 export const getGitDiff = (hash) => fetchJSON(`/api/git/diff/${hash}`)

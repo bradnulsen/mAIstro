@@ -4,8 +4,9 @@ import Feed from './components/Feed'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
 import Chat from './components/Chat'
+import Settings from './components/Settings'
 
-const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue' }
+const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', settings: 'settings' }
 
 export default function App() {
   const [project, setProject] = useState(null)
@@ -86,6 +87,11 @@ export default function App() {
           title="Tasks"
         >◉</button>
         <div className="rail-spacer" />
+        <button
+          className={`rail-icon ${view === VIEWS.settings ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.settings)}
+          title="Settings"
+        >&#9881;</button>
       </nav>
 
       <div className="main-area">
@@ -102,6 +108,7 @@ export default function App() {
         {view === VIEWS.feed && <Feed />}
         {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} />}
         {view === VIEWS.queue && <Queue />}
+        {view === VIEWS.settings && <Settings />}
       </div>
 
       <div className={`chat-tray ${chatOpen ? 'open' : ''}`} style={chatOpen ? { width: chatWidth, minWidth: chatWidth } : undefined}>
