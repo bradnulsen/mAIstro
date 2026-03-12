@@ -59,6 +59,10 @@ export default function Feed() {
               className={`feed-item ${selected?.hash === item.hash ? 'active' : ''}`}
               onClick={() => selectItem(item)}
             >
+              <div
+                className="feed-weight-bar"
+                style={{ opacity: Math.max(0.12, Math.min((item.files?.length || 0) / 8, 1)) }}
+              />
               <div className="feed-avatar">
                 {(item.author || '?')[0].toUpperCase()}
               </div>

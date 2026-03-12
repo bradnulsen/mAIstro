@@ -232,12 +232,23 @@ label {
 }
 
 .feed-item {
+  position: relative;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-light);
   cursor: pointer;
   display: flex;
   gap: 10px;
   align-items: flex-start;
+}
+
+.feed-weight-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+  pointer-events: none;
 }
 
 .feed-item:hover {
