@@ -26,7 +26,7 @@ async def run_dispatch(
     """
     props = task["properties"]
 
-    log.info(f"[dispatch:{dispatch_id}] Starting task={task['id']}")
+    log.info("[dispatch:%d] Starting task=%s", dispatch_id, task["id"])
 
     dispatch_record = await db.get_dispatch(dispatch_id)
     queue_context = await _build_queue_context(dispatch_record, project_dir)
@@ -43,8 +43,9 @@ async def run_dispatch(
     system_prompt = build_dispatch_system_prompt(task, project_dir)
     user_prompt = build_user_prompt(task, project_dir, queue_context, manifest, dispatch_meta=dispatch_meta)
 
-    log.info(f"[dispatch:{dispatch_id}] System: {len(system_prompt)} chars, User: {len(user_prompt)} chars"
-             + (f", resuming session {resume_session_id}" if resume_session_id else ""))
+    log.info("[dispatch:%d] System: %d chars, User: %d chars%s",
+             dispatch_id, len(system_prompt), len(user_prompt),
+             f", resuming session {resume_session_id}" if resume_session_id else "")
 
     async for event in cli.invoke(
         prompt=user_prompt,
@@ -57,9 +58,9 @@ async def run_dispatch(
         resume_session=resume_session_id,
     ):
         if event["type"] == "error":
-            log.error(f"[dispatch:{dispatch_id}] CLI error: {event.get('message', '')[:200]}")
+            log.error("[dispatch:%d] CLI error: %s", dispatch_id, event.get("message", "")[:200])
         elif event["type"] == "tool_use":
-            log.info(f"[dispatch:{dispatch_id}] Tool use: {event.get('tool', '?')}")
+            log.info("[dispatch:%d] Tool use: %s", dispatch_id, event.get("tool", "?"))
         yield event
 
 
@@ -217,10 +218,10 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
                                 )
 
         elif trigger == "resume":
-            reasons.append(f"- **Resume** — continuing from a previous dispatch")
+            reasons.append("- **Resume** — continuing from a previous dispatch")
 
         elif trigger == "retry":
-            reasons.append(f"- **Retry** — fresh re-dispatch of a previous run")
+            reasons.append("- **Retry** — fresh re-dispatch of a previous run")
 
         elif trigger == "schedule":
             reasons.append(f"- **Schedule** (`{detail or 'cron'}`)")
