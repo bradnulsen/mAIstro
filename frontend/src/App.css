@@ -377,16 +377,8 @@ label {
 
 .task-detail {
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
   padding: 16px;
-  display: flex;
-  flex-direction: column;
-}
-.task-detail > div {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
 }
 
 .task-detail h2 {
@@ -459,13 +451,6 @@ label {
 
 .task-section {
   margin-bottom: 16px;
-  flex-shrink: 0;
-}
-.task-section.task-section-grow {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 .task-section h3 {
@@ -481,8 +466,6 @@ label {
 .task-def-columns {
   display: flex;
   gap: 16px;
-  flex: 1;
-  min-height: 0;
 }
 .task-def-left {
   flex: 0 0 480px;
@@ -491,12 +474,9 @@ label {
 .task-def-right {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
 }
 .task-def-right .instructions-preview {
-  flex: 1;
-  min-height: 120px;
+  min-height: 200px;
   overflow-y: auto;
 }
 

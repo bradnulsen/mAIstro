@@ -209,7 +209,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
       )}
 
       {/* Task Definition — two-column layout */}
-      <div className="task-section task-section-grow">
+      <div className="task-section">
         <h3>Task Definition</h3>
         <div className="task-def-columns">
           <div className="task-def-left">
@@ -245,7 +245,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
           </div>
 
           <div className="task-def-right">
-            <div className="field-group" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <div className="field-group">
               <label>Instructions</label>
               {editingInstructions || !getVal('instructions') ? (
                 <textarea
@@ -253,9 +253,9 @@ function TaskDetail({ task, onRefresh, onDelete }) {
                   onChange={e => edit('instructions', e.target.value)}
                   onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
                   placeholder="Detailed instructions for what this task should do..."
-                  rows={8}
+                  rows={10}
                   autoFocus={editingInstructions}
-                  style={{ flex: 1, resize: 'none', overflowY: 'auto', minHeight: 120 }}
+                  style={{ resize: 'vertical', minHeight: 200 }}
                 />
               ) : (
                 <div className="instructions-preview md-content" onClick={() => setEditingInstructions(true)}>
