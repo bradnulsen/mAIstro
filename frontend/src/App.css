@@ -328,6 +328,7 @@ label {
 .queue-status.completed { color: var(--success); }
 .queue-status.error { color: var(--danger); }
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
+.queue-status.timed_out { color: var(--warning, #e6a117); }
 
 /* ── Task List + Detail ── */
 

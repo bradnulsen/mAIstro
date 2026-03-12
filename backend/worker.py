@@ -207,6 +207,20 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
 
     log.info("[worker] Processing dispatch #%d (task=%s)", dispatch_id, task_id)
 
+    # Timeout enforcement — fire cancel_event after task's timeout
+    timeout_seconds = task["properties"].get("timeout", 900)
+    _timed_out = False
+
+    async def _timeout_watchdog():
+        nonlocal _timed_out
+        await asyncio.sleep(timeout_seconds)
+        if _cancel_event and not _cancel_event.is_set():
+            _timed_out = True
+            log.warning("[worker] Dispatch #%d timed out after %ds", dispatch_id, timeout_seconds)
+            _cancel_event.set()
+
+    watchdog = asyncio.create_task(_timeout_watchdog()) if timeout_seconds > 0 else None
+
     full_response = []
     streaming_text = []
 
@@ -238,9 +252,15 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
         if response_text:
             await db.add_chat_message(session_id, "assistant", response_text)
 
-        head = git.head_hash(PROJECT_DIR)
-        await db.update_dispatch(dispatch_id, completed_at=utcnow(), result_commit=head)
-        log.info("[worker] Dispatch #%d completed (commit=%s)", dispatch_id, head[:8])
+        if _timed_out:
+            head = git.head_hash(PROJECT_DIR)
+            await db.update_dispatch(dispatch_id, completed_at=utcnow(),
+                                     result_commit=head, error="timed out")
+            log.info("[worker] Dispatch #%d timed out (partial commit=%s)", dispatch_id, head[:8])
+        else:
+            head = git.head_hash(PROJECT_DIR)
+            await db.update_dispatch(dispatch_id, completed_at=utcnow(), result_commit=head)
+            log.info("[worker] Dispatch #%d completed (commit=%s)", dispatch_id, head[:8])
 
     except Exception as e:
         log.exception("[worker] Dispatch #%d failed: %s", dispatch_id, e)
@@ -250,6 +270,9 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
         await db.add_chat_message(session_id, "system", f"Error: {e}")
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=str(e))
     finally:
+        # Cancel the watchdog if still waiting
+        if watchdog and not watchdog.done():
+            watchdog.cancel()
         # Signal completion to any live subscribers, then clean up
         _broadcast(dispatch_id, {"type": "_done"})
         _subscribers.pop(dispatch_id, None)

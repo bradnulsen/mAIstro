@@ -133,7 +133,8 @@ INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES
     ('watch_enabled', 'false', 'boolean'),
     ('coalesce_dispatches', 'false', 'boolean'),
     ('sort_order', '0', 'integer'),
-    ('schedule', '', 'string');
+    ('schedule', '', 'string'),
+    ('timeout', '900', 'integer');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 """

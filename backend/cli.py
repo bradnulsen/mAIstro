@@ -118,8 +118,19 @@ async def invoke(
         while pipes_done < 2:
             # Check for cancellation
             if cancel_event and cancel_event.is_set():
-                log.info("[cli] Cancellation requested — killing process")
-                process.kill()
+                log.info("[cli] Cancellation requested — terminating process")
+                process.terminate()
+                # Grace period: wait up to 5s for clean exit, then force kill
+                try:
+                    await asyncio.wait_for(
+                        asyncio.get_running_loop().run_in_executor(None, process.wait),
+                        timeout=5.0
+                    )
+                    log.info("[cli] Process terminated gracefully (code=%d)", process.returncode)
+                except asyncio.TimeoutError:
+                    log.warning("[cli] Process did not exit after terminate — killing")
+                    process.kill()
+                    process.wait()
                 yield {"type": "error", "message": "cancelled"}
                 return
 

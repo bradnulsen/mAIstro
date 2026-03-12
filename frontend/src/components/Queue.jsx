@@ -12,6 +12,7 @@ const STATUS_LABELS = {
   completed: 'Completed',
   error: 'Error',
   cancelled: 'Cancelled',
+  timed_out: 'Timed Out',
 }
 
 const TRIGGER_LABELS = {
@@ -23,6 +24,7 @@ const TRIGGER_LABELS = {
 function getStatus(item) {
   if (item.error) {
     if (item.error === 'cancelled') return 'cancelled'
+    if (item.error === 'timed out') return 'timed_out'
     return 'error'
   }
   if (item.completed_at) return 'completed'
@@ -422,8 +424,10 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
       {item.error && status !== 'cancelled' && (
         <div style={{ marginBottom: 12 }}>
-          <label>Error</label>
-          <div style={{ fontSize: 11, color: 'var(--danger)' }}>{item.error}</div>
+          <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
+          <div style={{ fontSize: 11, color: status === 'timed_out' ? 'var(--warning, #e6a117)' : 'var(--danger)' }}>
+            {status === 'timed_out' ? 'Dispatch exceeded timeout limit' : item.error}
+          </div>
         </div>
       )}
 

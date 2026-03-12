@@ -342,6 +342,23 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
 
         <div className="field-group">
+          <label>Timeout (seconds)</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="number"
+              value={getVal('timeout') ?? 900}
+              onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
+              min={0}
+              step={60}
+              style={{ width: 100, fontFamily: 'monospace' }}
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              {(() => { const v = getVal('timeout') ?? 900; return v === 0 ? 'no limit' : `${Math.floor(v/60)}m ${v%60}s` })()}
+            </span>
+          </div>
+        </div>
+
+        <div className="field-group">
           <label>Glob patterns (one per line)</label>
           <AutoTextarea
             value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
