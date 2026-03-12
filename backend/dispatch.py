@@ -167,34 +167,46 @@ async def build_task_manifest() -> str:
 # ── Queue context ───────────────────────────────────────────
 
 async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str | None:
-    """Build context from the dispatch's triggers array."""
+    """Build a cohesive 'why you're running' section from the dispatch's triggers."""
     if not dispatch:
         return None
 
     triggers = dispatch.get("triggers")
     if not triggers:
-        # Fallback: build single-entry triggers from scalar fields
         triggers = [{"trigger": dispatch.get("trigger"),
                      "detail": dispatch.get("trigger_detail"),
                      "context": dispatch.get("context")}]
 
-    sections = []
+    # Build bullet points for each trigger reason
+    reasons = []
+    supplementary = []  # extra context sections (task summaries, etc.)
+
     for entry in triggers:
         trigger = entry.get("trigger")
         detail = entry.get("detail")
         ctx = entry.get("context")
 
-        if trigger == "task_queue" and detail:
-            queuing_task = await db.get_task(detail)
-            if queuing_task:
-                sections.append(
-                    f"## Queued by: {queuing_task['name']}\n"
-                    f"Task `{queuing_task['name']}` has queued you to run."
-                )
-                if ctx:
-                    sections.append(f"**Reason:** {ctx}")
+        if trigger == "commit" and detail:
+            summary = git.commit_oneline(project_dir, detail) or detail[:8]
+            reasons.append(f"- **Commit** `{detail[:8]}`: {summary}")
 
-                # Read the queuing task's subscribed files for summary context
+        elif trigger == "manual":
+            ref = f" @ `{detail[:8]}`" if detail else ""
+            if ctx:
+                reasons.append(f"- **Manual**{ref}: {ctx}")
+            else:
+                reasons.append(f"- **Manual**{ref}")
+
+        elif trigger == "task_queue" and detail:
+            queuing_task = await db.get_task(detail)
+            task_name = queuing_task["name"] if queuing_task else detail
+            if ctx:
+                reasons.append(f"- **Task** ({task_name}): {ctx}")
+            else:
+                reasons.append(f"- **Task** ({task_name})")
+
+            # Pull in the queuing task's summary files as supplementary context
+            if queuing_task:
                 q_subs = queuing_task["properties"].get("subscriptions") or []
                 for pattern in q_subs:
                     for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
@@ -202,26 +214,20 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
                             content = git.read_file(project_dir, os.path.relpath(fpath, project_dir))
                             if content:
                                 rel = os.path.relpath(fpath, project_dir)
-                                sections.append(
-                                    f"### {queuing_task['name']}'s Current Summary\n"
+                                supplementary.append(
+                                    f"### {task_name}'s Summary\n"
                                     f"(from `{rel}`):\n```\n{content[:4000]}\n```"
                                 )
 
-        elif trigger == "commit" and detail:
-            info = git.show(project_dir, detail, stat=True)
-            if info:
-                sections.append(f"## Triggered by commit `{detail[:8]}`\n```\n{info.strip()}\n```")
-
         elif trigger == "schedule":
-            sections.append(f"## Triggered by schedule\n**Dispatch:** scheduled (`{detail or 'cron'}`)")
-            if ctx:
-                sections.append(ctx)
+            reasons.append(f"- **Schedule** (`{detail or 'cron'}`)")
 
-        elif trigger == "manual":
-            if ctx:
-                sections.append(f"## Manual trigger\n{ctx}")
+    if not reasons:
+        return None
 
-    return "\n\n".join(sections) if sections else None
+    parts = ["## Invocation\n" + "\n".join(reasons)]
+    parts.extend(supplementary)
+    return "\n\n".join(parts)
 
 
 # ── Watch pattern matching ──────────────────────────────────

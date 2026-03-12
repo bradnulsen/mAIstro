@@ -7,13 +7,12 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
-# App DB lives next to the backend package
+# App DB lives in the repo root, next to backend/ and frontend/
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APP_DB_PATH = os.path.join(APP_DIR, ".maistro", "app.db")
+APP_DB_PATH = os.path.join(APP_DIR, "app.db")
 
 
 def _get_db() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(APP_DB_PATH), exist_ok=True)
     conn = sqlite3.connect(APP_DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")

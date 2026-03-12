@@ -57,7 +57,7 @@ async def process_next() -> dict | None:
     async with _lock:
         dispatch = await db.get_oldest_pending_dispatch()
         if dispatch:
-            await _process_dispatch(dispatch)
+            await _process_dispatch(dispatch, dispatch_method="manual")
         return dispatch
 
 
@@ -69,7 +69,7 @@ async def process_all() -> list[int]:
             dispatch = await db.get_oldest_pending_dispatch()
             if not dispatch:
                 break
-            await _process_dispatch(dispatch)
+            await _process_dispatch(dispatch, dispatch_method="manual")
             processed.append(dispatch["id"])
     return processed
 
@@ -124,7 +124,7 @@ async def _loop():
             async with _lock:
                 dispatch = await db.get_oldest_pending_dispatch()
                 if dispatch:
-                    await _process_dispatch(dispatch)
+                    await _process_dispatch(dispatch, dispatch_method="auto")
 
         except asyncio.CancelledError:
             raise
@@ -133,7 +133,7 @@ async def _loop():
             await asyncio.sleep(5)
 
 
-async def _process_dispatch(dispatch: dict):
+async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     """Execute a single dispatch — create session, run CLI, store output."""
     dispatch_id = dispatch["id"]
     task_id = dispatch["task_id"]
@@ -148,19 +148,6 @@ async def _process_dispatch(dispatch: dict):
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=f"task '{task_id}' not found")
         return
 
-    # Coalesce: grab all pending dispatches for same task and merge context
-    coalesced_ids = []
-    context = dispatch.get("context")
-    if task["properties"].get("coalesce_dispatches"):
-        siblings = await db.get_pending_dispatches_for_task(task_id)
-        # siblings includes the current dispatch (it's still pending); skip it
-        extras = [s for s in siblings if s["id"] != dispatch_id]
-        if extras:
-            coalesced_ids = [s["id"] for s in extras]
-            context = _merge_contexts([dispatch] + extras)
-            log.info("[worker] Coalescing %d dispatches for task %s: %s",
-                     len(extras), task_id, coalesced_ids)
-
     # Create a chat session for this dispatch's output
     session = await db.create_chat_session(
         task_id=task_id,
@@ -173,13 +160,8 @@ async def _process_dispatch(dispatch: dict):
     global _active_dispatch_id, _cancel_event
     _cancel_event = asyncio.Event()
     _active_dispatch_id = dispatch_id
-    await db.update_dispatch(dispatch_id, started_at=utcnow(), session_id=session_id)
-
-    # Mark coalesced siblings as completed (absorbed into this dispatch)
-    now = utcnow()
-    for cid in coalesced_ids:
-        await db.update_dispatch(cid, started_at=now, completed_at=now,
-                                 session_id=session_id, error=f"coalesced into #{dispatch_id}")
+    await db.update_dispatch(dispatch_id, started_at=utcnow(), session_id=session_id,
+                             dispatch_method=dispatch_method)
 
     log.info("[worker] Processing dispatch #%d (task=%s)", dispatch_id, task_id)
 
@@ -187,7 +169,8 @@ async def _process_dispatch(dispatch: dict):
     streaming_text = []
 
     try:
-        async for event in run_dispatch(dispatch_id, task, PROJECT_DIR, context, cancel_event=_cancel_event):
+        async for event in run_dispatch(dispatch_id, task, PROJECT_DIR,
+                                        cancel_event=_cancel_event, dispatch_method=dispatch_method):
             etype = event.get("type")
 
             # Raw audit trail — store every NDJSON event
@@ -226,17 +209,3 @@ async def _process_dispatch(dispatch: dict):
         _cancel_event = None
 
 
-def _merge_contexts(dispatches: list[dict]) -> str:
-    """Merge context from multiple dispatches into a single prompt section."""
-    parts = []
-    for d in dispatches:
-        trigger = d.get("trigger", "unknown")
-        detail = d.get("trigger_detail", "")
-        ctx = d.get("context", "")
-        label = f"Dispatch #{d['id']} ({trigger}"
-        if detail:
-            label += f": {detail}"
-        label += ")"
-        body = ctx or "(no context)"
-        parts.append(f"### {label}\n{body}")
-    return "\n\n".join(parts)

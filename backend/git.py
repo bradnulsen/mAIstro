@@ -172,6 +172,20 @@ def changed_files_in_commit(cwd: str, commit_hash: str) -> list[str]:
     return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
 
 
+def commit_oneline(cwd: str, commit_hash: str) -> str | None:
+    """Get a one-line summary: subject + file count."""
+    result = run_git("show", commit_hash, "--format=%s", "--stat", "--stat-width=1", cwd=cwd)
+    if result.returncode != 0:
+        return None
+    lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+    subject = lines[0] if lines else commit_hash[:8]
+    # Last line of --stat is like "3 files changed, 10 insertions(+), 2 deletions(-)"
+    stat_line = lines[-1] if len(lines) > 1 and "changed" in lines[-1] else None
+    if stat_line:
+        return f"{subject} ({stat_line})"
+    return subject
+
+
 def head_hash(cwd: str) -> str | None:
     """Get current HEAD commit hash."""
     result = run_git("rev-parse", "HEAD", cwd=cwd)
