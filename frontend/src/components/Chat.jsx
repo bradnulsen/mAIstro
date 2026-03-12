@@ -4,7 +4,7 @@ import {
   sendChatMessage, getChatSessions, getChatMessages, deleteChatSession,
   getChatSessionStatus,
 } from '../api'
-import { mdBreaks } from '../util'
+import { mdBreaks, formatDate } from '../util'
 
 export default function Chat() {
   const [sessions, setSessions] = useState([])
@@ -212,6 +212,7 @@ export default function Chat() {
     activeSessionRef.current = null
     setMessages([])
     setStreaming('')
+    setThinking('')
     setToolStatus(null)
     setSending(false)
   }
@@ -233,7 +234,7 @@ export default function Chat() {
               >
                 <div className="chat-session-title">{s.title || 'Untitled'}</div>
                 <div className="chat-session-meta">
-                  <span>{new Date(s.created_at + 'Z').toLocaleDateString()}</span>
+                  <span>{formatDate(s.created_at, true)}</span>
                   <button
                     className="chat-session-delete"
                     onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.id) }}
