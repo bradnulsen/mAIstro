@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
@@ -114,7 +114,7 @@ export default function Queue() {
   const [isStreaming, setIsStreaming] = useState(false)
 
   // Clear transient action error when selection changes
-  useEffect(() => { setActionError(''); setRetryContext(null) }, [selected?.id])
+  useEffect(() => { setActionError(''); setRetryContext(null); setConfirmCancel(null) }, [selected?.id])
 
   // Load output when selection changes — SSE for running, stored for completed
   useEffect(() => {
@@ -288,7 +288,7 @@ export default function Queue() {
             return (
               <div
                 key={item.id}
-                className={`feed-item ${selected?.id === item.id ? 'active' : ''}`}
+                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''}`}
                 onClick={() => setSelected(item)}
               >
                 <div className="feed-avatar">
@@ -349,12 +349,7 @@ export default function Queue() {
                 {retryContext !== null ? (
                   <>
                     <label style={{ fontSize: 11 }}>Edit context before retrying</label>
-                    <textarea
-                      value={retryContext}
-                      onChange={e => setRetryContext(e.target.value)}
-                      className="context-editor"
-                      autoFocus
-                    />
+                    <ContextEditor value={retryContext} onChange={e => setRetryContext(e.target.value)} autoFocus />
                     <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center' }}>
                       <button className="small primary" onClick={() => handleRetry(selected.id, retryContext)}>
                         ↺ Retry
@@ -375,7 +370,7 @@ export default function Queue() {
                     )}
                     <button
                       className="small"
-                      onClick={() => setRetryContext(selected.context || '')}
+                      onClick={() => setRetryContext(getTriggers(selected).at(-1)?.context || '')}
                       title="Queue a fresh dispatch — edit context first"
                     >
                       ↺ Retry
@@ -391,6 +386,25 @@ export default function Queue() {
         )}
       </div>
     </>
+  )
+}
+
+function ContextEditor({ value, onChange, autoFocus = false }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+  }, [value])
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={onChange}
+      className="context-editor"
+      autoFocus={autoFocus}
+    />
   )
 }
 
@@ -469,12 +483,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         <label>Context</label>
         {isPending && editingContext !== null ? (
           <>
-            <textarea
-              value={editingContext}
-              onChange={e => setEditingContext(e.target.value)}
-              className="context-editor"
-              autoFocus
-            />
+            <ContextEditor value={editingContext} onChange={e => setEditingContext(e.target.value)} autoFocus />
             <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center' }}>
               <button className="small primary" onClick={handleSaveContext}>Save</button>
               <button className="small" onClick={() => { setEditingContext(null); setSaveError('') }}>Cancel</button>
