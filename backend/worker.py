@@ -210,14 +210,15 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     # Timeout enforcement — fire cancel_event after task's timeout
     timeout_seconds = task["properties"].get("timeout", 900)
     _timed_out = False
+    local_cancel = _cancel_event  # close over local ref, not the mutable global
 
     async def _timeout_watchdog():
         nonlocal _timed_out
         await asyncio.sleep(timeout_seconds)
-        if _cancel_event and not _cancel_event.is_set():
+        if not local_cancel.is_set():
             _timed_out = True
             log.warning("[worker] Dispatch #%d timed out after %ds", dispatch_id, timeout_seconds)
-            _cancel_event.set()
+            local_cancel.set()
 
     watchdog = asyncio.create_task(_timeout_watchdog()) if timeout_seconds > 0 else None
 

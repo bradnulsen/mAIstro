@@ -130,7 +130,7 @@ async def invoke(
                 except asyncio.TimeoutError:
                     log.warning("[cli] Process did not exit after terminate — killing")
                     process.kill()
-                    process.wait()
+                    await asyncio.get_running_loop().run_in_executor(None, process.wait)
                 yield {"type": "error", "message": "cancelled"}
                 return
 
@@ -162,7 +162,7 @@ async def invoke(
             if event:
                 yield event
 
-        process.wait()
+        await asyncio.get_running_loop().run_in_executor(None, process.wait)
         log.info("[cli] Process exited: code=%d", process.returncode)
 
         if process.returncode != 0:
@@ -177,6 +177,7 @@ async def invoke(
     except Exception as e:
         log.exception("[cli] Exception during streaming: %s", e)
         process.kill()
+        process.wait()
         yield {"type": "error", "message": str(e)}
 
 
