@@ -120,7 +120,8 @@ INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES
     ('subscriptions', '[]', 'json'),
     ('watch_enabled', 'false', 'boolean'),
     ('coalesce_dispatches', 'false', 'boolean'),
-    ('sort_order', '0', 'integer');
+    ('sort_order', '0', 'integer'),
+    ('schedule', '', 'string');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 """

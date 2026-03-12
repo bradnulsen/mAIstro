@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from backend import appstate, cli, database as db, git, worker
+from backend import appstate, cli, database as db, git, scheduler, worker
 from backend.dispatch import (
     check_watch_triggers,
     resolve_glob_files,
@@ -37,7 +37,9 @@ PROJECT_DIR: str | None = None
 async def lifespan(app: FastAPI):
     appstate.init()
     await worker.start()
+    await scheduler.start()
     yield
+    await scheduler.stop()
     await worker.stop()
 
 
@@ -69,6 +71,7 @@ class UpdateTaskRequest(BaseModel):
     subscriptions: list[str] | None = None
     watch_enabled: bool | None = None
     coalesce_dispatches: bool | None = None
+    schedule: str | None = None
     sort_order: int | None = None
 
 class DispatchRequest(BaseModel):

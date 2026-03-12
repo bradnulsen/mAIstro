@@ -267,11 +267,11 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         </div>
       </div>
 
-      {/* Subscriptions config */}
+      {/* Triggers */}
       <div className="task-section">
-        <h3>Subscriptions</h3>
+        <h3>Triggers</h3>
 
-        <div className="field-group" style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div className="field-group" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
             <input
               type="checkbox"
@@ -292,6 +292,24 @@ function TaskDetail({ task, onRefresh, onDelete }) {
             />
             Coalesce pending dispatches
           </label>
+        </div>
+
+        <div className="field-group">
+          <label>Schedule (cron)</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              value={getVal('schedule') || ''}
+              onChange={e => edit('schedule', e.target.value)}
+              placeholder="e.g. */30 * * * *  or  0 9 * * 1-5"
+              style={{ flex: 1, fontFamily: 'monospace' }}
+            />
+            {getVal('schedule') && (
+              <span style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>
+                {describeCron(getVal('schedule'))}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="field-group">
@@ -376,4 +394,29 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`
   return `${(bytes / (1024 * 1024)).toFixed(1)}M`
+}
+
+function describeCron(expr) {
+  if (!expr || !expr.trim()) return ''
+  const parts = expr.trim().split(/\s+/)
+  if (parts.length !== 5) return 'invalid'
+  const [min, hour, dom, mon, dow] = parts
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+  // Common patterns
+  if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*')
+    return `every ${min.slice(2)} min`
+  if (hour.startsWith('*/') && min === '0' && dom === '*' && mon === '*' && dow === '*')
+    return `every ${hour.slice(2)} hours`
+  if (dom === '*' && mon === '*' && dow === '*' && !min.includes('/') && !hour.includes('/'))
+    return `daily at ${hour}:${min.padStart(2, '0')}`
+  if (dom === '*' && mon === '*' && dow !== '*' && !min.includes('/') && !hour.includes('/')) {
+    const days = dow.split(',').map(d => {
+      if (d === '1-5') return 'weekdays'
+      if (d === '0,6') return 'weekends'
+      return DAYS[parseInt(d)] || d
+    }).join(', ')
+    return `${days} at ${hour}:${min.padStart(2, '0')}`
+  }
+  return 'custom schedule'
 }
