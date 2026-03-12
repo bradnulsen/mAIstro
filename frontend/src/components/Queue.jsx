@@ -68,6 +68,7 @@ export default function Queue() {
   const [autoDispatch, setAutoDispatch] = useState(false)
   const [output, setOutput] = useState(null)
   const [confirmCancel, setConfirmCancel] = useState(null)
+  const [actionError, setActionError] = useState('')
 
   const [refreshing, setRefreshing] = useState(false)
 
@@ -111,6 +112,9 @@ export default function Queue() {
   const [liveText, setLiveText] = useState('')
   const [liveTools, setLiveTools] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
+
+  // Clear transient action error when selection changes
+  useEffect(() => { setActionError('') }, [selected?.id])
 
   // Load output when selection changes — SSE for running, stored for completed
   useEffect(() => {
@@ -199,24 +203,26 @@ export default function Queue() {
   }
 
   const handleResume = async (id) => {
+    setActionError('')
     try {
       const result = await resumeDispatch(id)
       const queue = await refresh()
       const newItem = queue.find(q => q.id === result.dispatch_id)
       if (newItem) { setSelected(newItem); setFilter('upcoming') }
     } catch (e) {
-      alert(e.message)
+      setActionError(e.message)
     }
   }
 
   const handleRetry = async (id) => {
+    setActionError('')
     try {
       const result = await retryDispatch(id)
       const queue = await refresh()
       const newItem = queue.find(q => q.id === result.dispatch_id)
       if (newItem) { setSelected(newItem); setFilter('upcoming') }
     } catch (e) {
-      alert(e.message)
+      setActionError(e.message)
     }
   }
 
@@ -336,15 +342,28 @@ export default function Queue() {
               </div>
             )}
             {!isUpcoming(selected) && (
-              <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0, display: 'flex', gap: 8 }}>
-                {selected.error && selected.error !== 'cancelled' && (
-                  <button className="small primary" onClick={() => handleResume(selected.id)}>
-                    ↻ Resume
+              <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {selected.error && selected.error !== 'cancelled' && (
+                    <button
+                      className="small primary"
+                      onClick={() => handleResume(selected.id)}
+                      title="Continue from the last Claude session checkpoint (--resume)"
+                    >
+                      ↻ Resume
+                    </button>
+                  )}
+                  <button
+                    className="small"
+                    onClick={() => handleRetry(selected.id)}
+                    title="Queue a fresh dispatch with the same task and context"
+                  >
+                    ↺ Retry
                   </button>
+                </div>
+                {actionError && (
+                  <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{actionError}</div>
                 )}
-                <button className="small" onClick={() => handleRetry(selected.id)}>
-                  ⟳ Retry
-                </button>
               </div>
             )}
           </div>

@@ -325,7 +325,15 @@ label {
 }
 
 .queue-status.pending { color: var(--text-muted); }
-.queue-status.running { color: var(--running); animation: dot-pulse 1.4s ease-in-out infinite; }
+.queue-status.running { color: var(--running); }
+.queue-status.running::before {
+  content: '●';
+  font-size: 7px;
+  margin-right: 4px;
+  display: inline-block;
+  vertical-align: middle;
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
 .queue-status.completed { color: var(--success); }
 .queue-status.error { color: var(--danger); }
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
