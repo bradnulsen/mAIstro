@@ -177,6 +177,10 @@ async def _migrate_db(db: aiosqlite.Connection):
     if "resume_session_id" not in dq_cols:
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN resume_session_id TEXT")
 
+    # Add start_commit for dispatch diff view (HEAD at dispatch start)
+    if "start_commit" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN start_commit TEXT")
+
     await db.commit()
 
 

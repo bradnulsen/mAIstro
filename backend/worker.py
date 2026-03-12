@@ -205,8 +205,9 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     global _active_dispatch_id, _cancel_event
     _cancel_event = asyncio.Event()
     _active_dispatch_id = dispatch_id
+    start_commit = git.head_hash(PROJECT_DIR)
     await db.update_dispatch(dispatch_id, started_at=utcnow(), session_id=session_id,
-                             dispatch_method=dispatch_method)
+                             dispatch_method=dispatch_method, start_commit=start_commit)
 
     log.info("[worker] Processing dispatch #%d (task=%s)", dispatch_id, task_id)
 

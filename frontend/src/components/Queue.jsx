@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
-  getQueueSettings, setQueueSettings, processQueue, streamDispatch,
-  resumeDispatch, retryDispatch,
+  getDispatchDiff, getQueueSettings, setQueueSettings, processQueue,
+  streamDispatch, resumeDispatch, retryDispatch,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
@@ -365,8 +365,27 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
   const [editingContext, setEditingContext] = useState(null)
   const [saveError, setSaveError] = useState('')
 
+  // Diff state
+  const [diffData, setDiffData] = useState(null)
+  const [diffOpen, setDiffOpen] = useState(false)
+  const [diffLoading, setDiffLoading] = useState(false)
+
   // Reset editing state when item changes
-  useEffect(() => { setEditingContext(null); setSaveError('') }, [item.id])
+  useEffect(() => { setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false) }, [item.id])
+
+  // Load diff when opened (lazy)
+  useEffect(() => {
+    if (!diffOpen || diffData || diffLoading) return
+    if (!item.start_commit || !item.result_commit || item.start_commit === item.result_commit) return
+    let cancelled = false
+    setDiffLoading(true)
+    getDispatchDiff(item.id).then(data => {
+      if (!cancelled) setDiffData(data)
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) setDiffLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [diffOpen, item.id, item.start_commit, item.result_commit])
 
   const handleSaveContext = async () => {
     if (editingContext === null) return
@@ -470,9 +489,11 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
       {item.result_commit && (
         <div style={{ marginBottom: 12 }}>
-          <label>Result Commit</label>
+          <label>Commits</label>
           <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
-            {item.result_commit.slice(0, 8)}
+            {item.start_commit
+              ? `${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`
+              : item.result_commit.slice(0, 8)}
           </div>
         </div>
       )}
@@ -547,6 +568,58 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Dispatch diff — collapsible, for completed dispatches with commit range */}
+      {item.start_commit && item.result_commit && item.start_commit !== item.result_commit && (
+        <div style={{ marginBottom: 12 }}>
+          <label
+            onClick={() => setDiffOpen(o => !o)}
+            style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
+          >
+            <span style={{ fontSize: 10, display: 'inline-block', transform: diffOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+            Code Changes
+            {diffData && diffData.files.length > 0 && (
+              <span style={{ fontWeight: 'normal', fontSize: 11, color: 'var(--text-muted)' }}>
+                {diffData.files.length} {diffData.files.length === 1 ? 'file' : 'files'}
+                {diffData.insertions > 0 && <span className="feed-stat-add" style={{ marginLeft: 4 }}>+{diffData.insertions}</span>}
+                {diffData.deletions > 0 && <span className="feed-stat-del" style={{ marginLeft: 2 }}>-{diffData.deletions}</span>}
+              </span>
+            )}
+          </label>
+          {diffOpen && (
+            <>
+              {diffLoading && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 0' }}>Loading diff...</div>
+              )}
+              {diffData && diffData.files.length > 0 && (
+                <>
+                  <div style={{ marginBottom: 8 }}>
+                    {diffData.files.map(f => (
+                      <div key={f.path} style={{ fontSize: 11, padding: '1px 0', display: 'flex', gap: 6 }}>
+                        <span style={{ flex: 1 }}>{f.path}</span>
+                        {f.insertions > 0 && <span className="feed-stat-add">+{f.insertions}</span>}
+                        {f.deletions > 0 && <span className="feed-stat-del">-{f.deletions}</span>}
+                      </div>
+                    ))}
+                  </div>
+                  <pre className="diff-view">
+                    {diffData.diff.split('\n').map((line, i) => (
+                      <div key={i} className={
+                        line.startsWith('+') ? 'diff-add' :
+                        line.startsWith('-') ? 'diff-del' :
+                        line.startsWith('@@') ? 'diff-hunk' : ''
+                      }>{line}</div>
+                    ))}
+                  </pre>
+                </>
+              )}
+              {diffData && diffData.files.length === 0 && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 0' }}>No changes</div>
+              )}
+            </>
+          )}
         </div>
       )}
     </>

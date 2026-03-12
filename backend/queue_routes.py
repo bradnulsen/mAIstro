@@ -117,6 +117,22 @@ async def get_dispatch_output(dispatch_id: int):
     return {"messages": messages, "status": status, "dispatch": dispatch}
 
 
+@router.get("/api/dispatch/{dispatch_id}/diff")
+async def get_dispatch_diff(dispatch_id: int):
+    """Get the git diff for a completed dispatch (start_commit..result_commit)."""
+    require_project()
+    dispatch = await db.get_dispatch(dispatch_id)
+    if not dispatch:
+        raise HTTPException(404, "Dispatch not found")
+    start = dispatch.get("start_commit")
+    end = dispatch.get("result_commit")
+    if not start or not end:
+        return {"files": [], "insertions": 0, "deletions": 0, "diff": ""}
+    if start == end:
+        return {"files": [], "insertions": 0, "deletions": 0, "diff": ""}
+    return git.diff_range(state.PROJECT_DIR, start, end)
+
+
 @router.patch("/api/dispatch/{dispatch_id}")
 async def update_dispatch_route(dispatch_id: int, req: UpdateDispatchRequest):
     """Edit a pending dispatch (only before it starts running)."""

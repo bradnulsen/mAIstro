@@ -151,6 +151,38 @@ def diff(cwd: str, commit_hash: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+def diff_range(cwd: str, from_hash: str, to_hash: str) -> dict:
+    """Get diff between two commits with file-level stats and raw diff."""
+    # File stats via --numstat
+    stat_result = run_git("diff", "--numstat", f"{from_hash}..{to_hash}", cwd=cwd)
+    files = []
+    total_add = 0
+    total_del = 0
+    if stat_result.returncode == 0:
+        for line in stat_result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) == 3:
+                add, delete, filename = parts
+                ins = int(add) if add != "-" else 0
+                dels = int(delete) if delete != "-" else 0
+                files.append({"path": filename, "insertions": ins, "deletions": dels})
+                total_add += ins
+                total_del += dels
+
+    # Raw diff
+    diff_result = run_git("diff", f"{from_hash}..{to_hash}", cwd=cwd)
+    raw = diff_result.stdout if diff_result.returncode == 0 else ""
+
+    return {
+        "files": files,
+        "insertions": total_add,
+        "deletions": total_del,
+        "diff": raw,
+    }
+
+
 def show(cwd: str, commit_hash: str, stat: bool = False) -> str:
     """Show a commit. If stat=True, includes --stat."""
     args = ["show", commit_hash, f"--format={LOG_FORMAT}"]

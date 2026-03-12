@@ -60,6 +60,8 @@ export const getDispatchOutput = (dispatchId) =>
 export const updateDispatch = (id, updates) =>
   fetchJSON(`/api/dispatch/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
 
+export const getDispatchDiff = (id) => fetchJSON(`/api/dispatch/${id}/diff`)
+
 export const cancelDispatch = (id) =>
   fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
 
