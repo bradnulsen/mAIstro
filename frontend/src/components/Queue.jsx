@@ -109,31 +109,38 @@ export default function Queue() {
       setLiveTools([])
       setIsStreaming(true)
 
-      streamDispatch(selected.id, (event) => {
-        if (cancelled) return
-        const type = event.type
-        if (type === 'text') {
-          setLiveText(prev => prev + (event.content || ''))
-        } else if (type === 'tool_use') {
-          setLiveTools(prev => [...prev, event.tool || '?'])
-        } else if (type === 'done') {
-          // Stream finished — load stored output
-          setIsStreaming(false)
-          getDispatchOutput(selected.id).then(data => {
-            if (!cancelled) setOutput(data)
-          }).catch(() => {})
-        } else if (type === 'error') {
-          setIsStreaming(false)
-        }
-      }).then(handle => { sseHandle = handle }).catch(() => {
-        // SSE failed — fall back to polling
-        if (!cancelled) {
-          setIsStreaming(false)
-          getDispatchOutput(selected.id).then(data => {
-            if (!cancelled) setOutput(data)
-          }).catch(() => {})
-        }
-      })
+      try {
+        const { abort, done } = streamDispatch(selected.id, (event) => {
+          if (cancelled) return
+          const type = event.type
+          if (type === 'text') {
+            setLiveText(prev => prev + (event.content || ''))
+          } else if (type === 'tool_use') {
+            setLiveTools(prev => [...prev, event.tool || '?'])
+          } else if (type === 'done') {
+            // Stream finished — load stored output
+            setIsStreaming(false)
+            getDispatchOutput(selected.id).then(data => {
+              if (!cancelled) setOutput(data)
+            }).catch(() => {})
+          } else if (type === 'error') {
+            setIsStreaming(false)
+          }
+        })
+        sseHandle = { abort }
+        done.catch(() => {
+          // SSE failed — fall back to stored output
+          if (!cancelled) {
+            setIsStreaming(false)
+            getDispatchOutput(selected.id).then(data => {
+              if (!cancelled) setOutput(data)
+            }).catch(() => {})
+          }
+        })
+      } catch {
+        // fetchSSE setup failed
+        setIsStreaming(false)
+      }
 
       return () => { cancelled = true; if (sseHandle) sseHandle.abort() }
     } else {

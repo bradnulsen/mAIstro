@@ -136,7 +136,7 @@ export default function Chat() {
 
     try {
       let thinkingAccum = ''
-      const result = await sendChatMessage(msg, activeSession?.id, null, (event) => {
+      const { abort, done } = sendChatMessage(msg, activeSession?.id, null, (event) => {
         if (event.type === 'thinking') {
           thinkingAccum += event.content || ''
           setThinking(thinkingAccum)
@@ -159,7 +159,8 @@ export default function Chat() {
           newSessionId = event.session_id
         }
       })
-      if (result?.abort) abortRef.current = result.abort
+      abortRef.current = abort
+      await done
     } catch (e) {
       if (e.name === 'AbortError') return
     }

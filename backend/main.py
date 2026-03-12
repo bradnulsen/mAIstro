@@ -1,5 +1,6 @@
 """mAistro backend — FastAPI app with all routes."""
 
+import asyncio
 import json
 import logging
 import os
@@ -290,7 +291,6 @@ async def stream_dispatch(dispatch_id: int):
         return EventSourceResponse(done_stream())
 
     # Subscribe to live events from the worker
-    import asyncio
     q = worker.subscribe(dispatch_id)
 
     async def stream():

@@ -64,7 +64,7 @@ export const cancelDispatch = (id) =>
   fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
 
 export const streamDispatch = (dispatchId, onEvent) =>
-  fetchSSE(`/api/dispatch/${dispatchId}/stream`, {}, onEvent)
+  fetchSSE(`/api/dispatch/${dispatchId}/stream`, {}, onEvent)  // returns { abort, done }
 
 // ── Queue Control ──
 
@@ -111,53 +111,61 @@ export const getGitDiff = (hash) => fetchJSON(`/api/git/diff/${hash}`)
 
 // ── SSE Helper ──
 
-async function fetchSSE(url, opts, onEvent) {
+/**
+ * Connect to an SSE endpoint and deliver events via callback.
+ * Returns { abort, done } synchronously — abort() cancels the connection,
+ * done is a Promise that resolves when the stream finishes.
+ */
+function fetchSSE(url, opts, onEvent) {
   const controller = new AbortController()
-  const res = await fetch(url, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    signal: controller.signal,
-  })
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`${res.status}: ${err}`)
-  }
+  const done = (async () => {
+    const res = await fetch(url, {
+      ...opts,
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      signal: controller.signal,
+    })
 
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`${res.status}: ${err}`)
+    }
 
-  let currentEventType = null
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
 
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+    let currentEventType = null
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
 
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          currentEventType = line.slice(7).trim()
-        } else if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6))
-            if (currentEventType && !data.type) data.type = currentEventType
-            onEvent(data)
-          } catch {
-            // ignore parse errors
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEventType = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (currentEventType && !data.type) data.type = currentEventType
+              onEvent(data)
+            } catch {
+              // ignore parse errors
+            }
+            currentEventType = null
+          } else if (line === '') {
+            currentEventType = null
           }
-          currentEventType = null
-        } else if (line === '') {
-          currentEventType = null
         }
       }
+    } catch (err) {
+      if (err.name !== 'AbortError') throw err
     }
-  } catch (err) {
-    if (err.name !== 'AbortError') throw err
-  }
+  })()
 
-  return { abort: () => controller.abort() }
+  return { abort: () => controller.abort(), done }
 }
