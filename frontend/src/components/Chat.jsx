@@ -19,6 +19,8 @@ export default function Chat() {
   const abortRef = useRef(null)
   // Track session ID across async operations (avoids stale closure issues)
   const activeSessionRef = useRef(null)
+  // Cancel signal for poll loops — set to true to stop any active poll
+  const pollCancelledRef = useRef(false)
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -38,65 +40,65 @@ export default function Chat() {
 
   // On mount: check if the most recent session is still processing (e.g. we navigated away)
   useEffect(() => {
-    let cancelled = false
+    pollCancelledRef.current = false
     ;(async () => {
       const sessions = await refreshSessions()
-      if (cancelled || sessions.length === 0) return
+      if (pollCancelledRef.current || sessions.length === 0) return
       const latest = sessions[0]
       try {
         const { processing } = await getChatSessionStatus(latest.id)
-        if (cancelled) return
+        if (pollCancelledRef.current) return
         if (processing) {
           // Session is still being processed by backend — load messages and show indicator
           setActiveSession(latest)
           activeSessionRef.current = latest
           const msgs = await getChatMessages(latest.id)
-          if (!cancelled) {
+          if (!pollCancelledRef.current) {
             setMessages(msgs)
             setToolStatus('processing...')
             setSending(true)
-            // Poll for completion
-            _pollForCompletion(latest.id, cancelled)
+            _pollForCompletion(latest.id)
           }
         }
       } catch {}
     })()
-    return () => { cancelled = true }
+    return () => { pollCancelledRef.current = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll for completion of an active background task
-  const _pollForCompletion = useCallback(async (sessionId, cancelled) => {
+  const _pollForCompletion = useCallback(async (sessionId) => {
+    pollCancelledRef.current = false
     const poll = async () => {
-      if (cancelled) return
+      if (pollCancelledRef.current) return
       try {
         const { processing } = await getChatSessionStatus(sessionId)
+        if (pollCancelledRef.current) return
         if (!processing) {
           // Done — reload messages from DB
           const msgs = await getChatMessages(sessionId)
-          if (!cancelled) {
-            setMessages(msgs)
-            setStreaming('')
-            setToolStatus(null)
-            setSending(false)
-            refreshSessions()
-          }
+          setMessages(msgs)
+          setStreaming('')
+          setToolStatus(null)
+          setSending(false)
+          refreshSessions()
           return
         }
         // Still processing — reload messages (might have partial saves) and keep polling
         setTimeout(poll, 2000)
       } catch {
-        setTimeout(poll, 3000)
+        if (!pollCancelledRef.current) setTimeout(poll, 3000)
       }
     }
     setTimeout(poll, 2000)
   }, [refreshSessions])
 
   const loadSession = async (session) => {
-    // Cancel any in-progress stream
+    // Cancel any in-progress stream or poll
     if (abortRef.current) {
       abortRef.current()
       abortRef.current = null
     }
+    pollCancelledRef.current = true
     setActiveSession(session)
     activeSessionRef.current = session
     setStreaming('')
@@ -110,7 +112,7 @@ export default function Chat() {
       if (processing) {
         setToolStatus('processing...')
         setSending(true)
-        _pollForCompletion(session.id, false)
+        _pollForCompletion(session.id)
       }
     } catch {
       setMessages([])
@@ -205,6 +207,7 @@ export default function Chat() {
       abortRef.current()
       abortRef.current = null
     }
+    pollCancelledRef.current = true
     setActiveSession(null)
     activeSessionRef.current = null
     setMessages([])

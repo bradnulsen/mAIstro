@@ -4,6 +4,7 @@ import aiosqlite
 import json
 import os
 import re
+import uuid
 
 DB_PATH: str | None = None
 
@@ -428,7 +429,6 @@ async def update_dispatch(dispatch_id: int, **kwargs):
 
 async def create_chat_session(task_id: str | None = None, title: str | None = None,
                                dispatch_id: int | None = None) -> dict:
-    import uuid
     session_id = str(uuid.uuid4())
     db = await get_db()
     try:
