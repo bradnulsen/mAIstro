@@ -378,7 +378,7 @@ async def queue_process(all: bool = False):    # noqa: A002 — matches frontend
 @app.get("/api/feed/")
 async def get_feed(limit: int = 50, offset: int = 0, task_id: str | None = None, path: str | None = None):
     _require_project()
-    entries = git.log(PROJECT_DIR, limit=limit, skip=offset, path=path, name_only=True)
+    entries = git.log(PROJECT_DIR, limit=limit, skip=offset, path=path, with_stats=True)
 
     queue = await db.get_dispatch_queue(limit=200)
     dispatch_by_commit = {d["result_commit"]: d for d in queue if d.get("result_commit")}

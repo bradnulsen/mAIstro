@@ -120,10 +120,10 @@ def parse_log_with_files(output: str) -> list[dict]:
 # ── Query operations ────────────────────────────────────────
 
 def log(cwd: str, limit: int = 50, skip: int = 0, path: str | None = None,
-        name_only: bool = False) -> list[dict]:
+        with_stats: bool = False) -> list[dict]:
     """Get git log entries as structured dicts."""
     args = ["log", f"--max-count={limit}", f"--skip={skip}", f"--format={LOG_FORMAT}"]
-    if name_only:
+    if with_stats:
         args.append("--numstat")
     if path:
         args.extend(["--", path])
@@ -132,7 +132,7 @@ def log(cwd: str, limit: int = 50, skip: int = 0, path: str | None = None,
     if result.returncode != 0:
         return []
 
-    if name_only:
+    if with_stats:
         return parse_log_with_files(result.stdout)
     return parse_log_output(result.stdout)
 
