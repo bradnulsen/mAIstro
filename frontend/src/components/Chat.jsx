@@ -285,7 +285,9 @@ export default function Chat() {
         {sending && (
           <div className="chat-status-strip">
             <span className="tool-spinner" />
-            {toolStatus || 'thinking...'}
+            {toolStatus
+              ? toolStatus.endsWith('...') ? toolStatus : `${toolStatus}...`
+              : 'thinking...'}
           </div>
         )}
 
@@ -308,7 +310,7 @@ export default function Chat() {
             }}
           />
           <button className="primary" onClick={handleSend} disabled={sending || !input.trim()}>
-            {sending ? '...' : 'Send'}
+            {sending ? <span className="tool-spinner" /> : 'Send'}
           </button>
         </div>
       </div>
