@@ -49,13 +49,16 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 ## Key Files
 
 - `run.py` — Uvicorn launcher (hot-reload on `backend/`)
-- `backend/main.py` — FastAPI app, lifespan, CORS, remaining routes (project, task, feed, git, hook, MCP, config)
+- `backend/main.py` — FastAPI app, lifespan, CORS initialization; aggregates routers and defines project/task/feed/git/hook/MCP/config routes
 - `backend/queue_routes.py` — Dispatch and queue control routes (APIRouter, extracted from main.py)
+- `backend/chat.py` — Chat/conversation routes for executive assistant interface (APIRouter, distinct from task dispatches)
 - `backend/database.py` — Project SQLite schema, EAV property system, migrations, all CRUD helpers (async)
 - `backend/appstate.py` — App-level SQLite DB for recent-projects list (sync, separate from project DB)
+- `backend/state.py` — Shared mutable state (`PROJECT_DIR`) and utilities (`utcnow`, `require_project`) to avoid circular imports
 - `backend/git.py` — Git subprocess abstraction (log, diff, commit, hook installer)
 - `backend/cli.py` — Claude CLI subprocess invocation: stdin piping, NDJSON parsing, event schema
 - `backend/dispatch.py` — Prompt assembly (`build_system_prompt`/`build_user_prompt`), dispatch lifecycle, watch trigger matching, task manifest
+- `backend/scheduler.py` — Cron-based background scheduler: checks task schedules every 30s, enqueues dispatches when due
 - `backend/worker.py` — Background dispatch worker: pulls from queue, runs dispatches one at a time, manages lifecycle (started_at/completed_at/error), handles cancellation and stale dispatch sweep on startup
 - `frontend/src/App.jsx` — Shell with rail navigation, project opener, view router
 - `frontend/src/api.js` — API client with `fetchJSON` and `fetchSSE` helpers
