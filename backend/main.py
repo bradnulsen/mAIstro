@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("maistro")
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -88,6 +88,15 @@ class ReorderRequest(BaseModel):
 class FileWriteRequest(BaseModel):
     content: str
     message: str | None = None
+
+class QueueSettingsRequest(BaseModel):
+    auto_dispatch: bool = False
+
+class CreateMcpServerRequest(BaseModel):
+    name: str
+    command: str
+    args: list | None = None
+    env: dict | None = None
 
 class ConfigRequest(BaseModel):
     value: str
@@ -443,10 +452,9 @@ async def get_queue_settings():
 
 
 @app.post("/api/queue/settings")
-async def set_queue_settings(request: Request):
+async def set_queue_settings(req: QueueSettingsRequest):
     require_project()
-    data = await request.json()
-    value = "true" if data.get("auto_dispatch") else "false"
+    value = "true" if req.auto_dispatch else "false"
     await db.set_config("queue_auto_dispatch", value)
     worker.notify()
     return {"status": "ok"}
@@ -573,14 +581,13 @@ async def list_mcp_servers():
 
 
 @app.post("/api/mcp/servers")
-async def create_mcp_server(request: Request):
+async def create_mcp_server(req: CreateMcpServerRequest):
     require_project()
-    data = await request.json()
     await db.create_mcp_server(
-        name=data["name"],
-        command=data["command"],
-        args=data.get("args"),
-        env=data.get("env"),
+        name=req.name,
+        command=req.command,
+        args=req.args,
+        env=req.env,
     )
     return {"status": "created"}
 
