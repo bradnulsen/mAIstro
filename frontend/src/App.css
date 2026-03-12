@@ -911,6 +911,24 @@ label {
   font-weight: bold;
   margin: 0.5em 0 0.2em;
 }
+.md-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.4em 0;
+  font-size: 12px;
+}
+.md-content th, .md-content td {
+  border: 1px solid var(--border-light);
+  padding: 4px 8px;
+  text-align: left;
+}
+.md-content th {
+  font-weight: 600;
+  background: rgba(0,0,0,0.03);
+}
+.md-content thead {
+  border-bottom: 2px solid var(--border-light);
+}
 
 /* ── Utilities ── */
 
