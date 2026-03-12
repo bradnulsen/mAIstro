@@ -218,7 +218,7 @@ export default function Queue() {
                   <div className="feed-message">
                     {previewCtx
                       ? previewCtx.length > 80 ? previewCtx.slice(0, 80) + '...' : previewCtx
-                      : `${item.trigger} dispatch`}
+                      : `${TRIGGER_LABELS[item.trigger] || item.trigger} dispatch`}
                   </div>
                 </div>
               </div>
@@ -316,11 +316,7 @@ function DispatchDetail({ item, output, onUpdate }) {
             <textarea
               value={editingContext}
               onChange={e => setEditingContext(e.target.value)}
-              style={{
-                fontSize: 11, width: '100%', minHeight: 60, padding: 8,
-                borderRadius: 4, border: '1px solid var(--primary)',
-                fontFamily: 'inherit', resize: 'vertical',
-              }}
+              className="context-editor"
               autoFocus
             />
             <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
@@ -331,24 +327,20 @@ function DispatchDetail({ item, output, onUpdate }) {
         ) : isPending ? (
           <pre
             onClick={() => setEditingContext(lastCtx)}
+            className="context-pending"
             style={{
-              fontSize: 11, background: '#f5f5f0', padding: 8,
-              borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              border: '1px dashed #bbb', cursor: 'pointer',
-              color: lastCtx ? 'inherit' : '#aaa',
+              color: lastCtx ? 'inherit' : 'var(--text-muted)',
               fontStyle: lastCtx ? 'normal' : 'italic',
             }}
-            title="Click to edit"
+            title="Click to edit context"
           >
             {lastCtx || 'click to add context...'}
           </pre>
         ) : (
           triggers.map((entry, i) => (
-            <pre key={i} style={{
-              fontSize: 11, background: '#f5f5f0', padding: 8,
-              borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              border: '1px solid #ddd', marginBottom: triggers.length > 1 ? 4 : 0,
-              color: entry.context ? 'inherit' : '#aaa',
+            <pre key={i} className="context-display" style={{
+              marginBottom: triggers.length > 1 ? 4 : 0,
+              color: entry.context ? 'inherit' : 'var(--text-muted)',
               fontStyle: entry.context ? 'normal' : 'italic',
             }}>
               {entry.context || 'not provided'}
