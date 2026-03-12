@@ -333,13 +333,6 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label>Dispatched</label>
-        <div style={{ fontSize: 12 }}>
-          {item.dispatch_method || '—'}
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 12 }}>
         <label>Context</label>
         {isPending && editingContext !== null ? (
           <>
@@ -414,12 +407,12 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         </div>
       )}
 
-      {/* Live streaming output */}
-      {isStreaming && (liveText || liveTools.length > 0) && (
+      {/* Live streaming output — visible while streaming, or while liveText exists but stored output hasn't loaded yet */}
+      {(isStreaming || (liveText && !assistantMsgs.length)) && (
         <div style={{ marginBottom: 12 }}>
           <label>
             Live Output
-            <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>● streaming</span>
+            {isStreaming && <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>● streaming</span>}
           </label>
           {liveTools.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
@@ -437,7 +430,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
               ))}
             </div>
           )}
-          {liveText && (
+          {liveText ? (
             <div className="md-content" style={{
               fontSize: 12,
               padding: '8px 10px',
@@ -447,7 +440,11 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
             }}>
               <Markdown>{mdBreaks(liveText)}</Markdown>
             </div>
-          )}
+          ) : isStreaming ? (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="tool-spinner" /> connecting...
+            </div>
+          ) : null}
         </div>
       )}
 

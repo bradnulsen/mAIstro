@@ -468,7 +468,7 @@ label {
   gap: 16px;
 }
 .task-def-left {
-  flex: 0 0 480px;
+  flex: 0 0 clamp(260px, 45%, 480px);
   min-width: 0;
 }
 .task-def-right {
