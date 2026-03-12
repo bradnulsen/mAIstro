@@ -224,7 +224,11 @@ function TaskDetail({ task, onRefresh, onDelete }) {
           title={props.running ? 'Task is currently running' : undefined}
           style={{ alignSelf: 'flex-end' }}
         >
-          {dispatching ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Queuing</> : props.running ? '● Running' : '▶ Queue'}
+          {dispatching
+            ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Queuing</>
+            : props.running
+            ? <><span style={{ display: 'inline-block', animation: 'dot-pulse 1.4s ease-in-out infinite', marginRight: 4 }}>●</span>Running</>
+            : '▶ Queue'}
         </button>
       </div>
 
