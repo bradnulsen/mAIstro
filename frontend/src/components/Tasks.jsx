@@ -224,7 +224,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
           title={props.running ? 'Task is currently running' : undefined}
           style={{ alignSelf: 'flex-end' }}
         >
-          {dispatching ? 'Queuing...' : props.running ? '● Running' : '▶ Queue'}
+          {dispatching ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Queuing</> : props.running ? '● Running' : '▶ Queue'}
         </button>
       </div>
 
@@ -353,7 +353,13 @@ function TaskDetail({ task, onRefresh, onDelete }) {
               style={{ width: 100, fontFamily: 'monospace' }}
             />
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              {(() => { const v = getVal('timeout') ?? 900; return v === 0 ? 'no limit' : `${Math.floor(v/60)}m ${v%60}s` })()}
+              {(() => {
+                const v = getVal('timeout') ?? 900
+                if (v === 0) return 'no limit'
+                const mins = Math.floor(v / 60)
+                const secs = v % 60
+                return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
+              })()}
             </span>
           </div>
         </div>
