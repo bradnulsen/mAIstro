@@ -7,9 +7,10 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
-# App DB lives in the repo root, next to backend/ and frontend/
+# App DB lives in .maistro/ at the repo root (gitignored)
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APP_DB_PATH = os.path.join(APP_DIR, "app.db")
+_MAISTRO_DIR = os.path.join(APP_DIR, ".maistro")
+APP_DB_PATH = os.path.join(_MAISTRO_DIR, "app.db")
 
 
 def _get_db() -> sqlite3.Connection:
@@ -21,6 +22,7 @@ def _get_db() -> sqlite3.Connection:
 
 def init():
     """Initialize the app-level database."""
+    os.makedirs(_MAISTRO_DIR, exist_ok=True)
     conn = _get_db()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS recent_projects (
