@@ -17,6 +17,7 @@ log = logging.getLogger("maistro")
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 from backend import appstate, database as db, git, scheduler, worker
 from backend.chat import router as chat_router
@@ -278,7 +279,6 @@ async def get_dispatch_queue():
 @app.get("/api/dispatch/{dispatch_id}/stream")
 async def stream_dispatch(dispatch_id: int):
     """SSE stream of live events for a running dispatch."""
-    from sse_starlette.sse import EventSourceResponse
     require_project()
     dispatch = await db.get_dispatch(dispatch_id)
     if not dispatch:
