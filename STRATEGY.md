@@ -21,19 +21,17 @@ What's in place:
 
 The platform is observable but not yet controllable. You can see what's happening, but you can't reliably stop a runaway dispatch, recover from a failure, or configure the system without hitting the API directly. The next phase is about **control** (stopping what shouldn't happen), **continuity** (recovering from failures), and **configuration** (exposing what's already built).
 
-## Priority 1: Process Control — Kill and Timeout
+## Priority 1: Dispatch Timeout Enforcement
 
-**The problem:** Cancel sets an event flag but doesn't reliably kill the Claude CLI subprocess. A hung or runaway dispatch blocks the entire queue indefinitely. There's no timeout. Without these, one bad dispatch can halt all autonomous work.
+**The problem:** There's no timeout on dispatches. A hung or runaway dispatch blocks the entire queue indefinitely. Cancel works (cli.py already calls `process.kill()` on cancel event), but nothing automatically triggers cancellation when a dispatch runs too long.
 
 **Specifically:**
-- Store the `Popen` object in the worker (not just the PID); cancel calls `process.terminate()` then `process.kill()` after a grace period
-- Add configurable per-task `timeout` property (default: 15 minutes)
-- Worker enforces timeout — marks timed-out dispatches as errors with partial output preserved
-- Stale dispatch sweep on startup should attempt to kill orphaned subprocesses (best-effort on Windows)
+- Add configurable per-task `timeout` property (default: 15 minutes) via the EAV property system
+- Worker enforces timeout: tracks dispatch start time, sets cancel event when elapsed time exceeds the task's timeout
+- Timed-out dispatches marked as errors with partial output preserved and a clear "timed out" indicator
+- Consider a graceful flow: `process.terminate()` first, then `process.kill()` after 5s grace period (current cancel goes straight to kill)
 
-**Design note:** On Windows, `SIGTERM` doesn't work. Use `process.terminate()` / `process.kill()` which map to `TerminateProcess`. Store the `Popen` object on the worker module, not the PID. The cancel flow: set event → terminate → wait 5s → kill.
-
-**Known bug to fix:** `scheduler.py:83` checks `task["properties"].get("running")` — this property was removed. Should check for active/pending dispatches via the database instead (e.g., `db.has_pending_dispatch(task_id)` or checking `worker.get_active_dispatch_id()` against the task's dispatches).
+**What already works:** Cancel flow is functional — `cli.py:120-124` checks cancel_event in the stream loop and calls `process.kill()`. The scheduler's running check (`scheduler.py:83`) correctly uses derived `running` status from `list_tasks()`. The gap is purely timeout enforcement.
 
 ## Priority 2: Dispatch Continuity — Resume and Retry
 
