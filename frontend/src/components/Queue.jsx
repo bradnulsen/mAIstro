@@ -64,6 +64,7 @@ export default function Queue() {
   const [filter, setFilter] = useState('upcoming') // 'upcoming' | 'past'
   const [autoDispatch, setAutoDispatch] = useState(false)
   const [output, setOutput] = useState(null)
+  const [confirmCancel, setConfirmCancel] = useState(null)
 
   const [refreshing, setRefreshing] = useState(false)
 
@@ -126,7 +127,10 @@ export default function Queue() {
           if (type === 'text') {
             setLiveText(prev => prev + (event.content || ''))
           } else if (type === 'tool_use') {
-            setLiveTools(prev => [...prev, event.tool || '?'])
+            setLiveTools(prev => {
+              const tool = event.tool || '?'
+              return prev.includes(tool) ? prev : [...prev, tool]
+            })
           } else if (type === 'done') {
             // Stream finished — load stored output
             setIsStreaming(false)
@@ -182,6 +186,7 @@ export default function Queue() {
   const handleCancel = async (id) => {
     try {
       await cancelDispatch(id)
+      setConfirmCancel(null)
       await refresh()
       if (selected?.id === id) setSelected(null)
     } catch {}
@@ -289,9 +294,17 @@ export default function Queue() {
 
             {isUpcoming(selected) && (
               <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0 }}>
-                <button className="danger small" onClick={() => handleCancel(selected.id)}>
-                  Cancel Dispatch
-                </button>
+                {confirmCancel === selected.id ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12 }}>Cancel this dispatch?</span>
+                    <button className="danger small" onClick={() => handleCancel(selected.id)}>Confirm</button>
+                    <button className="small" onClick={() => setConfirmCancel(null)}>No</button>
+                  </div>
+                ) : (
+                  <button className="danger small" onClick={() => setConfirmCancel(selected.id)}>
+                    Cancel Dispatch
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -370,17 +383,19 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
             </div>
           </>
         ) : isPending ? (
-          <pre
-            onClick={() => setEditingContext(lastCtx)}
-            className="context-pending"
-            style={{
-              color: lastCtx ? 'inherit' : 'var(--text-muted)',
-              fontStyle: lastCtx ? 'normal' : 'italic',
-            }}
-            title="Click to edit context"
-          >
-            {lastCtx || 'click to add context...'}
-          </pre>
+          <div className="context-pending-wrap">
+            <pre
+              onClick={() => setEditingContext(lastCtx)}
+              className="context-pending"
+              style={{
+                color: lastCtx ? 'inherit' : 'var(--text-muted)',
+                fontStyle: lastCtx ? 'normal' : 'italic',
+              }}
+            >
+              {lastCtx || 'click to add context...'}
+            </pre>
+            <span className="context-edit-hint">✎</span>
+          </div>
         ) : (
           triggers.map((entry, i) => (
             <pre key={i} className="context-display" style={{
