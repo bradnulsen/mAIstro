@@ -121,18 +121,9 @@ async def _sweep_stale():
     """On startup, mark any in-flight dispatches as interrupted."""
     if not db.DB_PATH:
         return
-    d = await db.get_db()
-    rows = await d.execute_fetchall(
-        "SELECT id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
-    )
-    now = utcnow()
-    for row in rows:
-        await d.execute(
-            "UPDATE dispatch_queue SET completed_at = ?, error = ? WHERE id = ?",
-            (now, "interrupted", row["id"])
-        )
-        log.warning("[worker] Marked stale dispatch #%d as interrupted", row["id"])
-    await d.commit()
+    stale_ids = await db.sweep_stale_dispatches(utcnow())
+    for did in stale_ids:
+        log.warning("[worker] Marked stale dispatch #%d as interrupted", did)
 
 
 async def _loop():
@@ -193,14 +184,9 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     # For resume dispatches, reuse the original chat session; otherwise create a new one
     resume_session_id = dispatch.get("resume_session_id")
     if resume_session_id:
-        # Find the chat session from the original dispatch that has this CLI session
-        d = await db.get_db()
-        rows = await d.execute_fetchall(
-            "SELECT id FROM chat_sessions WHERE cli_session_id = ? LIMIT 1",
-            (resume_session_id,)
-        )
-        if rows:
-            session_id = rows[0]["id"]
+        existing_session = await db.find_session_by_cli_session(resume_session_id)
+        if existing_session:
+            session_id = existing_session
             log.info("[worker] Resuming into existing chat session %s", session_id)
         else:
             session = await db.create_chat_session(

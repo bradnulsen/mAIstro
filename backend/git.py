@@ -196,29 +196,6 @@ def head_hash(cwd: str) -> str | None:
 
 # ── Write operations ────────────────────────────────────────
 
-def has_changes(cwd: str) -> bool:
-    """Check if there are uncommitted changes."""
-    return bool(status(cwd).strip())
-
-
-def commit_all(cwd: str, message: str, author: str | None = None) -> str | None:
-    """Stage all changes and commit. Returns commit hash or None."""
-    if not has_changes(cwd):
-        return None
-
-    run_git("add", "-A", cwd=cwd)
-
-    args = ["commit", "-m", message]
-    if author:
-        args.extend(["--author", author])
-
-    result = run_git(*args, cwd=cwd)
-    if result.returncode != 0:
-        return None
-
-    return head_hash(cwd)
-
-
 def commit_file(cwd: str, path: str, message: str) -> str | None:
     """Stage a specific file and commit. Returns commit hash or None."""
     run_git("add", path, cwd=cwd)

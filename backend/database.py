@@ -402,6 +402,31 @@ async def update_dispatch(dispatch_id: int, **kwargs):
     await db.commit()
 
 
+async def sweep_stale_dispatches(now: str):
+    """Mark any in-flight dispatches as interrupted (e.g. after restart)."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
+    )
+    for row in rows:
+        await db.execute(
+            "UPDATE dispatch_queue SET completed_at = ?, error = ? WHERE id = ?",
+            (now, "interrupted", row["id"])
+        )
+    await db.commit()
+    return [row["id"] for row in rows]
+
+
+async def find_session_by_cli_session(cli_session_id: str) -> str | None:
+    """Find a chat session ID by its CLI session ID (for dispatch resume)."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id FROM chat_sessions WHERE cli_session_id = ? LIMIT 1",
+        (cli_session_id,)
+    )
+    return rows[0]["id"] if rows else None
+
+
 # ── Chat ────────────────────────────────────────────────────
 
 async def create_chat_session(task_id: str | None = None, title: str | None = None,
@@ -471,15 +496,6 @@ async def add_chat_event(session_id: str, event_type: str, raw_json: str):
         (session_id, event_type, raw_json)
     )
     await db.commit()
-
-
-async def get_chat_events(session_id: str) -> list[dict]:
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT * FROM chat_events WHERE session_id = ? ORDER BY id",
-        (session_id,)
-    )
-    return [dict(r) for r in rows]
 
 
 # ── MCP Servers ────────────────────────────────────────────
