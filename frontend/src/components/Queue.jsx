@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
-  getQueueSettings, setQueueSettings, processQueue,
+  getQueueSettings, setQueueSettings, processQueue, streamDispatch,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
@@ -90,25 +90,67 @@ export default function Queue() {
     return () => clearInterval(interval)
   }, [refresh])
 
-  // Load output when selection changes
+  // Live stream state for running dispatches
+  const [liveText, setLiveText] = useState('')
+  const [liveTools, setLiveTools] = useState([])
+  const [isStreaming, setIsStreaming] = useState(false)
+
+  // Load output when selection changes — SSE for running, stored for completed
   useEffect(() => {
-    if (!selected) { setOutput(null); return }
+    if (!selected) { setOutput(null); setLiveText(''); setLiveTools([]); setIsStreaming(false); return }
     let cancelled = false
-    const load = async () => {
-      try {
-        const data = await getDispatchOutput(selected.id)
-        if (!cancelled) setOutput(data)
-      } catch { if (!cancelled) setOutput(null) }
-    }
-    load()
-    // Poll if running
+    let sseHandle = null
+
     const status = getStatus(selected)
     if (status === 'running') {
-      const interval = setInterval(load, 2000)
-      return () => { cancelled = true; clearInterval(interval) }
+      // Subscribe to live SSE stream
+      setOutput(null)
+      setLiveText('')
+      setLiveTools([])
+      setIsStreaming(true)
+
+      streamDispatch(selected.id, (event) => {
+        if (cancelled) return
+        const type = event.type
+        if (type === 'text') {
+          setLiveText(prev => prev + (event.content || ''))
+        } else if (type === 'tool_use') {
+          setLiveTools(prev => [...prev, event.tool || '?'])
+        } else if (type === 'done') {
+          // Stream finished — load stored output
+          setIsStreaming(false)
+          getDispatchOutput(selected.id).then(data => {
+            if (!cancelled) setOutput(data)
+          }).catch(() => {})
+        } else if (type === 'error') {
+          setIsStreaming(false)
+        }
+      }).then(handle => { sseHandle = handle }).catch(() => {
+        // SSE failed — fall back to polling
+        if (!cancelled) {
+          setIsStreaming(false)
+          getDispatchOutput(selected.id).then(data => {
+            if (!cancelled) setOutput(data)
+          }).catch(() => {})
+        }
+      })
+
+      return () => { cancelled = true; if (sseHandle) sseHandle.abort() }
+    } else {
+      // Completed/pending — load stored output
+      setLiveText('')
+      setLiveTools([])
+      setIsStreaming(false)
+      const load = async () => {
+        try {
+          const data = await getDispatchOutput(selected.id)
+          if (!cancelled) setOutput(data)
+        } catch { if (!cancelled) setOutput(null) }
+      }
+      load()
+      return () => { cancelled = true }
     }
-    return () => { cancelled = true }
-  }, [selected, selected?.completed_at])
+  }, [selected?.id, selected?.completed_at])
 
   const handleToggleAuto = async (val) => {
     await setQueueSettings({ auto_dispatch: val })
@@ -222,7 +264,8 @@ export default function Queue() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              <DispatchDetail item={selected} output={output} onUpdate={refresh} />
+              <DispatchDetail item={selected} output={output} onUpdate={refresh}
+                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming} />
             </div>
 
             {isUpcoming(selected) && (
@@ -239,7 +282,7 @@ export default function Queue() {
   )
 }
 
-function DispatchDetail({ item, output, onUpdate }) {
+function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }) {
   const status = getStatus(item)
   const triggers = getTriggers(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
@@ -371,6 +414,44 @@ function DispatchDetail({ item, output, onUpdate }) {
         </div>
       )}
 
+      {/* Live streaming output */}
+      {isStreaming && (liveText || liveTools.length > 0) && (
+        <div style={{ marginBottom: 12 }}>
+          <label>
+            Live Output
+            <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>● streaming</span>
+          </label>
+          {liveTools.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+              Tools: {liveTools.map((t, i) => (
+                <span key={i} style={{
+                  display: 'inline-block',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border-light)',
+                  borderRadius: 3,
+                  padding: '1px 5px',
+                  marginRight: 4,
+                  marginBottom: 2,
+                  fontSize: 10,
+                }}>{t}</span>
+              ))}
+            </div>
+          )}
+          {liveText && (
+            <div className="md-content" style={{
+              fontSize: 12,
+              padding: '8px 10px',
+              background: 'var(--surface)',
+              border: '1px solid var(--border-light)',
+              borderRadius: 4,
+            }}>
+              <Markdown>{mdBreaks(liveText)}</Markdown>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Stored output (after completion) */}
       {assistantMsgs.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <label>Output</label>

@@ -63,6 +63,9 @@ export const updateDispatch = (id, updates) =>
 export const cancelDispatch = (id) =>
   fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
 
+export const streamDispatch = (dispatchId, onEvent) =>
+  fetchSSE(`/api/dispatch/${dispatchId}/stream`, {}, onEvent)
+
 // ── Queue Control ──
 
 export const getQueueSettings = () => fetchJSON('/api/queue/settings')

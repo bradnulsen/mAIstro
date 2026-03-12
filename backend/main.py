@@ -274,6 +274,54 @@ async def get_dispatch_queue():
     return await db.get_dispatch_queue()
 
 
+@app.get("/api/dispatch/{dispatch_id}/stream")
+async def stream_dispatch(dispatch_id: int):
+    """SSE stream of live events for a running dispatch."""
+    from sse_starlette.sse import EventSourceResponse
+    require_project()
+    dispatch = await db.get_dispatch(dispatch_id)
+    if not dispatch:
+        raise HTTPException(404, "Dispatch not found")
+
+    # If already completed, return immediately with done
+    if dispatch.get("completed_at"):
+        async def done_stream():
+            yield {"event": "done", "data": json.dumps({"status": "completed"})}
+        return EventSourceResponse(done_stream())
+
+    # Subscribe to live events from the worker
+    import asyncio
+    q = worker.subscribe(dispatch_id)
+
+    async def stream():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30)
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "{}"}
+                    continue
+
+                etype = event.get("type", "")
+                if etype == "_done":
+                    yield {"event": "done", "data": json.dumps({"status": "completed"})}
+                    break
+                elif etype == "text":
+                    yield {"event": "text", "data": json.dumps({"content": event.get("content", "")})}
+                elif etype == "thinking":
+                    yield {"event": "thinking", "data": json.dumps({"content": event.get("content", "")})}
+                elif etype == "tool_use":
+                    yield {"event": "tool_use", "data": json.dumps({"tool": event.get("tool", ""), "input": event.get("input", {})})}
+                elif etype == "error":
+                    yield {"event": "error", "data": json.dumps(event)}
+                elif etype == "session_id":
+                    yield {"event": "session_id", "data": json.dumps(event)}
+        finally:
+            worker.unsubscribe(dispatch_id, q)
+
+    return EventSourceResponse(stream())
+
+
 @app.get("/api/dispatch/{dispatch_id}/output")
 async def get_dispatch_output(dispatch_id: int):
     """Get stored output for a dispatch."""

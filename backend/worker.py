@@ -19,6 +19,46 @@ _lock: asyncio.Lock = asyncio.Lock()
 _active_dispatch_id: int | None = None
 _cancel_event: asyncio.Event | None = None
 
+# ── Live event broadcast ───────────────────────────────────
+# Subscribers keyed by dispatch_id → set of asyncio.Queue.
+# The worker pushes every non-_raw event to all subscriber queues.
+# SSE endpoint creates a queue, adds it here, removes on disconnect.
+_subscribers: dict[int, set[asyncio.Queue]] = {}
+
+
+def subscribe(dispatch_id: int) -> asyncio.Queue:
+    """Subscribe to live events for a dispatch. Returns a queue to read from."""
+    q = asyncio.Queue()
+    _subscribers.setdefault(dispatch_id, set()).add(q)
+    log.debug("[worker] Subscriber added for dispatch #%d (total=%d)", dispatch_id, len(_subscribers[dispatch_id]))
+    return q
+
+
+def unsubscribe(dispatch_id: int, q: asyncio.Queue):
+    """Remove a subscriber queue."""
+    subs = _subscribers.get(dispatch_id)
+    if subs:
+        subs.discard(q)
+        if not subs:
+            del _subscribers[dispatch_id]
+
+
+def _broadcast(dispatch_id: int, event: dict):
+    """Push an event to all subscribers of a dispatch."""
+    subs = _subscribers.get(dispatch_id)
+    if not subs:
+        return
+    for q in subs:
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            pass  # drop if subscriber is slow
+
+
+def get_active_dispatch_id() -> int | None:
+    """Return the dispatch ID currently being processed, or None."""
+    return _active_dispatch_id
+
 
 # ── Public API ──────────────────────────────────────────────
 
@@ -179,6 +219,9 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
                 await db.add_chat_event(session_id, event["event_type"], event["raw_json"])
                 continue
 
+            # Broadcast to live subscribers (skip _raw, already handled above)
+            _broadcast(dispatch_id, event)
+
             # Authoritative full response — use for DB storage
             if etype == "assistant_complete":
                 full_response.append(event.get("content", ""))
@@ -206,6 +249,9 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
         await db.add_chat_message(session_id, "system", f"Error: {e}")
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=str(e))
     finally:
+        # Signal completion to any live subscribers, then clean up
+        _broadcast(dispatch_id, {"type": "_done"})
+        _subscribers.pop(dispatch_id, None)
         _active_dispatch_id = None
         _cancel_event = None
 
