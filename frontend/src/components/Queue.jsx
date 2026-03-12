@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Markdown from 'react-markdown'
 import {
-  getDispatchQueue, cancelDispatch, getDispatchOutput,
+  getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
   getQueueSettings, setQueueSettings, processQueue,
 } from '../api'
 import { formatDate, TRIGGER_ICONS, mdBreaks } from '../util'
@@ -235,7 +235,7 @@ export default function Queue() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              <DispatchDetail item={selected} output={output} />
+              <DispatchDetail item={selected} output={output} onUpdate={refresh} />
             </div>
 
             {isUpcoming(selected) && (
@@ -252,10 +252,27 @@ export default function Queue() {
   )
 }
 
-function DispatchDetail({ item, output }) {
+function DispatchDetail({ item, output, onUpdate }) {
   const status = getStatus(item)
   const triggers = getTriggers(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
+  const isPending = status === 'pending'
+
+  // Editable context for pending dispatches
+  const lastCtx = triggers.length > 0 ? (triggers[triggers.length - 1].context || '') : ''
+  const [editingContext, setEditingContext] = useState(null)
+
+  // Reset editing state when item changes
+  useEffect(() => { setEditingContext(null) }, [item.id])
+
+  const handleSaveContext = async () => {
+    if (editingContext === null) return
+    try {
+      await updateDispatch(item.id, { context: editingContext })
+      setEditingContext(null)
+      if (onUpdate) await onUpdate()
+    } catch (e) { alert(e.message) }
+  }
 
   // Tick every second while running so duration stays current
   const [, setTick] = useState(0)
@@ -294,17 +311,50 @@ function DispatchDetail({ item, output }) {
 
       <div style={{ marginBottom: 12 }}>
         <label>Context</label>
-        {triggers.map((entry, i) => (
-          <pre key={i} style={{
-            fontSize: 11, background: '#f5f5f0', padding: 8,
-            borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            border: '1px solid #ddd', marginBottom: triggers.length > 1 ? 4 : 0,
-            color: entry.context ? 'inherit' : '#aaa',
-            fontStyle: entry.context ? 'normal' : 'italic',
-          }}>
-            {entry.context || 'not provided'}
+        {isPending && editingContext !== null ? (
+          <>
+            <textarea
+              value={editingContext}
+              onChange={e => setEditingContext(e.target.value)}
+              style={{
+                fontSize: 11, width: '100%', minHeight: 60, padding: 8,
+                borderRadius: 4, border: '1px solid var(--primary)',
+                fontFamily: 'inherit', resize: 'vertical',
+              }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+              <button className="small primary" onClick={handleSaveContext}>Save</button>
+              <button className="small" onClick={() => setEditingContext(null)}>Cancel</button>
+            </div>
+          </>
+        ) : isPending ? (
+          <pre
+            onClick={() => setEditingContext(lastCtx)}
+            style={{
+              fontSize: 11, background: '#f5f5f0', padding: 8,
+              borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              border: '1px dashed #bbb', cursor: 'pointer',
+              color: lastCtx ? 'inherit' : '#aaa',
+              fontStyle: lastCtx ? 'normal' : 'italic',
+            }}
+            title="Click to edit"
+          >
+            {lastCtx || 'click to add context...'}
           </pre>
-        ))}
+        ) : (
+          triggers.map((entry, i) => (
+            <pre key={i} style={{
+              fontSize: 11, background: '#f5f5f0', padding: 8,
+              borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              border: '1px solid #ddd', marginBottom: triggers.length > 1 ? 4 : 0,
+              color: entry.context ? 'inherit' : '#aaa',
+              fontStyle: entry.context ? 'normal' : 'italic',
+            }}>
+              {entry.context || 'not provided'}
+            </pre>
+          ))
+        )}
       </div>
 
       <div style={{ marginBottom: 12 }}>

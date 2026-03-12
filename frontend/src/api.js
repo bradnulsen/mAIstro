@@ -57,6 +57,9 @@ export const getDispatchQueue = () => fetchJSON('/api/dispatch/queue')
 export const getDispatchOutput = (dispatchId) =>
   fetchJSON(`/api/dispatch/${dispatchId}/output`)
 
+export const updateDispatch = (id, updates) =>
+  fetchJSON(`/api/dispatch/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
+
 export const cancelDispatch = (id) =>
   fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
 

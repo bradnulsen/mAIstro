@@ -302,6 +302,36 @@ async def get_dispatch_output(dispatch_id: int):
     return {"messages": messages, "status": status, "dispatch": dispatch}
 
 
+class UpdateDispatchRequest(BaseModel):
+    context: str | None = None
+
+
+@app.patch("/api/dispatch/{dispatch_id}")
+async def update_dispatch_route(dispatch_id: int, req: UpdateDispatchRequest):
+    """Edit a pending dispatch (only before it starts running)."""
+    _require_project()
+    dispatch = await db.get_dispatch(dispatch_id)
+    if not dispatch:
+        raise HTTPException(404, "Dispatch not found")
+    if dispatch.get("started_at"):
+        raise HTTPException(409, "Cannot edit a dispatch that has already started")
+
+    updates = {}
+    if req.context is not None:
+        updates["context"] = req.context
+        # Also update the triggers JSON array
+        triggers = dispatch.get("triggers") or []
+        if triggers:
+            triggers[-1]["context"] = req.context
+        else:
+            triggers = [{"trigger": dispatch["trigger"], "detail": dispatch.get("trigger_detail"), "context": req.context}]
+        updates["triggers"] = json.dumps(triggers)
+
+    if updates:
+        await db.update_dispatch(dispatch_id, **updates)
+    return {"status": "ok"}
+
+
 @app.post("/api/dispatch/cancel/{dispatch_id}")
 async def cancel_dispatch(dispatch_id: int):
     _require_project()
