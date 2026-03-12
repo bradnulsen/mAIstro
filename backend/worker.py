@@ -122,20 +122,17 @@ async def _sweep_stale():
     if not db.DB_PATH:
         return
     d = await db.get_db()
-    try:
-        rows = await d.execute_fetchall(
-            "SELECT id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
+    rows = await d.execute_fetchall(
+        "SELECT id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
+    )
+    now = utcnow()
+    for row in rows:
+        await d.execute(
+            "UPDATE dispatch_queue SET completed_at = ?, error = ? WHERE id = ?",
+            (now, "interrupted", row["id"])
         )
-        now = utcnow()
-        for row in rows:
-            await d.execute(
-                "UPDATE dispatch_queue SET completed_at = ?, error = ? WHERE id = ?",
-                (now, "interrupted", row["id"])
-            )
-            log.warning("[worker] Marked stale dispatch #%d as interrupted", row["id"])
-        await d.commit()
-    finally:
-        await d.close()
+        log.warning("[worker] Marked stale dispatch #%d as interrupted", row["id"])
+    await d.commit()
 
 
 async def _loop():

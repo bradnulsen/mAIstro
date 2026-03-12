@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
     yield
     await scheduler.stop()
     await worker.stop()
+    await db.close_db()
 
 
 app = FastAPI(title="mAistro", version="0.1.0", lifespan=lifespan)
