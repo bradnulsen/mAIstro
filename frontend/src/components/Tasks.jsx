@@ -355,7 +355,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
 
           <div className="field-group">
             <label>Dependencies (runs after these tasks complete)</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '4px 16px' }}>
               {allTasks.filter(t => t.id !== task.id).map(t => {
                 const deps = getVal('depends_on') || []
                 const checked = deps.includes(t.id)
