@@ -126,6 +126,14 @@ body {
   background: var(--surface);
 }
 
+.status-chip.running {
+  border-color: var(--running);
+}
+
+.status-chip.running:hover {
+  background: var(--rail-bg);
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -142,7 +150,6 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
-.status-dot.idle { background: var(--success); }
 .status-dot.error { background: var(--danger); }
 
 /* ── Buttons ── */
@@ -625,6 +632,9 @@ label {
 
 .chat-tray.open {
   border-left: 1.5px solid var(--border);
+}
+
+.chat-tray.dragging {
   transition: none;
 }
 
@@ -639,7 +649,7 @@ label {
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  cursor: grab;
+  cursor: ew-resize;
   background: var(--accent);
   color: #fff;
   border-radius: 4px 4px 0 0;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listTasks } from './api'
 import Feed from './components/Feed'
 import Tasks from './components/Tasks'
@@ -15,6 +15,7 @@ export default function App() {
   const [tasks, setTasks] = useState([])
   const [chatOpen, setChatOpen] = useState(false)
   const [chatWidth, setChatWidth] = useState(380)
+  const chatTrayRef = useRef(null)
 
   useEffect(() => {
     getProject()
@@ -46,6 +47,8 @@ export default function App() {
     const startW = chatOpen ? chatWidth : 380
     let didDrag = false
 
+    if (chatTrayRef.current) chatTrayRef.current.classList.add('dragging')
+
     const onMove = (e) => {
       const delta = startX - e.clientX
       if (!didDrag && Math.abs(delta) > 5) didDrag = true
@@ -58,6 +61,7 @@ export default function App() {
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      if (chatTrayRef.current) chatTrayRef.current.classList.remove('dragging')
       if (!didDrag) setChatOpen(o => !o)
     }
     document.addEventListener('mousemove', onMove)
@@ -97,8 +101,14 @@ export default function App() {
       <div className="main-area">
         <div className="status-bar">
           {tasks.map(t => (
-            <div key={t.id} className="status-chip">
-              <span className={`status-dot ${t.properties?.running ? 'running' : 'idle'}`} />
+            <div
+              key={t.id}
+              className={`status-chip${t.properties?.running ? ' running' : ''}`}
+              onClick={t.properties?.running ? () => setView(VIEWS.queue) : undefined}
+              title={t.properties?.running ? 'View in Queue' : undefined}
+              style={t.properties?.running ? { cursor: 'pointer' } : undefined}
+            >
+              {t.properties?.running && <span className="status-dot running" />}
               {t.name}
             </div>
           ))}
@@ -111,7 +121,7 @@ export default function App() {
         {view === VIEWS.settings && <Settings />}
       </div>
 
-      <div className={`chat-tray ${chatOpen ? 'open' : ''}`} style={chatOpen ? { width: chatWidth, minWidth: chatWidth } : undefined}>
+      <div ref={chatTrayRef} className={`chat-tray ${chatOpen ? 'open' : ''}`} style={chatOpen ? { width: chatWidth, minWidth: chatWidth } : undefined}>
         <div className="chat-tray-tab" onMouseDown={handleTabMouseDown}>
           Chat
         </div>
