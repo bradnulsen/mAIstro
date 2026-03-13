@@ -104,6 +104,7 @@ function TaskDetail({ task, onRefresh, onDelete }) {
   const [editingInstructions, setEditingInstructions] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  const [activeTab, setActiveTab] = useState('definition')
   const props = task.properties || {}
 
   const refreshSubs = useCallback(() => {
@@ -241,154 +242,169 @@ function TaskDetail({ task, onRefresh, onDelete }) {
         <div style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 8 }}>{dispatchError}</div>
       )}
 
-      {/* Task Definition — two-column layout */}
-      <div className="task-section">
-        <h3>Task Definition</h3>
-        <div className="task-def-columns">
-          <div className="task-def-left">
-            <div className="field-group">
-              <label>Description</label>
-              <AutoTextarea
-                value={getVal('description') || ''}
-                onChange={e => edit('description', e.target.value)}
-                placeholder="Short description for the task registry..."
-                maxHeight={200}
-                minRows={3}
-              />
+      {/* Tabbed sections */}
+      <div className="task-tabs">
+        <button
+          className={`task-tab-btn${activeTab === 'definition' ? ' active' : ''}`}
+          onClick={() => setActiveTab('definition')}
+        >
+          Task Definition
+        </button>
+        <button
+          className={`task-tab-btn${activeTab === 'triggers' ? ' active' : ''}`}
+          onClick={() => setActiveTab('triggers')}
+        >
+          Triggers
+        </button>
+      </div>
+
+      {activeTab === 'definition' && (
+        <div className="task-tab-panel">
+          <div className="task-def-columns">
+            <div className="task-def-left">
+              <div className="field-group">
+                <label>Description</label>
+                <AutoTextarea
+                  value={getVal('description') || ''}
+                  onChange={e => edit('description', e.target.value)}
+                  placeholder="Short description for the task registry..."
+                  maxHeight={200}
+                  minRows={3}
+                />
+              </div>
+
+              <div className="field-group">
+                <label>Allowed Tools</label>
+                <input
+                  type="text"
+                  value={(getVal('base_tools') || []).join(', ')}
+                  onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                  placeholder="Comma-separated tool names..."
+                />
+              </div>
+
+              <div className="field-group">
+                <label>Model</label>
+                <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="opus">Opus</option>
+                  <option value="haiku">Haiku</option>
+                </select>
+              </div>
             </div>
 
-            <div className="field-group">
-              <label>Allowed Tools</label>
-              <input
-                type="text"
-                value={(getVal('base_tools') || []).join(', ')}
-                onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-                placeholder="Comma-separated tool names..."
-              />
-            </div>
-
-            <div className="field-group">
-              <label>Model</label>
-              <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
-                <option value="sonnet">Sonnet</option>
-                <option value="opus">Opus</option>
-                <option value="haiku">Haiku</option>
-              </select>
+            <div className="task-def-right">
+              <div className="field-group">
+                <label>Instructions</label>
+                {editingInstructions || !getVal('instructions') ? (
+                  <textarea
+                    value={getVal('instructions') || ''}
+                    onChange={e => edit('instructions', e.target.value)}
+                    onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
+                    placeholder="Detailed instructions for what this task should do..."
+                    rows={10}
+                    autoFocus={editingInstructions}
+                    style={{ resize: 'vertical', minHeight: 200 }}
+                  />
+                ) : (
+                  <div className="instructions-preview md-content" onClick={() => setEditingInstructions(true)}>
+                    <Markdown>{getVal('instructions')}</Markdown>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
+        </div>
+      )}
 
-          <div className="task-def-right">
-            <div className="field-group">
-              <label>Instructions</label>
-              {editingInstructions || !getVal('instructions') ? (
-                <textarea
-                  value={getVal('instructions') || ''}
-                  onChange={e => edit('instructions', e.target.value)}
-                  onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
-                  placeholder="Detailed instructions for what this task should do..."
-                  rows={10}
-                  autoFocus={editingInstructions}
-                  style={{ resize: 'vertical', minHeight: 200 }}
-                />
-              ) : (
-                <div className="instructions-preview md-content" onClick={() => setEditingInstructions(true)}>
-                  <Markdown>{getVal('instructions')}</Markdown>
-                </div>
+      {activeTab === 'triggers' && (
+        <div className="task-tab-panel">
+          <div className="field-group" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+            <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+              <input
+                type="checkbox"
+                checked={getVal('coalesce_dispatches') || false}
+                onChange={e => edit('coalesce_dispatches', e.target.checked)}
+              />
+              Coalesce pending dispatches
+            </label>
+          </div>
+
+          <div className="field-group">
+            <label>Schedule (cron)</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="text"
+                value={getVal('schedule') || ''}
+                onChange={e => edit('schedule', e.target.value)}
+                placeholder="e.g. */30 * * * *  or  0 9 * * 1-5"
+                style={{ flex: 1, fontFamily: 'monospace' }}
+              />
+              {getVal('schedule') && (
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                  {describeCron(getVal('schedule'))}
+                </span>
               )}
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Triggers */}
-      <div className="task-section">
-        <h3>Triggers</h3>
-
-        <div className="field-group" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-          <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
-            <input
-              type="checkbox"
-              checked={getVal('coalesce_dispatches') || false}
-              onChange={e => edit('coalesce_dispatches', e.target.checked)}
-            />
-            Coalesce pending dispatches
-          </label>
-        </div>
-
-        <div className="field-group">
-          <label>Schedule (cron)</label>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              type="text"
-              value={getVal('schedule') || ''}
-              onChange={e => edit('schedule', e.target.value)}
-              placeholder="e.g. */30 * * * *  or  0 9 * * 1-5"
-              style={{ flex: 1, fontFamily: 'monospace' }}
-            />
-            {getVal('schedule') && (
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                {describeCron(getVal('schedule'))}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="field-group">
-          <label>Timeout (seconds)</label>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              type="number"
-              value={getVal('timeout') ?? 900}
-              onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
-              min={0}
-              step={60}
-              style={{ width: 100, fontFamily: 'monospace' }}
-            />
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              {(() => {
-                const v = getVal('timeout') ?? 900
-                if (v === 0) return 'no limit'
-                const mins = Math.floor(v / 60)
-                const secs = v % 60
-                return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
-              })()}
-            </span>
-          </div>
-        </div>
-
-        <div className="field-group">
-          <label>Glob patterns (one per line)</label>
-          <AutoTextarea
-            value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
-            onChange={e => edit('subscriptions', e.target.value)}
-            maxHeight={150}
-            minRows={2}
-          />
-        </div>
-
-        {/* Resolved files (collapsible) */}
-        {subs && subs.subscriptions.length > 0 && (
           <div className="field-group">
-            <label
-              className="collapsible-label"
-              onClick={() => setSubsOpen(o => !o)}
-            >
-              <span className={`collapse-arrow ${subsOpen ? 'open' : ''}`}>▸</span>
-              Resolved files ({subs.subscriptions.length})
-            </label>
-            {subsOpen && (
-              <div className="resolved-files-list">
-                {subs.subscriptions.map(f => (
-                  <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{f.path}</span>
-                    <span style={{ color: 'var(--text-muted)' }}>{formatSize(f.size)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+            <label>Timeout (seconds)</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="number"
+                value={getVal('timeout') ?? 900}
+                onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
+                min={0}
+                step={60}
+                style={{ width: 100, fontFamily: 'monospace' }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                {(() => {
+                  const v = getVal('timeout') ?? 900
+                  if (v === 0) return 'no limit'
+                  const mins = Math.floor(v / 60)
+                  const secs = v % 60
+                  return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
+                })()}
+              </span>
+            </div>
           </div>
-        )}
-      </div>
+
+          <div className="field-group">
+            <label>Glob patterns (one per line)</label>
+            <AutoTextarea
+              value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
+              onChange={e => edit('subscriptions', e.target.value)}
+              maxHeight={150}
+              minRows={2}
+            />
+          </div>
+
+          {/* Resolved files (collapsible) */}
+          {subs && subs.subscriptions.length > 0 && (
+            <div className="field-group">
+              <label
+                className="collapsible-label"
+                onClick={() => setSubsOpen(o => !o)}
+              >
+                <span className={`collapse-arrow ${subsOpen ? 'open' : ''}`}>▸</span>
+                Resolved files ({subs.subscriptions.length})
+              </label>
+              {subsOpen && (
+                <div className="resolved-files-list">
+                  {subs.subscriptions.map(f => (
+                    <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
+                      <span>{f.path}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{formatSize(f.size)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Danger zone */}
       <div className="task-section">

@@ -484,6 +484,40 @@ label {
   padding-bottom: 4px;
 }
 
+.task-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-light);
+  margin-bottom: 14px;
+}
+
+.task-tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 4px 14px 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.task-tab-btn:hover {
+  color: var(--text);
+}
+
+.task-tab-btn.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.task-tab-panel {
+  padding-top: 2px;
+}
+
 .task-def-columns {
   display: flex;
   gap: 16px;
