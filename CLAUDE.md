@@ -29,11 +29,11 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 
 ### Data Flow
 1. User opens a target project directory via the UI — backend initializes `.maistro/maistro.db` inside it and installs a git post-commit hook
-2. Tasks are configured with `description` (short reference), `instructions` (detailed task-specific prompt), subscription glob patterns, and a model
+2. Tasks are configured with `description` (short reference), `instructions` (detailed task-specific prompt), subscription glob patterns, `depends_on` (list of upstream task IDs), and a model
 3. **Dispatch is queue-first**: all dispatches (manual, watch-triggered, task-queued) create a `dispatch_queue` record. A background worker pulls from the queue and processes one dispatch at a time
 4. The worker builds the system/user prompt, spawns the Claude CLI subprocess, streams NDJSON output, and stores messages durably in a chat session linked to the dispatch
 5. The CLI agent commits its own changes via its tools — no auto-commit from the platform
-6. Post-commit hook notifies backend — watch-enabled tasks whose subscriptions match changed files get auto-enqueued (with cooldown)
+6. Post-commit hook notifies backend — tasks with subscriptions matching changed files get auto-enqueued (with cooldown)
 
 ### Key Design Decisions
 - **Git as source of truth**: all project content lives in git. The SQLite DB (`.maistro/` dir, gitignored) holds only operational state — task configs, dispatch queue, chat sessions
@@ -70,9 +70,9 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 - Task IDs are slugified from names (see `database.slugify`)
 - Task commit authorship: `<TaskName> <<task-id>@maistro.local>`
 - SSE event types: `text`, `result`, `error`, `session_id`, `dispatch`, `tool_use`
-- Dispatch triggers: `manual`, `commit` (watch), `task_queue` (queued by another task)
+- Dispatch triggers: `manual`, `commit` (watch), `dependency` (upstream task completed), `task_queue` (queued by another task), `schedule`, `resume`, `retry`
 - Watch behavior: tasks with non-empty subscriptions auto-trigger on matching commits (no separate toggle — subscriptions presence = watch active)
-- Dispatch coalescing: `commit` triggers always coalesce with other pending `commit` dispatches; `schedule` always coalesces globally; `coalesce_dispatches=true` coalesces all trigger types; `manual`/`task_queue`/`resume`/`retry` never coalesce
+- Dispatch coalescing: `commit` and `dependency` coalesce with other pending dispatches of the same type (multiple commits/dependency resolutions while busy = one catch-up run); `schedule` always coalesces globally; `coalesce_dispatches=true` coalesces globally across all trigger types; `manual`/`task_queue`/`resume`/`retry` never coalesce
 - Running state is derived from `dispatch_queue` (started_at IS NOT NULL AND completed_at IS NULL), not stored as a task property
 - Subscriptions serve dual purpose: trigger matching (watch) and context injection (all dispatches)
 - `dispatch_queue.context` column stores trigger-specific data (human instructions, task handoff, commit metadata)
