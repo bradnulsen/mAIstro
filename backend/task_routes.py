@@ -68,6 +68,16 @@ async def update_task(task_id: str, req: UpdateTaskRequest):
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No updates provided")
+
+    # Validate depends_on: no self-dependency, no cycles
+    if "depends_on" in updates:
+        new_deps = updates["depends_on"]
+        if task_id in new_deps:
+            raise HTTPException(400, "A task cannot depend on itself")
+        cycle = await _detect_dependency_cycle(task_id, new_deps)
+        if cycle:
+            raise HTTPException(400, f"Circular dependency: {' → '.join(cycle)}")
+
     task = await db.update_task(task_id, updates)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -99,3 +109,38 @@ async def get_task_subscriptions(task_id: str):
     props = task["properties"]
     subs = git.resolve_glob_files(state.PROJECT_DIR, props.get("subscriptions") or [])
     return {"subscriptions": subs}
+
+
+# ── Helpers ────────────────────────────────────────────────
+
+async def _detect_dependency_cycle(task_id: str, new_deps: list[str]) -> list[str] | None:
+    """DFS cycle detection. Returns the cycle path if found, else None."""
+    all_tasks = await db.list_tasks()
+    dep_graph = {t["id"]: list(t["properties"].get("depends_on") or []) for t in all_tasks}
+    dep_graph[task_id] = new_deps  # apply proposed change
+
+    visited = set()
+    path = []
+
+    def dfs(node):
+        if node in path:
+            cycle_start = path.index(node)
+            return path[cycle_start:] + [node]
+        if node in visited:
+            return None
+        visited.add(node)
+        path.append(node)
+        for dep in dep_graph.get(node, []):
+            result = dfs(dep)
+            if result:
+                return result
+        path.pop()
+        return None
+
+    # Check from the task being updated — follow its new deps
+    for dep in new_deps:
+        result = dfs(dep)
+        if result:
+            # Prepend the task itself to show the full cycle
+            return [task_id] + result
+    return None
