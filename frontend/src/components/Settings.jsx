@@ -154,6 +154,7 @@ export default function Settings() {
                 type="number"
                 value={defaultTimeout}
                 onChange={e => setDefaultTimeout(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleSaveTimeout()}
                 placeholder="e.g. 300"
               />
             </div>
@@ -174,7 +175,7 @@ export default function Settings() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 'bold', fontSize: 12 }}>{s.name}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {s.command} {s.args ? JSON.parse(s.args).join(' ') : ''}
+                  {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
                 </div>
               </div>
               <button className="small danger" onClick={() => handleDeleteMcp(s.name)}>Remove</button>
