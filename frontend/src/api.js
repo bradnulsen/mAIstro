@@ -71,7 +71,6 @@ export const resumeDispatch = (id) =>
 export const retryDispatch = (id, context) =>
   fetchJSON(`/api/dispatch/${id}/retry`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ context }),
   })
 

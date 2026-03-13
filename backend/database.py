@@ -29,11 +29,12 @@ async def get_db() -> aiosqlite.Connection:
 
 
 async def close_db():
-    """Close the persistent connection. Call from lifespan teardown."""
-    global _conn
+    """Close the persistent connection and reset state. Call from lifespan teardown."""
+    global _conn, DB_PATH
     if _conn is not None:
         await _conn.close()
         _conn = None
+    DB_PATH = None
 
 
 async def init_db(project_dir: str):
@@ -152,16 +153,10 @@ async def _migrate_db(db: aiosqlite.Connection):
     if "dispatch_id" not in cols:
         await db.execute("ALTER TABLE chat_sessions ADD COLUMN dispatch_id INTEGER")
 
-    # Migrate mode=watch tasks to watch_enabled=true (historical)
-    await db.execute("""
-        INSERT OR IGNORE INTO task_properties (task_id, key, value)
-        SELECT task_id, 'watch_enabled', 'true'
-        FROM task_properties
-        WHERE key = 'mode' AND value = 'watch'
-    """)
-
-    # Remove legacy mode, running, and watch_enabled properties
-    # watch_enabled is superseded by subscriptions-as-watch-enable: having subscriptions implies watching
+    # Remove legacy properties superseded by current design:
+    # - mode: replaced by subscriptions-as-watch-enable
+    # - running: now derived from dispatch_queue
+    # - watch_enabled: having subscriptions implies watching
     await db.execute("DELETE FROM task_properties WHERE key IN ('mode', 'running', 'watch_enabled')")
     await db.execute("DELETE FROM task_property_defs WHERE key IN ('mode', 'running', 'watch_enabled')")
 

@@ -173,6 +173,7 @@ async def remove_recent_project(path: str):
 @app.post("/api/project/close")
 async def close_project():
     state.PROJECT_DIR = None
+    await db.close_db()
     return {"status": "ok"}
 
 
