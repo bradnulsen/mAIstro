@@ -9,6 +9,7 @@ export const TRIGGER_ICONS = {
   resume: '↻',
   retry: '⟳',
   dependency: '⛓',
+  schedule: '⏰',
 }
 
 /**

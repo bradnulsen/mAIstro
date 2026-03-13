@@ -32,6 +32,7 @@ class UpdateTaskRequest(BaseModel):
     coalesce_dispatches: bool | None = None
     schedule: str | None = None
     timeout: int | None = None
+    depends_on: list[str] | None = None
     sort_order: int | None = None
 
 class ReorderRequest(BaseModel):

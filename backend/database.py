@@ -409,16 +409,6 @@ async def get_oldest_pending_dispatch() -> dict | None:
     return _parse_dispatch_row(rows[0]) if rows else None
 
 
-async def has_pending_dispatch(task_id: str) -> bool:
-    """Check if a task has any pending (not started) dispatches."""
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT 1 FROM dispatch_queue WHERE task_id = ? AND started_at IS NULL AND error IS NULL LIMIT 1",
-        (task_id,),
-    )
-    return bool(rows)
-
-
 async def update_dispatch(dispatch_id: int, **kwargs):
     db = await get_db()
     sets = ", ".join(f"{k} = ?" for k in kwargs)

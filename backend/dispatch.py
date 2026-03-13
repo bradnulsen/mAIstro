@@ -256,11 +256,8 @@ async def check_watch_triggers(commit_hash: str, project_dir: str) -> list[dict]
 
     for task in tasks:
         props = task["properties"]
-        if not props.get("subscriptions") or props.get("running"):
-            continue
-
         patterns = props.get("subscriptions")
-        if not patterns:
+        if not patterns or props.get("running"):
             continue
 
         if _any_file_matches(changed_files, patterns):
