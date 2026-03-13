@@ -248,7 +248,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
           className={`task-tab-btn${activeTab === 'definition' ? ' active' : ''}`}
           onClick={() => setActiveTab('definition')}
         >
-          Task Definition
+          Task Configuration
         </button>
         <button
           className={`task-tab-btn${activeTab === 'triggers' ? ' active' : ''}`}
@@ -290,6 +290,29 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
                   <option value="opus">Opus</option>
                   <option value="haiku">Haiku</option>
                 </select>
+              </div>
+
+              <div className="field-group">
+                <label>Timeout (seconds)</label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    type="number"
+                    value={getVal('timeout') ?? 900}
+                    onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
+                    min={0}
+                    step={60}
+                    style={{ width: 100, fontFamily: 'monospace' }}
+                  />
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    {(() => {
+                      const v = getVal('timeout') ?? 900
+                      if (v === 0) return 'no limit'
+                      const mins = Math.floor(v / 60)
+                      const secs = v % 60
+                      return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
+                    })()}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -375,33 +398,11 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
           </div>
 
           <div className="field-group">
-            <label>Timeout (seconds)</label>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                type="number"
-                value={getVal('timeout') ?? 900}
-                onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
-                min={0}
-                step={60}
-                style={{ width: 100, fontFamily: 'monospace' }}
-              />
-              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                {(() => {
-                  const v = getVal('timeout') ?? 900
-                  if (v === 0) return 'no limit'
-                  const mins = Math.floor(v / 60)
-                  const secs = v % 60
-                  return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
-                })()}
-              </span>
-            </div>
-          </div>
-
-          <div className="field-group">
-            <label>Glob patterns (one per line)</label>
+            <label>Subscriptions</label>
             <AutoTextarea
               value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
               onChange={e => edit('subscriptions', e.target.value)}
+              placeholder={"e.g. backend/**/*.py\nfrontend/src/**/*.jsx"}
               maxHeight={150}
               minRows={2}
             />

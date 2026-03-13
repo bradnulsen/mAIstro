@@ -3,7 +3,7 @@
 export const TRIGGER_ICONS = {
   commit: '⚡',
   task_queue: '↗',
-  manual: '→',
+  manual: '✋',
   human: '👤',
   task: '🤖',
   resume: '↻',

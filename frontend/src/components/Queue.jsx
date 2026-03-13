@@ -308,10 +308,10 @@ export default function Queue() {
                 </div>
                 <div className="feed-body">
                   <div className="feed-meta">
-                    <span className="feed-author">{item.task_name}</span>
                     <span className="feed-trigger">
                       {triggerTypes.map(t => TRIGGER_ICONS[t] || '').join('')}{triggerCount}
                     </span>
+                    <span className="feed-author">{item.task_name}</span>
                     <span className={`queue-status ${status}`}>
                       {STATUS_LABELS[status]}
                     </span>
