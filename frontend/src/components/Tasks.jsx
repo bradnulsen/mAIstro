@@ -10,6 +10,24 @@ export default function Tasks({ tasks, onRefresh }) {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [createError, setCreateError] = useState('')
+  const [search, setSearch] = useState('')
+
+  const filteredTasks = tasks.filter(t => {
+    if (!search.trim()) return true
+    const q = search.toLowerCase()
+    const props = t.properties || {}
+    const fields = [
+      t.name,
+      t.id,
+      props.description,
+      props.instructions,
+      props.model,
+      Array.isArray(props.subscriptions) ? props.subscriptions.join(' ') : '',
+      Array.isArray(props.depends_on) ? props.depends_on.join(' ') : '',
+      props.schedule,
+    ]
+    return fields.some(f => f && f.toLowerCase().includes(q))
+  })
 
   useEffect(() => {
     if (!selected && tasks.length > 0) {
@@ -41,8 +59,22 @@ export default function Tasks({ tasks, onRefresh }) {
 
       <div className="tasks-layout">
         <div className="task-list">
+          <div className="task-search">
+            <input
+              type="text"
+              placeholder="Filter tasks..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+            {search && (
+              <button className="task-search-clear" onClick={() => setSearch('')}>✕</button>
+            )}
+          </div>
           <div className="scroll-area">
-            {tasks.map(t => (
+            {filteredTasks.length === 0 && search && (
+              <div style={{ padding: '12px', fontSize: 11, color: 'var(--text-muted)' }}>No matches</div>
+            )}
+            {filteredTasks.map(t => (
               <div
                 key={t.id}
                 className={`task-list-item ${selected === t.id ? 'active' : ''}`}

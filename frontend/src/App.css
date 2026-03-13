@@ -391,6 +391,36 @@ label {
   box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.4);
 }
 
+.task-search {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-light);
+  position: relative;
+}
+
+.task-search input {
+  width: 100%;
+  font-size: 11px;
+  padding: 4px 22px 4px 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  background: var(--bg);
+  box-sizing: border-box;
+}
+
+.task-search-clear {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 4px;
+  line-height: 1;
+}
+
 .task-list-footer {
   padding: 8px 12px;
   border-top: 1px solid var(--border-light);
