@@ -2,7 +2,7 @@
 
 ## Current State
 
-mAistro is a working, self-sustaining orchestration platform with a closed, robust core loop. Tasks configure, queue, dispatch via Claude CLI, stream output in real-time, enforce timeouts, and commit results to git. Watch, schedule, and task-to-task triggers fire automatically. The dispatch lifecycle is **resilient** — failed dispatches can be resumed (preserving CLI session state) or retried from scratch. **Dispatch diffs** now show exactly what code an agent changed, directly in the Queue detail panel.
+mAistro is a fully operational, self-sustaining multi-agent orchestration platform. The core dispatch loop is resilient and complete. The UI exposes all backend capabilities — from task configuration and queue management to settings, MCP servers, and model selection. The codebase is cleanly modularized with extracted route modules, a shared state layer, and Pydantic models throughout.
 
 What's in place:
 - **Queue-first dispatch** — background worker, auto/manual processing, stale sweep, cancellation with confirmation UX
@@ -12,47 +12,29 @@ What's in place:
 - **Timeout enforcement** — configurable per-task timeout with watchdog, graceful terminate then kill, partial output preserved
 - **Watch mode** — post-commit hook, glob subscription matching, per-task toggle, cooldown
 - **Task-to-task dispatch** — `task_queue` trigger with context passing and upstream summary injection
-- **Cron scheduling** — timed dispatch with fire tracking that survives restarts
-- **Coalesced dispatches** — multiple triggers merge into one queue entry
-- **Rich Queue UI** — upcoming/past filtering, editable context, live streaming, stored output as markdown, cancel confirmation, resume/retry actions, diff view
+- **Cron scheduling** — timed dispatch with fire tracking, coalesced triggers with HEAD commit context
+- **Rich Queue UI** — upcoming/past filtering, editable context, live streaming, stored output as markdown, cancel confirmation, resume/retry actions, diff view, run-now for individual pending items
 - **Task config** — two-column layout, markdown preview, auto-resize textareas, subscription file preview, dispatch spinner with animation
+- **Settings view** — queue behavior, default model, default timeout, MCP server management, project info
 - **Chat with session persistence** — SSE streaming, session list, dispatch-linked audit trail
 - **Git feed** — commit diffs with file/line stats, live polling
-- **Persistent DB connection** — pooled async SQLite, eliminates connection-per-call overhead
-- **Clean route architecture** — dispatch/queue routes extracted to `queue_routes.py`, chat routes in `chat.py`, Pydantic request models throughout
+- **Clean route architecture** — `task_routes.py`, `queue_routes.py`, `chat.py` as separate routers; `state.py` for shared mutable state; Pydantic request models throughout
 
 ## What Matters Now
 
-The core loop is complete: dispatches run, stream, show diffs, timeout, cancel, resume, and retry. The frontend is polished enough to use without friction. The code architecture is clean and modular.
+The platform is feature-complete for single-agent workflows. Every backend capability is reachable through UI. The code is modular and maintainable. The remaining gap is **multi-agent coordination** — the system runs tasks independently but has no declarative way to compose them into workflows.
 
-The platform has reached a point where remaining work is **additive, not foundational**. The next phase is about three things:
+The next phase is about turning "a collection of tasks" into "a coordinated system":
 
-1. **Configuration** — exposing existing backend capabilities through UI (settings are hidden behind raw API calls)
-2. **Composition** — declarative task relationships that turn a "collection of tasks" into "coordinated workflows"
-3. **Safety** — approval gates that make unattended operation trustworthy
+1. **Composition** — declarative task relationships that create workflows
+2. **Safety** — approval gates that make unattended automation trustworthy
+3. **Visibility** — observability into what agents are doing across the system
 
-## Priority 1: Settings and Configuration UI
+## Priority 1: Task Dependencies and Workflows
 
-**The problem:** MCP server management, model defaults, and project-level config all have working backend routes but no UI. There's no way to configure these things without knowing the API.
+**The problem:** Task-to-task dispatch works ad-hoc (a running task can queue another via context), but there's no declarative way to say "Architect runs after Strategist." Workflows depend on what individual tasks remember to do, not what the system enforces.
 
-**Why first:** This is the lowest-effort, highest-polish priority. Backend capabilities already exist that users can't reach. A settings view turns hidden API endpoints into discoverable features. It makes the product feel complete rather than developer-only. And it unblocks the next priorities — dependency config and approval toggles will need a place to live.
-
-**Specifically:**
-- Settings view accessible from a new rail icon, rendering as a full view (like Feed, Tasks, Queue)
-- Sections:
-  - **Queue behavior** — auto-dispatch toggle (duplicates Queue header control, but discoverable here too)
-  - **Default model** — select from available models
-  - **Default timeout** — numeric input in seconds
-  - **MCP servers** — list, add, remove server configurations (backend CRUD already exists)
-  - **Project info** — path display, git status summary
-- Single scrollable page with section headers, not tabs
-- API routes already exist: `/api/mcp/servers`, `/api/config/`, `/api/config/{key}`
-
-## Priority 2: Task Dependencies and Workflows
-
-**The problem:** Task-to-task dispatch works ad-hoc (a running task can queue another via context), but there's no declarative way to say "Architect runs after Strategist." This limits workflows to what individual tasks remember to do, rather than what the system enforces.
-
-**Why second:** With settings in place, the system is visible and configurable. Dependencies make it *composable* — the leap from "collection of tasks" to "coordinated workflow." This is the feature that makes mAistro qualitatively different from just running CLI agents manually.
+**Why first:** This is the feature that makes mAistro qualitatively different from running CLI agents manually. Dependencies turn a "collection of tasks" into a "coordinated workflow." With settings complete, this is the next capability that changes what the system *is*, not just how it looks.
 
 **Specifically:**
 - Add optional `depends_on` task property (list of task IDs)
@@ -63,7 +45,7 @@ The platform has reached a point where remaining work is **additive, not foundat
 
 **Design consideration:** Dependencies should be a new trigger type (`dependency`), not a replacement for watch or schedule. The enqueue happens in `_process_dispatch` after successful completion, checking `depends_on` across all tasks. This keeps the trigger model uniform.
 
-## Priority 3: Approval Gates
+## Priority 2: Approval Gates
 
 **The problem:** As mAistro becomes more autonomous (watch + schedule + dependencies), there's no way to require human review before a dispatch executes. A watch-triggered dispatch on a sensitive task could make unwanted changes with no checkpoint.
 
@@ -74,7 +56,18 @@ The platform has reached a point where remaining work is **additive, not foundat
 - Approved dispatches proceed normally; rejected dispatches are marked as skipped
 - Manual dispatches bypass approval (you already chose to run it)
 
-**Why this matters:** This is the safety valve that makes unattended operation trustworthy. Without it, increasing automation means increasing risk. With it, you can run watch + schedule on everything and still maintain control over what actually executes.
+**Why this matters:** This is the safety valve that makes unattended operation trustworthy. Without it, increasing automation means increasing risk. With it, you can run watch + schedule + dependencies on everything and still maintain control over what actually executes.
+
+## Priority 3: Dispatch Observability
+
+**The problem:** The system runs tasks and stores output, but there's no aggregated view of what happened across tasks over time. You can see individual dispatch output in Queue, but there's no way to answer "what did my agents accomplish today?" or "which tasks are failing most often?"
+
+**Specifically:**
+- **Activity summary** — a dashboard or feed entry that aggregates dispatch results across tasks (success/fail counts, last run times, total commits)
+- **Dispatch timeline** — visual timeline showing when dispatches ran, how long they took, and whether they overlapped with each other
+- **Error patterns** — surface recurring failures (same task timing out, same error message) so the user can adjust configuration
+
+**Why third:** The system works without this, but as dispatch volume grows (especially with dependencies and scheduling), the user needs a way to stay oriented. This is about making the autonomous system *legible*.
 
 ## Deferred
 
@@ -97,7 +90,8 @@ Valuable but not blocking the current phase:
 
 ## Completed
 
-- **Dispatch Diff View** (was P1) — `start_commit` recorded when dispatch begins, `result_commit` on completion. Queue detail panel shows collapsible diff section with file-level summary and per-file expandable diffs. Reuses `git.diff()` infrastructure. Shipped in `def9824`.
-- **Dispatch Continuity — Resume and Retry** (was P1) — Resume reuses CLI session via `--resume`, retry re-enqueues with original context. New trigger types `resume` and `retry`. `resume_session_id` column on `dispatch_queue`, chat session reuse for resume. Queue detail panel shows Resume/Retry buttons on completed dispatches. Shipped in `fdd357b`, refined in `11b225d` and `b35b3cc`.
-- **Route Modularization** (was Deferred) — Dispatch and queue routes extracted to `queue_routes.py` with Pydantic request models. `main.py` down to project, task, feed, git, hook, MCP, and config routes. Shipped in `b35b3cc` and `b18ea99`.
-- **Dispatch Timeout Enforcement** (was P1) — configurable per-task `timeout` property via EAV system, watchdog in worker enforces it, graceful terminate + kill after 5s grace period, partial output preserved with "timed out" indicator. Shipped across commits `52d1722` through `d0e4426`.
+- **Settings and Configuration UI** (was P1) — Settings view with queue behavior toggle, default model selector, default timeout input, MCP server management (list/add/remove), and project info display. Accessible from rail navigation. Shipped in `afc7f5c`.
+- **Route Modularization** — Task routes extracted to `task_routes.py`, dispatch/queue routes in `queue_routes.py`, chat routes in `chat.py`. Shared mutable state extracted to `state.py` to eliminate circular imports. Pydantic request models throughout. Shipped across `b35b3cc`, `b18ea99`, `c9fd29b`, `86c7ab6`.
+- **Dispatch Diff View** — `start_commit` recorded when dispatch begins, `result_commit` on completion. Queue detail panel shows collapsible diff section with file-level summary and per-file expandable diffs. Shipped in `def9824`.
+- **Dispatch Continuity — Resume and Retry** — Resume reuses CLI session via `--resume`, retry re-enqueues with original context. New trigger types `resume` and `retry`. Queue detail panel shows Resume/Retry buttons. Shipped in `fdd357b`.
+- **Dispatch Timeout Enforcement** — configurable per-task `timeout` property, watchdog in worker, graceful terminate + kill, partial output preserved. Shipped across `52d1722` through `d0e4426`.
