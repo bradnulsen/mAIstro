@@ -316,9 +316,7 @@ export default function Queue() {
                     <span>{formatDate(isUpcoming(item) ? item.created_at : (item.completed_at || item.created_at), true)}</span>
                   </div>
                   <div className="feed-message">
-                    {previewCtx
-                      ? previewCtx.length > 80 ? previewCtx.slice(0, 80) + '...' : previewCtx
-                      : `${TRIGGER_LABELS[item.trigger] || item.trigger} dispatch`}
+                    {previewCtx || `${TRIGGER_LABELS[item.trigger] || item.trigger} dispatch`}
                   </div>
                 </div>
               </div>
