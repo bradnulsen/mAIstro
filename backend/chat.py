@@ -63,7 +63,7 @@ async def _build_chat_context() -> str:
         props = t["properties"]
         status = "RUNNING" if props.get("running") else "idle"
         desc = props.get("description") or "(no description)"
-        watch = "watch" if props.get("watch_enabled") else "manual"
+        watch = "watch" if props.get("subscriptions") else "manual"
         task_lines.append(f"- **{t['name']}** [{watch}, {status}] — {desc}")
     task_summary = "\n".join(task_lines) if task_lines else "(no tasks configured)"
 

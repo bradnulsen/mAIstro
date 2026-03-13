@@ -29,7 +29,6 @@ class UpdateTaskRequest(BaseModel):
     disallowed_tools: list[str] | None = None
     mcp_servers: list[str] | None = None
     subscriptions: list[str] | None = None
-    watch_enabled: bool | None = None
     coalesce_dispatches: bool | None = None
     schedule: str | None = None
     timeout: int | None = None

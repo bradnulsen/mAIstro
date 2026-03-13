@@ -130,7 +130,6 @@ INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES
     ('disallowed_tools', '[]', 'json'),
     ('mcp_servers', '[]', 'json'),
     ('subscriptions', '[]', 'json'),
-    ('watch_enabled', 'false', 'boolean'),
     ('coalesce_dispatches', 'false', 'boolean'),
     ('sort_order', '0', 'integer'),
     ('schedule', '', 'string'),
@@ -152,7 +151,7 @@ async def _migrate_db(db: aiosqlite.Connection):
     if "dispatch_id" not in cols:
         await db.execute("ALTER TABLE chat_sessions ADD COLUMN dispatch_id INTEGER")
 
-    # Migrate mode=watch tasks to watch_enabled=true
+    # Migrate mode=watch tasks to watch_enabled=true (historical)
     await db.execute("""
         INSERT OR IGNORE INTO task_properties (task_id, key, value)
         SELECT task_id, 'watch_enabled', 'true'
@@ -160,9 +159,10 @@ async def _migrate_db(db: aiosqlite.Connection):
         WHERE key = 'mode' AND value = 'watch'
     """)
 
-    # Remove legacy mode and running properties
-    await db.execute("DELETE FROM task_properties WHERE key IN ('mode', 'running')")
-    await db.execute("DELETE FROM task_property_defs WHERE key IN ('mode', 'running')")
+    # Remove legacy mode, running, and watch_enabled properties
+    # watch_enabled is superseded by subscriptions-as-watch-enable: having subscriptions implies watching
+    await db.execute("DELETE FROM task_properties WHERE key IN ('mode', 'running', 'watch_enabled')")
+    await db.execute("DELETE FROM task_property_defs WHERE key IN ('mode', 'running', 'watch_enabled')")
 
     # Add dispatch_method to dispatch_queue
     dq_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
@@ -304,24 +304,33 @@ async def enqueue_dispatch(task_id: str, trigger: str,
                            context: str | None = None) -> int:
     """Enqueue a dispatch, coalescing into an existing pending record if applicable.
 
-    Coalescing happens when:
-    - The task has coalesce_dispatches enabled, OR
-    - The trigger is 'schedule' (always coalesces — repeated scheduled fires are functionally identical)
+    Coalescing rules:
+    - 'schedule' always coalesces globally — repeated fires are identical signals
+    - 'commit' always coalesces with other pending 'commit' dispatches — multiple commits
+      while a task is busy = one catch-up run covering all of them
+    - coalesce_dispatches=true coalesces globally — never more than one pending dispatch
+      regardless of trigger type (useful for tasks that just need "run when things change")
+    - All other triggers (manual, task_queue, resume, retry) never coalesce — each
+      represents a distinct explicit intent
     """
     new_entry = {"trigger": trigger, "detail": trigger_detail, "context": context}
     db = await get_db()
 
-    # Check if coalescing applies
     task = await get_task(task_id)
-    should_coalesce = (trigger == "schedule") or (task and task["properties"].get("coalesce_dispatches"))
-    if should_coalesce:
-        rows = await db.execute_fetchall(
-            """SELECT id, trigger, trigger_detail, context, triggers
-               FROM dispatch_queue
-               WHERE task_id = ? AND started_at IS NULL AND error IS NULL
-               ORDER BY created_at ASC LIMIT 1""",
-            (task_id,)
-        )
+    coalesce_global = (trigger == "schedule") or (task and task["properties"].get("coalesce_dispatches"))
+    coalesce_same_type = (trigger == "commit")
+
+    if coalesce_global or coalesce_same_type:
+        query = """SELECT id, trigger, trigger_detail, context, triggers
+                   FROM dispatch_queue
+                   WHERE task_id = ? AND started_at IS NULL AND error IS NULL"""
+        params: list = [task_id]
+        if coalesce_same_type and not coalesce_global:
+            # Commit coalescing: only merge with another pending commit dispatch
+            query += " AND trigger = ?"
+            params.append(trigger)
+        query += " ORDER BY created_at ASC LIMIT 1"
+        rows = await db.execute_fetchall(query, params)
         if rows:
             existing = dict(rows[0])
             # Build triggers array from existing record

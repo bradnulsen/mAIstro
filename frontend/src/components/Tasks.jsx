@@ -308,20 +308,8 @@ function TaskDetail({ task, onRefresh, onDelete }) {
           <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
             <input
               type="checkbox"
-              checked={getVal('watch_enabled') || false}
-              onChange={e => edit('watch_enabled', e.target.checked)}
-            />
-            Auto-queue on commit
-          </label>
-          <label className="checkbox-label" style={{
-            whiteSpace: 'nowrap',
-            opacity: getVal('watch_enabled') ? 1 : 0.4,
-          }}>
-            <input
-              type="checkbox"
               checked={getVal('coalesce_dispatches') || false}
               onChange={e => edit('coalesce_dispatches', e.target.checked)}
-              disabled={!getVal('watch_enabled')}
             />
             Coalesce pending dispatches
           </label>

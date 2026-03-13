@@ -71,7 +71,8 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 - Task commit authorship: `<TaskName> <<task-id>@maistro.local>`
 - SSE event types: `text`, `result`, `error`, `session_id`, `dispatch`, `tool_use`
 - Dispatch triggers: `manual`, `commit` (watch), `task_queue` (queued by another task)
-- Watch behavior: controlled by `watch_enabled` boolean property on tasks (replaces old `mode` property)
+- Watch behavior: tasks with non-empty subscriptions auto-trigger on matching commits (no separate toggle — subscriptions presence = watch active)
+- Dispatch coalescing: `commit` triggers always coalesce with other pending `commit` dispatches; `schedule` always coalesces globally; `coalesce_dispatches=true` coalesces all trigger types; `manual`/`task_queue`/`resume`/`retry` never coalesce
 - Running state is derived from `dispatch_queue` (started_at IS NOT NULL AND completed_at IS NULL), not stored as a task property
 - Subscriptions serve dual purpose: trigger matching (watch) and context injection (all dispatches)
 - `dispatch_queue.context` column stores trigger-specific data (human instructions, task handoff, commit metadata)
