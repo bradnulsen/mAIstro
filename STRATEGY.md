@@ -2,83 +2,84 @@
 
 ## Current State
 
-mAistro is a fully operational, self-sustaining multi-agent orchestration platform. The core dispatch loop is resilient and complete. The UI exposes all backend capabilities — from task configuration and queue management to settings, MCP servers, and model selection. The codebase is cleanly modularized with extracted route modules, a shared state layer, and Pydantic models throughout.
+mAistro is a fully operational multi-agent orchestration platform with a complete trigger and coordination layer. Five trigger types — manual, commit (watch), schedule (cron), task_queue, and dependency — create a flexible automation system where tasks can be composed into workflows declaratively. The codebase is cleanly modularized, the UI exposes all backend capabilities, and the dispatch pipeline is resilient.
 
 What's in place:
-- **Queue-first dispatch** — background worker, auto/manual processing, stale sweep, cancellation with confirmation UX
-- **Dispatch continuity** — resume (via CLI `--resume` with session ID) and retry for failed/timed-out dispatches
-- **Dispatch diff view** — `start_commit`/`result_commit` tracking with inline diff display in Queue detail panel
-- **Live dispatch streaming** — SSE endpoint with real-time text, tool use, and thinking indicator
-- **Timeout enforcement** — configurable per-task timeout with watchdog, graceful terminate then kill, partial output preserved
-- **Watch mode** — post-commit hook, glob subscription matching, per-task toggle, cooldown
-- **Task-to-task dispatch** — `task_queue` trigger with context passing and upstream summary injection
-- **Cron scheduling** — timed dispatch with fire tracking, coalesced triggers with HEAD commit context
-- **Rich Queue UI** — upcoming/past filtering, editable context, live streaming, stored output as markdown, cancel confirmation, resume/retry actions, diff view, run-now for individual pending items
-- **Task config** — two-column layout, markdown preview, auto-resize textareas, subscription file preview, dispatch spinner with animation
-- **Settings view** — queue behavior, default model, default timeout, MCP server management, project info
+- **Queue-first dispatch** — background worker, auto/manual processing, stale sweep, cancellation
+- **Five trigger types** — manual, commit (watch via subscriptions), schedule (cron), task_queue (ad-hoc from running tasks), dependency (declarative `depends_on`)
+- **Dispatch continuity** — resume (CLI `--resume`) and retry for failed/timed-out dispatches
+- **Dispatch diff view** — `start_commit`/`result_commit` tracking with inline diff display
+- **Live dispatch streaming** — SSE with real-time text, tool use, and thinking indicator
+- **Timeout enforcement** — configurable per-task with watchdog, graceful terminate then kill
+- **Coalescing** — commit triggers always coalesce; schedule always coalesces globally; `coalesce_dispatches` coalesces all trigger types; dependency coalesces same-type
+- **Task config** — tabbed UI (definition/triggers), dependency checkboxes with cycle prevention, subscription file preview, markdown preview
+- **Settings** — queue behavior, default model, default timeout, MCP server management
 - **Chat with session persistence** — SSE streaming, session list, dispatch-linked audit trail
 - **Git feed** — commit diffs with file/line stats, live polling
-- **Clean route architecture** — `task_routes.py`, `queue_routes.py`, `chat.py` as separate routers; `state.py` for shared mutable state; Pydantic request models throughout
+- **Clean architecture** — extracted route modules, shared state layer, Pydantic models, persistent DB connection
 
 ## What Matters Now
 
-The platform is feature-complete for single-agent workflows. Every backend capability is reachable through UI. The code is modular and maintainable. The remaining gap is **multi-agent coordination** — the system runs tasks independently but has no declarative way to compose them into workflows.
+The coordination layer is functionally complete. The system can compose tasks into declarative workflows via dependencies, trigger them from multiple sources, and process them reliably. The remaining gaps are about **trust, visibility, and throughput**:
 
-The next phase is about turning "a collection of tasks" into "a coordinated system":
+1. **Trust** — automatic dispatches run without human checkpoint. As automation scales, this becomes the limiting factor.
+2. **Visibility** — understanding what agents accomplished requires clicking through individual dispatches. No aggregated view.
+3. **Throughput** — sequential processing bottlenecks dependency chains. Independent tasks wait unnecessarily.
 
-1. **Composition** — declarative task relationships that create workflows
-2. **Safety** — approval gates that make unattended automation trustworthy
-3. **Visibility** — observability into what agents are doing across the system
+## Priority 1: Approval Gates
 
-## Priority 1: Task Dependencies and Workflows
+**The problem:** With five trigger types creating automatic dispatches, the only safety control is the global `auto_dispatch` toggle — all-or-nothing. There's no way to say "auto-process watch triggers but require approval for dependency chains" or "let Scribe run unattended but gate Architect."
 
-**The problem:** Task-to-task dispatch works ad-hoc (a running task can queue another via context), but there's no declarative way to say "Architect runs after Strategist." Workflows depend on what individual tasks remember to do, not what the system enforces.
-
-**Why first:** This is the feature that makes mAistro qualitatively different from running CLI agents manually. Dependencies turn a "collection of tasks" into a "coordinated workflow." With settings complete, this is the next capability that changes what the system *is*, not just how it looks.
+**Why first:** This is the feature that lets users safely increase automation. Without it, scaling up triggers means scaling up risk. With it, users can enable aggressive automation on low-risk tasks while keeping human oversight on high-stakes ones.
 
 **Specifically:**
-- Add optional `depends_on` task property (list of task IDs)
-- When a task's dispatch completes successfully, auto-enqueue tasks that declare it as a dependency
-- Pass the completing dispatch's summary downstream as context
-- Queue UI shows dependency chain relationships
-- Compose with existing triggers: a task with `depends_on: ["strategist"]` and `watch_enabled: true` fires on either condition, with coalescing handling overlap
-
-**Design consideration:** Dependencies should be a new trigger type (`dependency`), not a replacement for watch or schedule. The enqueue happens in `_process_dispatch` after successful completion, checking `depends_on` across all tasks. This keeps the trigger model uniform.
-
-## Priority 2: Approval Gates
-
-**The problem:** As mAistro becomes more autonomous (watch + schedule + dependencies), there's no way to require human review before a dispatch executes. A watch-triggered dispatch on a sensitive task could make unwanted changes with no checkpoint.
-
-**Specifically:**
-- Add optional `require_approval` boolean task property (default: false)
-- Approval-gated dispatches enter a `pending_approval` status instead of being immediately processable
+- Add `require_approval` boolean task property (default: false)
+- Approval-gated dispatches enter a `pending_approval` status — queued but not processable until approved
 - Queue UI shows approval-pending items with approve/reject actions
-- Approved dispatches proceed normally; rejected dispatches are marked as skipped
-- Manual dispatches bypass approval (you already chose to run it)
+- Approved dispatches become normal pending items; rejected dispatches are marked as skipped
+- Manual dispatches bypass approval (explicit intent already expressed)
+- Approval status is a dispatch_queue column, not a separate table — keeps the model simple
 
-**Why this matters:** This is the safety valve that makes unattended operation trustworthy. Without it, increasing automation means increasing risk. With it, you can run watch + schedule + dependencies on everything and still maintain control over what actually executes.
+**Design consideration:** The approval check belongs in the worker loop, not in the enqueue path. Enqueue always succeeds (preserving the uniform queue-first model). The worker skips `pending_approval` items when pulling the next dispatch. This means the queue shows everything — approved, pending approval, and processing — giving full visibility into the pipeline.
 
-## Priority 3: Dispatch Observability
+## Priority 2: Activity Dashboard
 
-**The problem:** The system runs tasks and stores output, but there's no aggregated view of what happened across tasks over time. You can see individual dispatch output in Queue, but there's no way to answer "what did my agents accomplish today?" or "which tasks are failing most often?"
+**The problem:** The Queue view shows individual dispatches. The Feed shows individual commits. Neither answers "what did my agents accomplish today?" or "which tasks are failing?" As dispatch volume grows with dependencies and scheduling, users lose the thread.
+
+**Why second:** Observability is what makes autonomous operation sustainable. Without it, users stop trusting the system — not because it's broken, but because they can't tell if it's working.
 
 **Specifically:**
-- **Activity summary** — a dashboard or feed entry that aggregates dispatch results across tasks (success/fail counts, last run times, total commits)
-- **Dispatch timeline** — visual timeline showing when dispatches ran, how long they took, and whether they overlapped with each other
-- **Error patterns** — surface recurring failures (same task timing out, same error message) so the user can adjust configuration
+- **Summary panel** on the Queue view (or a new Dashboard view): success/fail/timeout counts per task over configurable time windows (today, 7d, 30d)
+- **Task health indicators** — surface recurring failures (same task timing out repeatedly, same error pattern)
+- **Timeline view** — when dispatches ran, how long they took, gaps between runs. Simple horizontal bars, not a complex chart library
+- Data is already in `dispatch_queue` — this is a read-only aggregation, no schema changes needed
 
-**Why third:** The system works without this, but as dispatch volume grows (especially with dependencies and scheduling), the user needs a way to stay oriented. This is about making the autonomous system *legible*.
+## Priority 3: Parallel Dispatch
+
+**The problem:** The worker processes one dispatch at a time. With dependency chains, independent branches of the workflow wait in line behind each other. Two tasks that both depend on Strategist must run sequentially even though they have no relationship to each other.
+
+**Why third:** Sequential processing was the right starting point — it eliminates git conflicts and simplifies the mental model. But as workflows grow, it becomes the throughput bottleneck. The mitigation: parallel dispatch with git worktree isolation.
+
+**Specifically:**
+- Allow N concurrent dispatches (configurable, default: 1 to preserve current behavior)
+- Each concurrent dispatch operates in a git worktree, isolating file changes
+- On completion, the worktree's branch is merged back to the main branch
+- Conflict detection: if a merge has conflicts, mark the dispatch as needing manual resolution
+- Worker becomes a pool: N slots, each can run one dispatch independently
+- Worktree lifecycle is managed by the worker — create on start, merge + clean up on completion
+
+**Design consideration:** This is the hardest feature on the roadmap. Git worktrees add real complexity — merge conflicts, branch management, cleanup on failure. The tracer bullet should be: two concurrent dispatches in separate worktrees, auto-merge on clean completion, error on conflict. Fancy conflict resolution comes later.
 
 ## Deferred
 
 Valuable but not blocking the current phase:
 
-- **Multi-project orchestration** — cross-project dispatch. Needs careful design around DB isolation and the global `PROJECT_DIR` state.
-- **Parallel dispatch** — concurrent dispatch execution. Valuable for independent tasks but introduces git conflict complexity. Sequential is correct until it's the bottleneck.
-- **Cost tracking** — token usage and API costs per dispatch. Claude CLI doesn't expose this cleanly yet.
-- **Structured error types** — dispatch errors are strings. An error classification system (timeout, cancelled, context_limit, tool_error, unknown) would improve observability and enable smarter retry logic.
-- **Status bar click-through** — task chips in the status bar could navigate to the running dispatch in Queue view. Small UX win.
-- **Dark mode** — the monospace aesthetic works. Nice-to-have.
+- **Conditional dependencies** — "only run if upstream output matches X." Useful for branching workflows but adds significant complexity to the trigger model. Wait until linear dependency chains prove insufficient.
+- **Richer dependency context** — upstream dispatch output summary injected into downstream context. Currently dependencies pass only the trigger type and upstream task ID. Enriching this requires reading the upstream dispatch's stored output and summarizing or truncating it.
+- **Multi-project orchestration** — cross-project dispatch. Needs careful design around DB isolation and global `PROJECT_DIR` state.
+- **Cost tracking** — token usage per dispatch. Claude CLI doesn't expose this cleanly yet.
+- **Structured error types** — error classification (timeout, cancelled, context_limit, tool_error) would improve observability and enable smarter retry. Wait for the activity dashboard to surface which error patterns matter.
+- **Status bar click-through** — task chips navigate to the running dispatch in Queue. Small UX win.
 
 ## Non-Goals
 
@@ -90,8 +91,10 @@ Valuable but not blocking the current phase:
 
 ## Completed
 
-- **Settings and Configuration UI** (was P1) — Settings view with queue behavior toggle, default model selector, default timeout input, MCP server management (list/add/remove), and project info display. Accessible from rail navigation. Shipped in `afc7f5c`.
-- **Route Modularization** — Task routes extracted to `task_routes.py`, dispatch/queue routes in `queue_routes.py`, chat routes in `chat.py`. Shared mutable state extracted to `state.py` to eliminate circular imports. Pydantic request models throughout. Shipped across `b35b3cc`, `b18ea99`, `c9fd29b`, `86c7ab6`.
-- **Dispatch Diff View** — `start_commit` recorded when dispatch begins, `result_commit` on completion. Queue detail panel shows collapsible diff section with file-level summary and per-file expandable diffs. Shipped in `def9824`.
-- **Dispatch Continuity — Resume and Retry** — Resume reuses CLI session via `--resume`, retry re-enqueues with original context. New trigger types `resume` and `retry`. Queue detail panel shows Resume/Retry buttons. Shipped in `fdd357b`.
-- **Dispatch Timeout Enforcement** — configurable per-task `timeout` property, watchdog in worker, graceful terminate + kill, partial output preserved. Shipped across `52d1722` through `d0e4426`.
+- **Task Dependencies** (was P1) — `depends_on` JSON property, `dependency` trigger type with same-type coalescing, auto-enqueue on upstream completion, circular dependency prevention, frontend checkboxes in Triggers tab. Shipped in `43d1ac7` through `429259e`.
+- **Watch Semantics Cleanup** — removed `watch_enabled` toggle; subscriptions presence = watch active. Commit coalescing is now automatic (no longer requires `coalesce_dispatches`). Shipped in `8727171`.
+- **Settings and Configuration UI** — queue behavior, default model, default timeout, MCP server management. Shipped in `afc7f5c`.
+- **Route Modularization** — `task_routes.py`, `queue_routes.py`, `chat.py` as separate routers; `state.py` for shared mutable state; Pydantic models throughout. Shipped across `b35b3cc` through `86c7ab6`.
+- **Dispatch Diff View** — `start_commit`/`result_commit` with inline diff display. Shipped in `def9824`.
+- **Dispatch Continuity** — resume via `--resume`, retry as re-enqueue. Shipped in `fdd357b`.
+- **Dispatch Timeout Enforcement** — per-task timeout, watchdog, graceful terminate + kill. Shipped across `52d1722` through `d0e4426`.
