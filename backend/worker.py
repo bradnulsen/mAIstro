@@ -283,6 +283,9 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
             await db.update_dispatch(dispatch_id, completed_at=utcnow(), result_commit=head)
             log.info("[worker] Dispatch #%d completed (commit=%s)", dispatch_id, head[:8])
 
+            # Trigger dependent tasks
+            await _enqueue_dependents(task_id, dispatch_id)
+
     except Exception as e:
         log.exception("[worker] Dispatch #%d failed: %s", dispatch_id, e)
         response_text = "".join(full_response) or "".join(streaming_text)
@@ -299,5 +302,22 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
         _subscribers.pop(dispatch_id, None)
         _active_dispatch_id = None
         _cancel_event = None
+
+
+async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
+    """Enqueue tasks that declare a dependency on the completed task."""
+    all_tasks = await db.list_tasks()
+    for task in all_tasks:
+        deps = task["properties"].get("depends_on") or []
+        if completed_task_id in deps:
+            context = f"Upstream task '{completed_task_id}' dispatch #{dispatch_id} completed successfully"
+            dep_id = await db.enqueue_dispatch(
+                task["id"], "dependency",
+                trigger_detail=completed_task_id,
+                context=context,
+            )
+            log.info("[worker] Dependency trigger: enqueued #%d for '%s' (upstream: '%s' #%d)",
+                     dep_id, task["id"], completed_task_id, dispatch_id)
+            notify()
 
 

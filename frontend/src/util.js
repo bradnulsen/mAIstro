@@ -8,6 +8,7 @@ export const TRIGGER_ICONS = {
   task: '🤖',
   resume: '↻',
   retry: '⟳',
+  dependency: '⛓',
 }
 
 /**

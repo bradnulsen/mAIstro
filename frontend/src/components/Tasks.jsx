@@ -81,7 +81,7 @@ export default function Tasks({ tasks, onRefresh }) {
 
         <div className="task-detail">
           {activeTask ? (
-            <TaskDetail key={activeTask.id} task={activeTask} onRefresh={onRefresh} onDelete={() => setSelected(null)} />
+            <TaskDetail key={activeTask.id} task={activeTask} allTasks={tasks} onRefresh={onRefresh} onDelete={() => setSelected(null)} />
           ) : (
             <div className="empty-state">Select or create a task</div>
           )}
@@ -91,7 +91,7 @@ export default function Tasks({ tasks, onRefresh }) {
   )
 }
 
-function TaskDetail({ task, onRefresh, onDelete }) {
+function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
   const [editing, setEditing] = useState({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
@@ -328,6 +328,32 @@ function TaskDetail({ task, onRefresh, onDelete }) {
               />
               Coalesce pending dispatches
             </label>
+          </div>
+
+          <div className="field-group">
+            <label>Dependencies (runs after these tasks complete)</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {allTasks.filter(t => t.id !== task.id).map(t => {
+                const deps = getVal('depends_on') || []
+                const checked = deps.includes(t.id)
+                return (
+                  <label key={t.id} className="checkbox-label" style={{ fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = checked ? deps.filter(d => d !== t.id) : [...deps, t.id]
+                        edit('depends_on', next)
+                      }}
+                    />
+                    {t.name}
+                  </label>
+                )
+              })}
+              {allTasks.length <= 1 && (
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>No other tasks to depend on</span>
+              )}
+            </div>
           </div>
 
           <div className="field-group">

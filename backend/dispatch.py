@@ -223,6 +223,14 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
         elif trigger == "retry":
             reasons.append("- **Retry** — fresh re-dispatch of a previous run")
 
+        elif trigger == "dependency" and detail:
+            upstream_task = await db.get_task(detail)
+            upstream_name = upstream_task["name"] if upstream_task else detail
+            if ctx:
+                reasons.append(f"- **Dependency** ({upstream_name}): {ctx}")
+            else:
+                reasons.append(f"- **Dependency** — triggered by completion of {upstream_name}")
+
         elif trigger == "schedule":
             ctx_note = f": {ctx}" if ctx else ""
             reasons.append(f"- **Schedule** (`{detail or 'cron'}`){ctx_note}")

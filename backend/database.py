@@ -133,7 +133,8 @@ INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES
     ('coalesce_dispatches', 'false', 'boolean'),
     ('sort_order', '0', 'integer'),
     ('schedule', '', 'string'),
-    ('timeout', '900', 'integer');
+    ('timeout', '900', 'integer'),
+    ('depends_on', '[]', 'json');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 """
@@ -180,6 +181,11 @@ async def _migrate_db(db: aiosqlite.Connection):
     # Add start_commit for dispatch diff view (HEAD at dispatch start)
     if "start_commit" not in dq_cols:
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN start_commit TEXT")
+
+    # Add depends_on property definition if missing
+    await db.execute(
+        "INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES ('depends_on', '[]', 'json')"
+    )
 
     await db.commit()
 
@@ -318,7 +324,7 @@ async def enqueue_dispatch(task_id: str, trigger: str,
 
     task = await get_task(task_id)
     coalesce_global = (trigger == "schedule") or (task and task["properties"].get("coalesce_dispatches"))
-    coalesce_same_type = (trigger == "commit")
+    coalesce_same_type = trigger in ("commit", "dependency")
 
     if coalesce_global or coalesce_same_type:
         query = """SELECT id, trigger, trigger_detail, context, triggers
