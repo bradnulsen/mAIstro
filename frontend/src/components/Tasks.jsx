@@ -378,6 +378,14 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
             <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
               <input
                 type="checkbox"
+                checked={getVal('require_approval') || false}
+                onChange={e => edit('require_approval', e.target.checked)}
+              />
+              Require approval for automatic dispatches
+            </label>
+            <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+              <input
+                type="checkbox"
                 checked={getVal('coalesce_dispatches') || false}
                 onChange={e => edit('coalesce_dispatches', e.target.checked)}
               />

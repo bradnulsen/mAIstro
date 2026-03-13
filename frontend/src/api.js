@@ -90,6 +90,12 @@ export const processQueue = (all = false) =>
 export const processOne = (dispatchId) =>
   fetchJSON(`/api/queue/process/${dispatchId}`, { method: 'POST' })
 
+export const approveDispatch = (id) =>
+  fetchJSON(`/api/dispatch/${id}/approve`, { method: 'POST' })
+
+export const rejectDispatch = (id) =>
+  fetchJSON(`/api/dispatch/${id}/reject`, { method: 'POST' })
+
 // ── Feed ──
 
 export const getFeed = (params = {}) => {

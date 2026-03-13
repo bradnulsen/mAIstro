@@ -3,17 +3,19 @@ import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
   getDispatchDiff, getQueueSettings, setQueueSettings, processQueue, processOne,
-  streamDispatch, resumeDispatch, retryDispatch,
+  streamDispatch, resumeDispatch, retryDispatch, approveDispatch, rejectDispatch,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
 const STATUS_LABELS = {
   pending: 'Pending',
+  pending_approval: 'Needs Approval',
   running: 'Running',
   completed: 'Completed',
   error: 'Error',
   cancelled: 'Cancelled',
   timed_out: 'Timed Out',
+  rejected: 'Rejected',
 }
 
 const TRIGGER_LABELS = {
@@ -30,16 +32,18 @@ function getStatus(item) {
   if (item.error) {
     if (item.error === 'cancelled') return 'cancelled'
     if (item.error === 'timed out') return 'timed_out'
+    if (item.error === 'rejected') return 'rejected'
     return 'error'
   }
   if (item.completed_at) return 'completed'
   if (item.started_at) return 'running'
+  if (item.approval === 'pending') return 'pending_approval'
   return 'pending'
 }
 
 function isUpcoming(item) {
   const s = getStatus(item)
-  return s === 'pending' || s === 'running'
+  return s === 'pending' || s === 'running' || s === 'pending_approval'
 }
 
 /** Normalize the triggers array, falling back to scalar fields for older records. */
@@ -206,6 +210,26 @@ export default function Queue() {
     }
   }
 
+  const handleApprove = async (id) => {
+    setActionError('')
+    try {
+      await approveDispatch(id)
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
+  const handleReject = async (id) => {
+    setActionError('')
+    try {
+      await rejectDispatch(id)
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
   const handleCancel = async (id) => {
     try {
       await cancelDispatch(id)
@@ -351,6 +375,22 @@ export default function Queue() {
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {getStatus(selected) === 'pending_approval' && (
+                      <>
+                        <button
+                          className="small primary"
+                          onClick={() => handleApprove(selected.id)}
+                        >
+                          ✓ Approve
+                        </button>
+                        <button
+                          className="danger small"
+                          onClick={() => handleReject(selected.id)}
+                        >
+                          ✕ Reject
+                        </button>
+                      </>
+                    )}
                     {getStatus(selected) === 'pending' && (
                       <button
                         className="small primary"
@@ -364,6 +404,9 @@ export default function Queue() {
                     <button className="danger small" onClick={() => setConfirmCancel(selected.id)}>
                       Cancel
                     </button>
+                    {actionError && (
+                      <span style={{ fontSize: 11, color: 'var(--danger)' }}>{actionError}</span>
+                    )}
                   </div>
                 )}
               </div>

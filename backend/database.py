@@ -135,7 +135,8 @@ INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES
     ('sort_order', '0', 'integer'),
     ('schedule', '', 'string'),
     ('timeout', '900', 'integer'),
-    ('depends_on', '[]', 'json');
+    ('depends_on', '[]', 'json'),
+    ('require_approval', 'false', 'boolean');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 """
@@ -176,6 +177,10 @@ async def _migrate_db(db: aiosqlite.Connection):
     # Add start_commit for dispatch diff view (HEAD at dispatch start)
     if "start_commit" not in dq_cols:
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN start_commit TEXT")
+
+    # Add approval column for approval gates (null=no gate, pending/approved/rejected)
+    if "approval" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN approval TEXT")
 
     await db.commit()
 
@@ -348,10 +353,16 @@ async def enqueue_dispatch(task_id: str, trigger: str,
 
     # No coalescing — insert new record
     triggers_json = json.dumps([new_entry])
+
+    # Approval gate: manual dispatches bypass (explicit intent), others check task property
+    approval = None
+    if trigger != "manual" and task and task["properties"].get("require_approval"):
+        approval = "pending"
+
     cursor = await db.execute(
-        """INSERT INTO dispatch_queue (task_id, trigger, trigger_detail, context, triggers)
-           VALUES (?, ?, ?, ?, ?)""",
-        (task_id, trigger, trigger_detail, context, triggers_json)
+        """INSERT INTO dispatch_queue (task_id, trigger, trigger_detail, context, triggers, approval)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (task_id, trigger, trigger_detail, context, triggers_json, approval)
     )
     await db.commit()
     return cursor.lastrowid
@@ -389,12 +400,13 @@ async def get_dispatch_queue(limit: int = 50) -> list[dict]:
 
 
 async def get_oldest_pending_dispatch() -> dict | None:
-    """Get the oldest dispatch that hasn't started yet."""
+    """Get the oldest dispatch that hasn't started yet (skips approval-pending)."""
     db = await get_db()
     rows = await db.execute_fetchall(
         """SELECT dq.*, t.name as task_name FROM dispatch_queue dq
            JOIN tasks t ON t.id = dq.task_id
            WHERE dq.started_at IS NULL AND dq.error IS NULL
+             AND (dq.approval IS NULL OR dq.approval = 'approved')
            ORDER BY dq.created_at ASC LIMIT 1"""
     )
     return _parse_dispatch_row(rows[0]) if rows else None
@@ -421,6 +433,29 @@ async def sweep_stale_dispatches(now: str):
         )
     await db.commit()
     return [row["id"] for row in rows]
+
+
+async def approve_dispatch(dispatch_id: int) -> bool:
+    """Approve a pending-approval dispatch. Returns True if updated."""
+    db = await get_db()
+    cursor = await db.execute(
+        "UPDATE dispatch_queue SET approval = 'approved' WHERE id = ? AND approval = 'pending'",
+        (dispatch_id,)
+    )
+    await db.commit()
+    return cursor.rowcount > 0
+
+
+async def reject_dispatch(dispatch_id: int) -> bool:
+    """Reject a pending-approval dispatch. Marks it as skipped."""
+    db = await get_db()
+    from backend.state import utcnow
+    cursor = await db.execute(
+        "UPDATE dispatch_queue SET approval = 'rejected', completed_at = ?, error = 'rejected' WHERE id = ? AND approval = 'pending'",
+        (utcnow(), dispatch_id)
+    )
+    await db.commit()
+    return cursor.rowcount > 0
 
 
 async def find_session_by_cli_session(cli_session_id: str) -> str | None:

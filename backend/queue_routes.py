@@ -245,6 +245,27 @@ async def set_queue_settings(req: QueueSettingsRequest):
     return {"status": "ok"}
 
 
+@router.post("/api/dispatch/{dispatch_id}/approve")
+async def approve_dispatch_route(dispatch_id: int):
+    """Approve a pending-approval dispatch so the worker can process it."""
+    require_project()
+    ok = await db.approve_dispatch(dispatch_id)
+    if not ok:
+        raise HTTPException(404, "Dispatch not found or not pending approval")
+    worker.notify()
+    return {"status": "approved"}
+
+
+@router.post("/api/dispatch/{dispatch_id}/reject")
+async def reject_dispatch_route(dispatch_id: int):
+    """Reject a pending-approval dispatch (marks as skipped)."""
+    require_project()
+    ok = await db.reject_dispatch(dispatch_id)
+    if not ok:
+        raise HTTPException(404, "Dispatch not found or not pending approval")
+    return {"status": "rejected"}
+
+
 @router.post("/api/queue/process/{dispatch_id}")
 async def queue_process_one(dispatch_id: int):
     """Manually process a specific pending dispatch by ID."""

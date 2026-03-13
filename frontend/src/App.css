@@ -349,6 +349,8 @@ label {
 .queue-status.error { color: var(--danger); }
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
 .queue-status.timed_out { color: var(--warning, #e6a117); }
+.queue-status.pending_approval { color: var(--warning, #e6a117); }
+.queue-status.rejected { color: var(--text-muted); text-decoration: line-through; }
 
 /* ── Task List + Detail ── */
 

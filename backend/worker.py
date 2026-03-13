@@ -111,6 +111,9 @@ async def process_one(dispatch_id: int) -> dict | None:
         # Must still be pending (not started, no error)
         if dispatch.get("started_at") or dispatch.get("error"):
             return None
+        # Auto-approve if pending approval (manual processing = explicit intent)
+        if dispatch.get("approval") == "pending":
+            await db.approve_dispatch(dispatch_id)
         await _process_dispatch(dispatch, dispatch_method="manual")
         return dispatch
 
