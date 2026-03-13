@@ -177,11 +177,6 @@ async def _migrate_db(db: aiosqlite.Connection):
     if "start_commit" not in dq_cols:
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN start_commit TEXT")
 
-    # Add depends_on property definition if missing
-    await db.execute(
-        "INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES ('depends_on', '[]', 'json')"
-    )
-
     await db.commit()
 
 
@@ -307,8 +302,9 @@ async def enqueue_dispatch(task_id: str, trigger: str,
 
     Coalescing rules:
     - 'schedule' always coalesces globally — repeated fires are identical signals
-    - 'commit' always coalesces with other pending 'commit' dispatches — multiple commits
-      while a task is busy = one catch-up run covering all of them
+    - 'commit' and 'dependency' coalesce with other pending dispatches of the same type —
+      multiple commits while a task is busy = one catch-up run; multiple upstream completions
+      while a dependent is pending = one run covering all of them
     - coalesce_dispatches=true coalesces globally — never more than one pending dispatch
       regardless of trigger type (useful for tasks that just need "run when things change")
     - All other triggers (manual, task_queue, resume, retry) never coalesce — each
@@ -327,7 +323,7 @@ async def enqueue_dispatch(task_id: str, trigger: str,
                    WHERE task_id = ? AND started_at IS NULL AND error IS NULL"""
         params: list = [task_id]
         if coalesce_same_type and not coalesce_global:
-            # Commit coalescing: only merge with another pending commit dispatch
+            # Same-type coalescing: only merge with another pending dispatch of the same trigger
             query += " AND trigger = ?"
             params.append(trigger)
         query += " ORDER BY created_at ASC LIMIT 1"

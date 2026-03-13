@@ -23,6 +23,7 @@ const TRIGGER_LABELS = {
   resume: 'Resume',
   retry: 'Retry',
   dependency: 'Dependency',
+  schedule: 'Schedule',
 }
 
 function getStatus(item) {
@@ -53,6 +54,7 @@ function triggerLabel(entry) {
   if (entry.trigger === 'task_queue' && entry.detail) return `${base} (${entry.detail})`
   if (entry.trigger === 'dependency' && entry.detail) return `${base} (${entry.detail})`
   if (entry.trigger === 'manual' && entry.detail) return `${base} @ ${entry.detail.slice(0, 8)}`
+  if (entry.trigger === 'schedule' && entry.detail) return `${base} (${entry.detail})`
   return base
 }
 
