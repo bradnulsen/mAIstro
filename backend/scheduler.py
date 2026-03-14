@@ -110,7 +110,7 @@ async def _loop():
                         task["id"],
                         "schedule",
                         trigger_detail=schedule,
-                        context=f"Scheduled dispatch ({schedule}){head_note}",
+                        context=f"**Schedule** (`{schedule}`){head_note}",
                     )
                     await _set_last_fire(task["id"], now)
 

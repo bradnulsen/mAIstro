@@ -1,8 +1,6 @@
 """Dispatch engine — prompt assembly, dispatch lifecycle, watch triggers."""
 
-import glob as globmod
 import logging
-import os
 from typing import AsyncIterator
 
 from backend import cli, database as db, git
@@ -29,7 +27,7 @@ async def run_dispatch(
     log.info("[dispatch:%d] Starting task=%s", dispatch_id, task["id"])
 
     dispatch_record = await db.get_dispatch(dispatch_id)
-    queue_context = await _build_queue_context(dispatch_record, project_dir)
+    queue_context = _build_queue_context(dispatch_record)
     manifest = await build_task_manifest()
     resume_session_id = dispatch_record.get("resume_session_id") if dispatch_record else None
 
@@ -168,8 +166,12 @@ async def build_task_manifest() -> str:
 
 # ── Queue context ───────────────────────────────────────────
 
-async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str | None:
-    """Build a cohesive 'why you're running' section from the dispatch's triggers."""
+def _build_queue_context(dispatch: dict | None) -> str | None:
+    """Build the 'why you're running' section from pre-built trigger context strings.
+
+    Each trigger entry's 'context' field is built at the enqueue site —
+    this function just renders them as bullet points.
+    """
     if not dispatch:
         return None
 
@@ -179,65 +181,11 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
                      "detail": dispatch.get("trigger_detail"),
                      "context": dispatch.get("context")}]
 
-    # Build bullet points for each trigger reason
     reasons = []
-    supplementary = []  # extra context sections (task summaries, etc.)
-
     for entry in triggers:
-        trigger = entry.get("trigger")
-        detail = entry.get("detail")
         ctx = entry.get("context")
-
-        if trigger == "commit" and detail:
-            summary = git.commit_oneline(project_dir, detail) or detail[:8]
-            reasons.append(f"- **Commit** `{detail[:8]}`: {summary}")
-
-        elif trigger == "manual":
-            ref = f" @ `{detail[:8]}`" if detail else ""
-            if ctx:
-                reasons.append(f"- **Manual**{ref}: {ctx}")
-            else:
-                reasons.append(f"- **Manual**{ref}")
-
-        elif trigger == "task_queue" and detail:
-            queuing_task = await db.get_task(detail)
-            task_name = queuing_task["name"] if queuing_task else detail
-            if ctx:
-                reasons.append(f"- **Task** ({task_name}): {ctx}")
-            else:
-                reasons.append(f"- **Task** ({task_name})")
-
-            # Pull in the queuing task's summary files as supplementary context
-            if queuing_task:
-                q_subs = queuing_task["properties"].get("subscriptions") or []
-                for pattern in q_subs:
-                    for fpath in globmod.glob(os.path.join(project_dir, pattern), recursive=True):
-                        if fpath.endswith("summary.md") and os.path.isfile(fpath):
-                            content = git.read_file(project_dir, os.path.relpath(fpath, project_dir))
-                            if content:
-                                rel = os.path.relpath(fpath, project_dir)
-                                supplementary.append(
-                                    f"### {task_name}'s Summary\n"
-                                    f"(from `{rel}`):\n```\n{content[:4000]}\n```"
-                                )
-
-        elif trigger == "resume":
-            reasons.append("- **Resume** — continuing from a previous dispatch")
-
-        elif trigger == "retry":
-            reasons.append("- **Retry** — fresh re-dispatch of a previous run")
-
-        elif trigger == "dependency" and detail:
-            upstream_task = await db.get_task(detail)
-            upstream_name = upstream_task["name"] if upstream_task else detail
-            if ctx:
-                reasons.append(f"- **Dependency** ({upstream_name}): {ctx}")
-            else:
-                reasons.append(f"- **Dependency** — triggered by completion of {upstream_name}")
-
-        elif trigger == "schedule":
-            ctx_note = f": {ctx}" if ctx else ""
-            reasons.append(f"- **Schedule** (`{detail or 'cron'}`){ctx_note}")
+        if ctx:
+            reasons.append(f"- {ctx}")
 
     if not reasons:
         return None
@@ -253,9 +201,7 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
             deduped.append(r)
     reasons = [f"{r} ×{counts[r]}" if counts[r] > 1 else r for r in deduped]
 
-    parts = ["## Invocation\n" + "\n".join(reasons)]
-    parts.extend(supplementary)
-    return "\n\n".join(parts)
+    return "## Invocation\n" + "\n".join(reasons)
 
 
 # ── Watch pattern matching ──────────────────────────────────

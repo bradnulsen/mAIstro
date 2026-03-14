@@ -25,6 +25,7 @@ class DispatchRequest(BaseModel):
 
 class UpdateDispatchRequest(BaseModel):
     context: str | None = None
+    trigger_index: int | None = None
 
 class RetryRequest(BaseModel):
     context: str | None = None
@@ -45,8 +46,13 @@ async def dispatch_task(task_id: str, req: DispatchRequest | None = None):
     if task["properties"].get("running"):
         raise HTTPException(409, "Task is already running")
 
-    context = req.context if req else None
+    user_context = req.context if req else None
     head = git.head_hash(state.PROJECT_DIR)
+    ref = f" @ `{head[:8]}`" if head else ""
+    if user_context:
+        context = f"**Manual**{ref}: {user_context}"
+    else:
+        context = f"**Manual**{ref}"
     dispatch_id = await db.enqueue_dispatch(task_id, "manual", trigger_detail=head, context=context)
     worker.notify()
     return {"dispatch_id": dispatch_id}
@@ -146,19 +152,14 @@ async def update_dispatch_route(dispatch_id: int, req: UpdateDispatchRequest):
     if dispatch.get("started_at"):
         raise HTTPException(409, "Cannot edit a dispatch that has already started")
 
-    updates = {}
     if req.context is not None:
-        updates["context"] = req.context
-        # Also update the triggers JSON array
         triggers = dispatch.get("triggers") or []
-        if triggers:
-            triggers[-1]["context"] = req.context
+        idx = req.trigger_index if req.trigger_index is not None else -1
+        if triggers and -len(triggers) <= idx < len(triggers):
+            triggers[idx]["context"] = req.context
         else:
             triggers = [{"trigger": dispatch["trigger"], "detail": dispatch.get("trigger_detail"), "context": req.context}]
-        updates["triggers"] = json.dumps(triggers)
-
-    if updates:
-        await db.update_dispatch(dispatch_id, **updates)
+        await db.update_dispatch(dispatch_id, triggers=json.dumps(triggers))
     return {"status": "ok"}
 
 
@@ -196,7 +197,7 @@ async def resume_dispatch(dispatch_id: int):
     new_id = await db.enqueue_dispatch(
         dispatch["task_id"], "resume",
         trigger_detail=head,
-        context=f"Resuming dispatch #{dispatch_id}",
+        context=f"**Resume** — continuing from dispatch #{dispatch_id}",
     )
     await db.update_dispatch(new_id, resume_session_id=cli_session_id)
     worker.notify()
@@ -205,7 +206,7 @@ async def resume_dispatch(dispatch_id: int):
 
 @router.post("/api/dispatch/{dispatch_id}/retry")
 async def retry_dispatch(dispatch_id: int, req: RetryRequest | None = None):
-    """Retry a completed dispatch from scratch, optionally with new context."""
+    """Retry a completed dispatch — resurrects the original with a retry trigger appended."""
     require_project()
     dispatch = await db.get_dispatch(dispatch_id)
     if not dispatch:
@@ -213,18 +214,43 @@ async def retry_dispatch(dispatch_id: int, req: RetryRequest | None = None):
     if not dispatch.get("completed_at"):
         raise HTTPException(409, "Dispatch is not completed")
 
-    # Use provided context override, or fall back to original
-    context = (req.context if req and req.context is not None else None)
-    if context is None:
-        context = dispatch.get("context") or f"Retrying dispatch #{dispatch_id}"
-    head = git.head_hash(state.PROJECT_DIR)
-    new_id = await db.enqueue_dispatch(
-        dispatch["task_id"], "retry",
-        trigger_detail=head,
-        context=context,
+    # Build the retry trigger context: include outcome of previous run + user notes
+    parts = []
+    error = dispatch.get("error")
+    if error:
+        parts.append(f"previous run failed: {error}")
+    start = dispatch.get("start_commit")
+    end = dispatch.get("result_commit")
+    if start and end and start != end:
+        parts.append(f"commits {start[:8]}..{end[:8]}")
+    user_notes = req.context if req and req.context else None
+    if user_notes:
+        parts.append(user_notes)
+    retry_summary = " — ".join(parts) if parts else "fresh re-dispatch"
+    retry_context = f"**Retry**: {retry_summary}"
+
+    # Append retry trigger to the existing triggers array
+    triggers = dispatch.get("triggers") or []
+    triggers.append({"trigger": "retry", "detail": str(dispatch_id), "context": retry_context})
+
+    # Resurrect: reset lifecycle fields, keep trigger history.
+    # Reset created_at so the retried dispatch doesn't jump ahead of newer
+    # pending dispatches (get_oldest_pending_dispatch orders by created_at ASC).
+    await db.update_dispatch(
+        dispatch_id,
+        created_at=utcnow(),
+        started_at=None,
+        completed_at=None,
+        error=None,
+        result_commit=None,
+        start_commit=None,
+        session_id=None,
+        resume_session_id=None,
+        dispatch_method=None,
+        triggers=json.dumps(triggers),
     )
     worker.notify()
-    return {"dispatch_id": new_id, "retrying_from": dispatch_id}
+    return {"dispatch_id": dispatch_id}
 
 
 # ── Queue Control ──────────────────────────────────────────

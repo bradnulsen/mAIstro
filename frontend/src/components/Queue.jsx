@@ -462,7 +462,7 @@ export default function Queue() {
                     )}
                     <button
                       className="small"
-                      onClick={() => setRetryContext(getTriggers(selected).at(-1)?.context || '')}
+                      onClick={() => setRetryContext('')}
                       title="Queue a fresh dispatch — edit context first"
                     >
                       ↺ Retry
@@ -506,8 +506,11 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
   const isPending = status === 'pending'
 
+  // Selected trigger index for context display
+  const [selectedTrigger, setSelectedTrigger] = useState(triggers.length - 1)
+
   // Editable context for pending dispatches
-  const lastCtx = triggers.length > 0 ? (triggers[triggers.length - 1].context || '') : ''
+  const selectedCtx = triggers[selectedTrigger]?.context || ''
   const [editingContext, setEditingContext] = useState(null)
   const [saveError, setSaveError] = useState('')
 
@@ -517,7 +520,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
   const [diffLoading, setDiffLoading] = useState(false)
 
   // Reset editing state when item changes
-  useEffect(() => { setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false) }, [item.id])
+  useEffect(() => { setSelectedTrigger(triggers.length - 1); setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false) }, [item.id])
 
   // Load diff when opened (lazy)
   useEffect(() => {
@@ -537,7 +540,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
     if (editingContext === null) return
     setSaveError('')
     try {
-      await updateDispatch(item.id, { context: editingContext })
+      await updateDispatch(item.id, { context: editingContext, trigger_index: selectedTrigger })
       setEditingContext(null)
       if (onUpdate) await onUpdate()
     } catch (e) { setSaveError(e.message) }
@@ -561,12 +564,22 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label>Queued by</label>
-        <div style={{ fontSize: 12 }}>
+        <label>Triggers</label>
+        <div style={{ fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {triggers.map((entry, i) => (
-            <div key={i}>
+            <span
+              key={i}
+              onClick={() => setSelectedTrigger(i)}
+              style={{
+                cursor: 'pointer',
+                padding: '2px 6px',
+                borderRadius: 4,
+                background: i === selectedTrigger ? 'var(--bg-active, rgba(255,255,255,0.1))' : 'transparent',
+                opacity: i === selectedTrigger ? 1 : 0.6,
+              }}
+            >
               {TRIGGER_ICONS[entry.trigger] || ''} {triggerLabel(entry)}
-            </div>
+            </span>
           ))}
         </div>
       </div>
@@ -585,27 +598,24 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         ) : isPending ? (
           <div className="context-pending-wrap">
             <pre
-              onClick={() => setEditingContext(lastCtx)}
+              onClick={() => setEditingContext(selectedCtx)}
               className="context-pending"
               style={{
-                color: lastCtx ? 'inherit' : 'var(--text-muted)',
-                fontStyle: lastCtx ? 'normal' : 'italic',
+                color: selectedCtx ? 'inherit' : 'var(--text-muted)',
+                fontStyle: selectedCtx ? 'normal' : 'italic',
               }}
             >
-              {lastCtx || 'click to add context...'}
+              {selectedCtx || 'click to add context...'}
             </pre>
             <span className="context-edit-hint">✎</span>
           </div>
         ) : (
-          triggers.map((entry, i) => (
-            <pre key={i} className="context-display" style={{
-              marginBottom: triggers.length > 1 ? 4 : 0,
-              color: entry.context ? 'inherit' : 'var(--text-muted)',
-              fontStyle: entry.context ? 'normal' : 'italic',
-            }}>
-              {entry.context || 'not provided'}
-            </pre>
-          ))
+          <pre className="context-display" style={{
+            color: selectedCtx ? 'inherit' : 'var(--text-muted)',
+            fontStyle: selectedCtx ? 'normal' : 'italic',
+          }}>
+            {selectedCtx || 'not provided'}
+          </pre>
         )}
       </div>
 

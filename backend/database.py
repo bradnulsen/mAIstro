@@ -329,7 +329,6 @@ async def enqueue_dispatch(task_id: str, trigger: str,
             if existing["triggers"]:
                 triggers = json.loads(existing["triggers"])
             else:
-                # Migrate: first entry from the original scalar fields
                 triggers = [{"trigger": existing["trigger"],
                              "detail": existing["trigger_detail"],
                              "context": existing["context"]}]
@@ -350,9 +349,9 @@ async def enqueue_dispatch(task_id: str, trigger: str,
         approval = "pending"
 
     cursor = await db.execute(
-        """INSERT INTO dispatch_queue (task_id, trigger, trigger_detail, context, triggers, approval)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (task_id, trigger, trigger_detail, context, triggers_json, approval)
+        """INSERT INTO dispatch_queue (task_id, trigger, trigger_detail, triggers, approval)
+           VALUES (?, ?, ?, ?, ?)""",
+        (task_id, trigger, trigger_detail, triggers_json, approval)
     )
     await db.commit()
     return cursor.lastrowid

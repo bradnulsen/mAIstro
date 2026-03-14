@@ -315,9 +315,13 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
     for task in all_tasks:
         deps = task["properties"].get("depends_on") or []
         if completed_task_id in deps:
+            upstream_task = await db.get_task(completed_task_id)
+            upstream_name = upstream_task["name"] if upstream_task else completed_task_id
+            context = f"**Dependency** — triggered by completion of {upstream_name}"
             dep_id = await db.enqueue_dispatch(
                 task["id"], "dependency",
                 trigger_detail=completed_task_id,
+                context=context,
             )
             log.info("[worker] Dependency trigger: enqueued #%d for '%s' (upstream: '%s' #%d)",
                      dep_id, task["id"], completed_task_id, dispatch_id)
