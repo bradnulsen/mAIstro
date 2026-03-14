@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
@@ -79,6 +79,7 @@ export default function Queue() {
   const [actionError, setActionError] = useState('')
 
   const [refreshing, setRefreshing] = useState(false)
+  const detailScrollRef = useRef(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -266,6 +267,18 @@ export default function Queue() {
     }
   }
 
+  // Scroll detail panel to top when selection changes
+  useLayoutEffect(() => {
+    if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0
+  }, [selected?.id])
+
+  // Auto-scroll detail panel to bottom while live streaming
+  useEffect(() => {
+    if (!liveText || !detailScrollRef.current) return
+    const el = detailScrollRef.current
+    el.scrollTop = el.scrollHeight
+  }, [liveText])
+
   // Escape: dismiss dialogs in order, then close detail panel
   useEffect(() => {
     const handleKey = (e) => {
@@ -372,7 +385,7 @@ export default function Queue() {
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <div ref={detailScrollRef} style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               <DispatchDetail item={selected} output={output} onUpdate={refresh}
                 liveText={liveText} liveTools={liveTools} isStreaming={isStreaming} />
             </div>
