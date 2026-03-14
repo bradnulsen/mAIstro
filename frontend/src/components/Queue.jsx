@@ -266,6 +266,18 @@ export default function Queue() {
     }
   }
 
+  // Escape: dismiss dialogs in order, then close detail panel
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (confirmCancel !== null) { setConfirmCancel(null); return }
+      if (retryContext !== null) { setRetryContext(null); return }
+      if (selected) setSelected(null)
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [selected, confirmCancel, retryContext])
+
   const anyRunning = items.some(i => getStatus(i) === 'running')
   const filtered = items.filter(item =>
     filter === 'upcoming' ? isUpcoming(item) : !isUpcoming(item)
@@ -326,7 +338,7 @@ export default function Queue() {
             return (
               <div
                 key={item.id}
-                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''}`}
+                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}`}
                 onClick={() => setSelected(item)}
               >
                 <div className="feed-avatar">

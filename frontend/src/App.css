@@ -260,6 +260,10 @@ label {
   border-left: 2px solid var(--running);
 }
 
+.feed-item.pending_approval {
+  border-left: 2px solid var(--warning);
+}
+
 .feed-avatar {
   width: 28px;
   height: 28px;
@@ -421,6 +425,11 @@ label {
   color: var(--text-muted);
   padding: 2px 4px;
   line-height: 1;
+}
+
+.task-search-clear:hover {
+  background: none;
+  color: var(--text);
 }
 
 .task-list-footer {
