@@ -73,9 +73,9 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 - SSE event types: `text`, `result`, `error`, `session_id`, `dispatch`, `tool_use`
 - Dispatch triggers: `manual`, `commit` (watch), `dependency` (upstream task completed), `task_queue` (queued by another task), `schedule`, `resume`, `retry`
 - Watch behavior: tasks with non-empty subscriptions auto-trigger on matching commits (no separate toggle — subscriptions presence = watch active)
-- Dispatch coalescing: `commit` and `dependency` coalesce with other pending dispatches of the same type (multiple commits/dependency resolutions while busy = one catch-up run); `schedule` always coalesces globally; `coalesce_dispatches=true` coalesces globally across all trigger types; `manual`/`task_queue`/`resume`/`retry` never coalesce
+- Dispatch coalescing: `commit` and `dependency` coalesce with other pending dispatches of the same type (multiple commits/dependency resolutions while busy = one catch-up run); `schedule` always coalesces globally; `coalesce_dispatches=true` coalesces globally across all trigger types; `manual`/`task_queue`/`resume` never coalesce; `retry` resurrects the original dispatch in-place (appends a retry trigger, resets lifecycle fields)
 - Running state is derived from `dispatch_queue` (started_at IS NOT NULL AND completed_at IS NULL), not stored as a task property
 - Subscriptions serve dual purpose: trigger matching (watch) and context injection (all dispatches)
-- `dispatch_queue.context` column stores trigger-specific data (human instructions, task handoff, commit metadata)
+- Trigger context is stored in the `dispatch_queue.triggers` JSON array (each entry has `trigger`, `detail`, `context`). Context strings are pre-formatted at the enqueue site. The scalar `context` column is legacy (kept for backward compat with old records)
 - Queue can be auto-processing or manual — controlled via `/api/queue/settings` (auto_dispatch toggle)
 - Backend port: 8420, Frontend port: 5173
