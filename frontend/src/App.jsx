@@ -100,17 +100,19 @@ export default function App() {
 
       <div className="main-area">
         <div className="status-bar">
-          {tasks.map(t => (
+          {tasks.map(t => t.properties?.running ? (
             <div
               key={t.id}
-              className={`status-chip${t.properties?.running ? ' running' : ''}`}
-              onClick={t.properties?.running ? () => setView(VIEWS.queue) : undefined}
-              title={t.properties?.running ? 'View in Queue' : undefined}
-              style={t.properties?.running ? { cursor: 'pointer' } : undefined}
+              className="status-chip running"
+              onClick={() => setView(VIEWS.queue)}
+              title="View in Queue"
+              style={{ cursor: 'pointer' }}
             >
-              {t.properties?.running && <span className="status-dot running" />}
+              <span className="status-dot running" />
               {t.name}
             </div>
+          ) : (
+            <span key={t.id} className="status-idle-task">{t.name}</span>
           ))}
           {tasks.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No tasks configured</span>}
         </div>

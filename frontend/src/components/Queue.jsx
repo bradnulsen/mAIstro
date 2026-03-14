@@ -460,7 +460,7 @@ export default function Queue() {
                     )}
                     <button
                       className="small"
-                      onClick={() => setRetryContext('')}
+                      onClick={() => setRetryContext(getTriggers(selected).slice(-1)[0]?.context || '')}
                       title="Queue a fresh dispatch — edit context first"
                     >
                       ↺ Retry

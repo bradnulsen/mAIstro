@@ -365,7 +365,6 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                   <textarea
                     value={getVal('instructions') || ''}
                     onChange={e => edit('instructions', e.target.value)}
-                    onBlur={() => { if (getVal('instructions')) setEditingInstructions(false) }}
                     placeholder="Detailed instructions for what this task should do..."
                     rows={10}
                     autoFocus={editingInstructions}

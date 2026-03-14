@@ -284,7 +284,7 @@ export default function Chat() {
             <div className="chat-message assistant">
               <div className="bubble md-content">
                 <Markdown>{mdBreaks(streaming)}</Markdown>
-                <span style={{ opacity: 0.5 }}>▌</span>
+                <span className="streaming-cursor">▌</span>
               </div>
             </div>
           )}
@@ -303,7 +303,7 @@ export default function Chat() {
         <div className="chat-input-bar">
           <textarea
             ref={inputRef}
-            placeholder="Ask mAistro... (⇧↵ for newline)"
+            placeholder="Ask mAistro..."
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {

@@ -152,6 +152,11 @@ body {
 }
 .status-dot.error { background: var(--danger); }
 
+.status-idle-task {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 /* ── Buttons ── */
 
 button, .btn {
@@ -868,6 +873,16 @@ label {
 }
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.streaming-cursor {
+  opacity: 0.5;
+  animation: cursor-blink 0.8s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0; }
 }
 
 .chat-message.user .bubble {
