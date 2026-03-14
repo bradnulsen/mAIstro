@@ -11,6 +11,7 @@ export default function Tasks({ tasks, onRefresh }) {
   const [newName, setNewName] = useState('')
   const [createError, setCreateError] = useState('')
   const [search, setSearch] = useState('')
+  const searchRef = useRef(null)
 
   const filteredTasks = tasks.filter(t => {
     if (!search.trim()) return true
@@ -50,6 +51,9 @@ export default function Tasks({ tasks, onRefresh }) {
   }
 
   const activeTask = tasks.find(t => t.id === selected)
+  // When search is active and the selected task is filtered out, don't show its detail —
+  // the task isn't visible in the list so showing it in the panel is confusing.
+  const detailVisible = !search.trim() || !!filteredTasks.find(t => t.id === selected)
 
   return (
     <>
@@ -61,13 +65,15 @@ export default function Tasks({ tasks, onRefresh }) {
         <div className="task-list">
           <div className="task-search">
             <input
+              ref={searchRef}
               type="text"
               placeholder="Filter tasks..."
               value={search}
               onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
             />
             {search && (
-              <button className="task-search-clear" onClick={() => setSearch('')}>✕</button>
+              <button className="task-search-clear" onClick={() => { setSearch(''); searchRef.current?.focus() }}>✕</button>
             )}
           </div>
           <div className="scroll-area">
@@ -112,7 +118,7 @@ export default function Tasks({ tasks, onRefresh }) {
         </div>
 
         <div className="task-detail">
-          {activeTask ? (
+          {detailVisible && activeTask ? (
             <TaskDetail key={activeTask.id} task={activeTask} allTasks={tasks} onRefresh={onRefresh} onDelete={() => setSelected(null)} />
           ) : (
             <div className="empty-state">Select or create a task</div>
