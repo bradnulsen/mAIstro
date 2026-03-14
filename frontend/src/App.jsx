@@ -116,7 +116,7 @@ export default function App() {
         </div>
 
         {view === VIEWS.feed && <Feed />}
-        {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} />}
+        {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} onNavigate={setView} />}
         {view === VIEWS.queue && <Queue />}
         {view === VIEWS.settings && <Settings />}
       </div>

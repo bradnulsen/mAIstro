@@ -5,7 +5,7 @@ import {
   dispatchTask,
 } from '../api'
 
-export default function Tasks({ tasks, onRefresh }) {
+export default function Tasks({ tasks, onRefresh, onNavigate }) {
   const [selected, setSelected] = useState(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -119,7 +119,7 @@ export default function Tasks({ tasks, onRefresh }) {
 
         <div className="task-detail">
           {detailVisible && activeTask ? (
-            <TaskDetail key={activeTask.id} task={activeTask} allTasks={tasks} onRefresh={onRefresh} onDelete={() => setSelected(null)} />
+            <TaskDetail key={activeTask.id} task={activeTask} allTasks={tasks} onRefresh={onRefresh} onDelete={() => setSelected(null)} onNavigate={onNavigate} />
           ) : (
             <div className="empty-state">Select or create a task</div>
           )}
@@ -129,7 +129,7 @@ export default function Tasks({ tasks, onRefresh }) {
   )
 }
 
-function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
+function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   const [editing, setEditing] = useState({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
@@ -272,8 +272,12 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
       </div>
 
       {lastDispatchId && (
-        <div style={{ fontSize: 11, color: 'var(--success)', marginBottom: 8 }}>
-          ✓ Queued as dispatch #{lastDispatchId}
+        <div style={{ fontSize: 11, color: 'var(--success)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>✓ Queued as dispatch #{lastDispatchId}</span>
+          {onNavigate && (
+            <button className="small" style={{ fontSize: 10, color: 'var(--success)', borderColor: 'var(--success)' }}
+              onClick={() => onNavigate('queue')}>View in Queue →</button>
+          )}
         </div>
       )}
       {dispatchError && (
