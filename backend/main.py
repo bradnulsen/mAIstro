@@ -104,6 +104,12 @@ async def open_project(req: OpenProjectRequest):
     if not os.path.isdir(path):
         raise HTTPException(404, "Directory not found")
 
+    # Block project switch while a dispatch is running (prevents silent DB corruption)
+    if state.PROJECT_DIR and os.path.normpath(path) != os.path.normpath(state.PROJECT_DIR):
+        active = worker.get_active_dispatch_id()
+        if active is not None:
+            raise HTTPException(409, f"Cannot switch projects while dispatch #{active} is running. Cancel it first or wait for completion.")
+
     git.ensure_repo(path)
     state.PROJECT_DIR = path
     await db.init_db(path)
@@ -125,10 +131,14 @@ async def browse_project():
     if sys.platform == "win32":
         ps = (
             "Add-Type -AssemblyName System.Windows.Forms; "
-            "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-            "$f.Description = 'Select a project directory'; "
-            "$f.ShowNewFolderButton = $true; "
-            "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath } else { '' }"
+            "[System.Windows.Forms.Application]::EnableVisualStyles(); "
+            "$f = New-Object System.Windows.Forms.OpenFileDialog; "
+            "$f.ValidateNames = $false; "
+            "$f.CheckFileExists = $false; "
+            "$f.CheckPathExists = $true; "
+            "$f.FileName = 'Select Folder'; "
+            "$f.Title = 'Select a project directory'; "
+            "if ($f.ShowDialog() -eq 'OK') { [System.IO.Path]::GetDirectoryName($f.FileName) } else { '' }"
         )
         result = sp.run(
             ["powershell", "-NoProfile", "-Command", ps],
@@ -172,6 +182,9 @@ async def remove_recent_project(path: str):
 
 @app.post("/api/project/close")
 async def close_project():
+    active = worker.get_active_dispatch_id()
+    if active is not None:
+        raise HTTPException(409, f"Cannot close project while dispatch #{active} is running. Cancel it first or wait for completion.")
     state.PROJECT_DIR = None
     await db.close_db()
     return {"status": "ok"}
@@ -266,8 +279,10 @@ async def post_commit_hook(req: PostCommitRequest):
     dispatched = []
 
     for task in triggered:
+        summary = git.commit_oneline(state.PROJECT_DIR, req.commit_hash) or req.commit_hash[:8]
+        context = f"**Commit** `{req.commit_hash[:8]}`: {summary}"
         await db.enqueue_dispatch(
-            task["id"], "commit", trigger_detail=req.commit_hash
+            task["id"], "commit", trigger_detail=req.commit_hash, context=context
         )
         dispatched.append(task["id"])
 
