@@ -15,7 +15,6 @@ async def run_dispatch(
     task: dict,
     project_dir: str,
     cancel_event=None,
-    dispatch_method: str = "manual",
 ) -> AsyncIterator[dict]:
     """Build prompts, invoke Claude CLI, yield events.
 
@@ -32,12 +31,10 @@ async def run_dispatch(
     resume_session_id = dispatch_record.get("resume_session_id") if dispatch_record else None
 
     # Build dispatch metadata for prompt injection
-    # Use the trigger type (why it was enqueued) rather than dispatch_method
-    # (how the queue processed it) — the agent needs to know intent, not mechanics
     dispatch_meta = None
     if dispatch_record:
         triggers = dispatch_record.get("triggers") or []
-        primary_trigger = triggers[0]["trigger"] if triggers else dispatch_record.get("trigger", "manual")
+        primary_trigger = triggers[0]["trigger"] if triggers else "manual"
         dispatch_meta = {
             "trigger": primary_trigger,
         }
@@ -175,11 +172,7 @@ def _build_queue_context(dispatch: dict | None) -> str | None:
     if not dispatch:
         return None
 
-    triggers = dispatch.get("triggers")
-    if not triggers:
-        triggers = [{"trigger": dispatch.get("trigger"),
-                     "detail": dispatch.get("trigger_detail"),
-                     "context": dispatch.get("context")}]
+    triggers = dispatch.get("triggers") or []
 
     reasons = []
     for entry in triggers:

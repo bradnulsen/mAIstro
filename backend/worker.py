@@ -98,7 +98,7 @@ async def process_next() -> dict | None:
     async with _lock:
         dispatch = await db.get_oldest_pending_dispatch()
         if dispatch:
-            await _process_dispatch(dispatch, dispatch_method="manual")
+            await _process_dispatch(dispatch)
         return dispatch
 
 
@@ -114,7 +114,7 @@ async def process_one(dispatch_id: int) -> dict | None:
         # Auto-approve if pending approval (manual processing = explicit intent)
         if dispatch.get("approval") == "pending":
             await db.approve_dispatch(dispatch_id)
-        await _process_dispatch(dispatch, dispatch_method="manual")
+        await _process_dispatch(dispatch)
         return dispatch
 
 
@@ -126,7 +126,7 @@ async def process_all() -> list[int]:
             dispatch = await db.get_oldest_pending_dispatch()
             if not dispatch:
                 break
-            await _process_dispatch(dispatch, dispatch_method="manual")
+            await _process_dispatch(dispatch)
             processed.append(dispatch["id"])
     return processed
 
@@ -172,7 +172,7 @@ async def _loop():
             async with _lock:
                 dispatch = await db.get_oldest_pending_dispatch()
                 if dispatch:
-                    await _process_dispatch(dispatch, dispatch_method="auto")
+                    await _process_dispatch(dispatch)
 
         except asyncio.CancelledError:
             raise
@@ -181,7 +181,7 @@ async def _loop():
             await asyncio.sleep(5)
 
 
-async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
+async def _process_dispatch(dispatch: dict):
     """Execute a single dispatch — create session, run CLI, store output."""
     dispatch_id = dispatch["id"]
     task_id = dispatch["task_id"]
@@ -221,7 +221,7 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
     _active_dispatch_id = dispatch_id
     start_commit = git.head_hash(state.PROJECT_DIR)
     await db.update_dispatch(dispatch_id, started_at=utcnow(), session_id=session_id,
-                             dispatch_method=dispatch_method, start_commit=start_commit)
+                             start_commit=start_commit)
 
     log.info("[worker] Processing dispatch #%d (task=%s)", dispatch_id, task_id)
 
@@ -245,7 +245,7 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
 
     try:
         async for event in run_dispatch(dispatch_id, task, state.PROJECT_DIR,
-                                        cancel_event=_cancel_event, dispatch_method=dispatch_method):
+                                        cancel_event=_cancel_event):
             etype = event.get("type")
 
             # Raw audit trail — store every NDJSON event
@@ -312,12 +312,26 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
 async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
     """Enqueue tasks that declare a dependency on the completed task."""
     all_tasks = await db.list_tasks()
+
+    # Fetch upstream dispatch once to get commit info
+    upstream_dispatch = await db.get_dispatch(dispatch_id)
+    result_commit = upstream_dispatch.get("result_commit") if upstream_dispatch else None
+    start_commit = upstream_dispatch.get("start_commit") if upstream_dispatch else None
+
     for task in all_tasks:
         deps = task["properties"].get("depends_on") or []
         if completed_task_id in deps:
             upstream_task = await db.get_task(completed_task_id)
             upstream_name = upstream_task["name"] if upstream_task else completed_task_id
-            context = f"**Dependency** — triggered by completion of {upstream_name}"
+
+            # Build context with commit info when available
+            context = f"**Dependency** — triggered by completion of {upstream_name} (dispatch #{dispatch_id})"
+            if result_commit and state.PROJECT_DIR:
+                summary = git.commit_oneline(state.PROJECT_DIR, result_commit) or result_commit[:8]
+                context += f"\n  Upstream result commit `{result_commit[:8]}`: {summary}"
+                if start_commit and start_commit != result_commit:
+                    context += f"\n  Upstream commit range: `{start_commit[:8]}..{result_commit[:8]}`"
+
             dep_id = await db.enqueue_dispatch(
                 task["id"], "dependency",
                 trigger_detail=completed_task_id,

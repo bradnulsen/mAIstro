@@ -157,8 +157,6 @@ async def update_dispatch_route(dispatch_id: int, req: UpdateDispatchRequest):
         idx = req.trigger_index if req.trigger_index is not None else -1
         if triggers and -len(triggers) <= idx < len(triggers):
             triggers[idx]["context"] = req.context
-        else:
-            triggers = [{"trigger": dispatch["trigger"], "detail": dispatch.get("trigger_detail"), "context": req.context}]
         await db.update_dispatch(dispatch_id, triggers=json.dumps(triggers))
     return {"status": "ok"}
 
@@ -246,7 +244,6 @@ async def retry_dispatch(dispatch_id: int, req: RetryRequest | None = None):
         start_commit=None,
         session_id=None,
         resume_session_id=None,
-        dispatch_method=None,
         triggers=json.dumps(triggers),
     )
     worker.notify()

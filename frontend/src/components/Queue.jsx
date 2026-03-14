@@ -46,10 +46,8 @@ function isUpcoming(item) {
   return s === 'pending' || s === 'running' || s === 'pending_approval'
 }
 
-/** Normalize the triggers array, falling back to scalar fields for older records. */
 function getTriggers(item) {
-  if (item.triggers && item.triggers.length > 0) return item.triggers
-  return [{ trigger: item.trigger, detail: item.trigger_detail, context: item.context }]
+  return item.triggers || []
 }
 
 function triggerLabel(entry) {

@@ -47,7 +47,6 @@ async def init_db(project_dir: str):
     await db.executescript(SCHEMA_SQL)
     await db.executescript(SEED_SQL)
     await db.commit()
-    await _migrate_db(db)
 
 
 SCHEMA_SQL = """
@@ -75,8 +74,11 @@ CREATE TABLE IF NOT EXISTS dispatch_queue (
     task_id TEXT NOT NULL REFERENCES tasks(id),
     trigger TEXT NOT NULL,
     trigger_detail TEXT,
-    context TEXT,
+    triggers TEXT,
     session_id TEXT,
+    resume_session_id TEXT,
+    approval TEXT,
+    start_commit TEXT,
     created_at DATETIME DEFAULT (datetime('now')),
     started_at DATETIME,
     completed_at DATETIME,
@@ -141,38 +143,6 @@ INSERT OR IGNORE INTO task_property_defs (key, default_value, type) VALUES
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 """
-
-
-async def _migrate_db(db: aiosqlite.Connection):
-    """Idempotent schema migrations for existing databases."""
-    # dispatch_queue migrations
-    dq_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
-    if "session_id" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN session_id TEXT")
-    if "dispatch_method" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN dispatch_method TEXT")
-    if "triggers" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN triggers TEXT")
-    if "resume_session_id" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN resume_session_id TEXT")
-    if "start_commit" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN start_commit TEXT")
-    if "approval" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN approval TEXT")
-
-    # chat_sessions migrations
-    cs_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(chat_sessions)")}
-    if "dispatch_id" not in cs_cols:
-        await db.execute("ALTER TABLE chat_sessions ADD COLUMN dispatch_id INTEGER")
-
-    # Remove legacy properties superseded by current design:
-    # - mode: replaced by subscriptions-as-watch-enable
-    # - running: now derived from dispatch_queue
-    # - watch_enabled: having subscriptions implies watching
-    await db.execute("DELETE FROM task_properties WHERE key IN ('mode', 'running', 'watch_enabled')")
-    await db.execute("DELETE FROM task_property_defs WHERE key IN ('mode', 'running', 'watch_enabled')")
-
-    await db.commit()
 
 
 def slugify(name: str) -> str:
@@ -313,25 +283,18 @@ async def enqueue_dispatch(task_id: str, trigger: str,
     coalesce_same_type = trigger in ("commit", "dependency")
 
     if coalesce_global or coalesce_same_type:
-        query = """SELECT id, trigger, trigger_detail, context, triggers
+        query = """SELECT id, triggers
                    FROM dispatch_queue
                    WHERE task_id = ? AND started_at IS NULL AND error IS NULL"""
         params: list = [task_id]
         if coalesce_same_type and not coalesce_global:
-            # Same-type coalescing: only merge with another pending dispatch of the same trigger
             query += " AND trigger = ?"
             params.append(trigger)
         query += " ORDER BY created_at ASC LIMIT 1"
         rows = await db.execute_fetchall(query, params)
         if rows:
             existing = dict(rows[0])
-            # Build triggers array from existing record
-            if existing["triggers"]:
-                triggers = json.loads(existing["triggers"])
-            else:
-                triggers = [{"trigger": existing["trigger"],
-                             "detail": existing["trigger_detail"],
-                             "context": existing["context"]}]
+            triggers = json.loads(existing["triggers"])
             triggers.append(new_entry)
             await db.execute(
                 "UPDATE dispatch_queue SET triggers = ? WHERE id = ?",
@@ -360,11 +323,8 @@ async def enqueue_dispatch(task_id: str, trigger: str,
 def _parse_dispatch_row(row) -> dict:
     """Convert a dispatch row, parsing the triggers JSON column."""
     d = dict(row)
-    if d.get("triggers"):
-        try:
-            d["triggers"] = json.loads(d["triggers"])
-        except (json.JSONDecodeError, TypeError):
-            d["triggers"] = None
+    raw = d.get("triggers")
+    d["triggers"] = json.loads(raw) if raw else []
     return d
 
 
