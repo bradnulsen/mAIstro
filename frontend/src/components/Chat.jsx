@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import Markdown from 'react-markdown'
 import {
   sendChatMessage, getChatSessions, getChatMessages, deleteChatSession,
@@ -16,6 +16,7 @@ export default function Chat() {
   const [thinking, setThinking] = useState('')
   const [toolStatus, setToolStatus] = useState(null)
   const messagesEnd = useRef(null)
+  const inputRef = useRef(null)
   const abortRef = useRef(null)
   // Track session ID across async operations (avoids stale closure issues)
   const activeSessionRef = useRef(null)
@@ -37,6 +38,14 @@ export default function Chat() {
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streaming, thinking, toolStatus])
+
+  // Reset textarea height when input is cleared programmatically (e.g. after send)
+  useLayoutEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 150) + 'px'
+  }, [input])
 
   // On mount: check if the most recent session is still processing (e.g. we navigated away)
   useEffect(() => {
@@ -293,7 +302,8 @@ export default function Chat() {
 
         <div className="chat-input-bar">
           <textarea
-            placeholder="Ask mAistro..."
+            ref={inputRef}
+            placeholder="Ask mAistro... (⇧↵ for newline)"
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
@@ -304,10 +314,6 @@ export default function Chat() {
             }}
             disabled={sending}
             rows={1}
-            onInput={e => {
-              e.target.style.height = 'auto'
-              e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px'
-            }}
           />
           <button className="primary" onClick={handleSend} disabled={sending || !input.trim()}>
             {sending ? <span className="tool-spinner" /> : 'Send'}
