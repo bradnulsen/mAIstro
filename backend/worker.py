@@ -277,10 +277,12 @@ async def _process_dispatch(dispatch: dict, dispatch_method: str = "manual"):
             await db.add_chat_message(session_id, "assistant", response_text)
 
         if _timed_out:
+            # Timed-out dispatches do NOT trigger dependents — timeout means the
+            # task didn't complete successfully, so downstream tasks shouldn't run
             head = git.head_hash(state.PROJECT_DIR)
             await db.update_dispatch(dispatch_id, completed_at=utcnow(),
                                      result_commit=head, error="timed out")
-            log.info("[worker] Dispatch #%d timed out (partial commit=%s)", dispatch_id, head[:8])
+            log.info("[worker] Dispatch #%d timed out (partial commit=%s, dependents skipped)", dispatch_id, head[:8])
         else:
             head = git.head_hash(state.PROJECT_DIR)
             await db.update_dispatch(dispatch_id, completed_at=utcnow(), result_commit=head)

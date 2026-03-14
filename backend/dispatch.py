@@ -34,10 +34,14 @@ async def run_dispatch(
     resume_session_id = dispatch_record.get("resume_session_id") if dispatch_record else None
 
     # Build dispatch metadata for prompt injection
+    # Use the trigger type (why it was enqueued) rather than dispatch_method
+    # (how the queue processed it) — the agent needs to know intent, not mechanics
     dispatch_meta = None
     if dispatch_record:
+        triggers = dispatch_record.get("triggers") or []
+        primary_trigger = triggers[0]["trigger"] if triggers else dispatch_record.get("trigger", "manual")
         dispatch_meta = {
-            "auto_dispatched": dispatch_method == "auto",
+            "trigger": primary_trigger,
         }
 
     system_prompt = build_dispatch_system_prompt(task, project_dir)
@@ -113,8 +117,8 @@ def build_user_prompt(task: dict, project_dir: str,
     if description:
         identity_parts.append(description)
     if dispatch_meta:
-        auto = dispatch_meta.get("auto_dispatched", False)
-        mode = "auto-dispatched" if auto else "manually dispatched"
+        trigger = dispatch_meta.get("trigger", "manual")
+        mode = "manually dispatched" if trigger == "manual" else f"auto-dispatched ({trigger})"
         identity_parts.append(f"**Dispatch:** {mode}")
     sections.append("\n".join(identity_parts))
 
@@ -237,6 +241,17 @@ async def _build_queue_context(dispatch: dict | None, project_dir: str) -> str |
 
     if not reasons:
         return None
+
+    # Deduplicate identical reason lines (e.g. repeated schedule fires)
+    deduped = []
+    counts = {}
+    for r in reasons:
+        if r in counts:
+            counts[r] += 1
+        else:
+            counts[r] = 1
+            deduped.append(r)
+    reasons = [f"{r} ×{counts[r]}" if counts[r] > 1 else r for r in deduped]
 
     parts = ["## Invocation\n" + "\n".join(reasons)]
     parts.extend(supplementary)
