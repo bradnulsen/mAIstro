@@ -33,6 +33,7 @@ class UpdateTaskRequest(BaseModel):
     schedule: str | None = None
     timeout: int | None = None
     depends_on: list[str] | None = None
+    require_approval: bool | None = None
     sort_order: int | None = None
 
 class ReorderRequest(BaseModel):

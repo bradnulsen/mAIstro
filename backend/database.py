@@ -22,6 +22,7 @@ async def get_db() -> aiosqlite.Connection:
     if _conn is None:
         assert DB_PATH, "Database not initialized — call init_db first"
         _conn = await aiosqlite.connect(DB_PATH)
+        _conn._conn.text_factory = lambda b: b.decode("utf-8", errors="replace")
         _conn.row_factory = aiosqlite.Row
         await _conn.execute("PRAGMA journal_mode=WAL")
         await _conn.execute("PRAGMA foreign_keys=ON")
@@ -144,14 +145,24 @@ INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false'
 
 async def _migrate_db(db: aiosqlite.Connection):
     """Idempotent schema migrations for existing databases."""
-    # Add session_id to dispatch_queue
-    cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
-    if "session_id" not in cols:
+    # dispatch_queue migrations
+    dq_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
+    if "session_id" not in dq_cols:
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN session_id TEXT")
+    if "dispatch_method" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN dispatch_method TEXT")
+    if "triggers" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN triggers TEXT")
+    if "resume_session_id" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN resume_session_id TEXT")
+    if "start_commit" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN start_commit TEXT")
+    if "approval" not in dq_cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN approval TEXT")
 
-    # Add dispatch_id to chat_sessions
-    cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(chat_sessions)")}
-    if "dispatch_id" not in cols:
+    # chat_sessions migrations
+    cs_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(chat_sessions)")}
+    if "dispatch_id" not in cs_cols:
         await db.execute("ALTER TABLE chat_sessions ADD COLUMN dispatch_id INTEGER")
 
     # Remove legacy properties superseded by current design:
@@ -160,27 +171,6 @@ async def _migrate_db(db: aiosqlite.Connection):
     # - watch_enabled: having subscriptions implies watching
     await db.execute("DELETE FROM task_properties WHERE key IN ('mode', 'running', 'watch_enabled')")
     await db.execute("DELETE FROM task_property_defs WHERE key IN ('mode', 'running', 'watch_enabled')")
-
-    # Add dispatch_method to dispatch_queue
-    dq_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
-    if "dispatch_method" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN dispatch_method TEXT")
-
-    # Add triggers JSON array column for enqueue-time coalescing
-    if "triggers" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN triggers TEXT")
-
-    # Add resume_session_id for dispatch continuity (resume from CLI session)
-    if "resume_session_id" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN resume_session_id TEXT")
-
-    # Add start_commit for dispatch diff view (HEAD at dispatch start)
-    if "start_commit" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN start_commit TEXT")
-
-    # Add approval column for approval gates (null=no gate, pending/approved/rejected)
-    if "approval" not in dq_cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN approval TEXT")
 
     await db.commit()
 
