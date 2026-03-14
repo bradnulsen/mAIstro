@@ -10,6 +10,14 @@ export default function Feed() {
   const [diff, setDiff] = useState('')
   const [loadingDiff, setLoadingDiff] = useState(false)
 
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === 'Escape' && selected) setSelected(null)
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [selected])
+
   const refresh = useCallback(async () => {
     try {
       const feed = await getFeed({ limit: 100 })
