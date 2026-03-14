@@ -245,7 +245,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
         <AutoTextarea
           value={context}
           onChange={e => setContext(e.target.value)}
-          placeholder="Optional context..."
+          placeholder="Optional context... (↵ to queue)"
           maxHeight={120}
           minRows={1}
           style={{ flex: 1 }}
@@ -480,7 +480,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete }) {
       )}
 
       {/* Danger zone */}
-      <div className="task-section">
+      <div className="task-section" style={{ marginTop: 24, borderTop: '1px solid var(--border-light)', paddingTop: 16 }}>
         <h3>Danger Zone</h3>
         {confirmDelete ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
