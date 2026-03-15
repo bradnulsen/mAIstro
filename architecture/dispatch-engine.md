@@ -53,7 +53,7 @@ The `_active_dispatch_id` global tracks which dispatch is currently running, ena
 2. **Lifecycle start**: records `started_at`, `start_commit`, and `session_id` on the dispatch record
 3. **Timeout watchdog**: spawns an async task that fires the cancellation event after the configured timeout
 4. **Dispatch execution**: calls `run_dispatch()` which assembles prompts and invokes the CLI — yields events
-5. **Event processing**: raw events go to the audit trail; translated events go to live subscribers; text accumulates for the final chat message
+5. **Event processing**: raw events go to the audit trail; translated events go to live subscribers; text accumulates for the final chat message. MCP tool invocation events are recorded as structured audit entries
 6. **Completion**: records `completed_at` and `result_commit`; triggers dependent tasks if successful
 7. **Cleanup**: cancels watchdog, broadcasts `_done` to subscribers, clears active dispatch state
 
@@ -93,3 +93,4 @@ Manual processing via `process_one()` auto-approves pending-approval dispatches 
 - [Prompt Assembly](prompt-assembly.md) builds the prompts that `run_dispatch()` feeds to the CLI
 - [Streaming and Sessions](streaming-and-sessions.md) receives broadcast events from the worker and stores durable output
 - [Git Integration](git-integration.md) provides `head_hash` for commit tracking and `changed_files_in_commit` for dependency context
+- [Tool Mediation](tool-mediation.md) provides the internal MCP server instance configured per-dispatch

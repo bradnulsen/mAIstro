@@ -8,7 +8,7 @@ The frontend is a single-page React application that provides the operator inter
 
 `App.jsx` provides the outer layout:
 
-- **Rail navigation**: vertical icon bar on the left — Queue, Activity (Feed), Tasks, Settings
+- **Rail navigation**: vertical icon bar on the left — Queue, Activity (Feed), Tasks, Files, Settings
 - **Status bar**: horizontal strip showing all tasks with running indicators (pulsing dot for active dispatches)
 - **Main area**: renders the active view
 - **Chat tray**: a resizable side panel (drag-to-resize, click-to-toggle) housing the interactive chat
@@ -25,6 +25,9 @@ Git-centric view showing commit history enriched with dispatch metadata. Each co
 
 ### Tasks (`Tasks.jsx`)
 Configuration view for task CRUD. Each task expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Supports drag-to-reorder and inline dispatch.
+
+### Files
+A project file browser providing read-only access to project content. The user searches for files by glob pattern and views their contents inline. Markdown files render as formatted documents; code files render with syntax highlighting. This view enables direct inspection of project files without leaving the application or switching to an external editor.
 
 ### Settings (`Settings.jsx`)
 Queue settings (auto-dispatch toggle), MCP server management, and global configuration.

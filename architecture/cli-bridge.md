@@ -18,6 +18,7 @@ Optional flags:
 - `--resume <session_id>` for resume dispatches
 - `--allowedTools <tools...>` from task's `base_tools` property
 - `--disallowedTools <tools...>` from task's `disallowed_tools` property
+- `--mcp-config <path>` for MCP server connections (internal platform server and any external servers enabled for the task)
 
 ### Stdin Piping
 
@@ -88,3 +89,4 @@ The CLI bridge checks a shared `asyncio.Event` on each iteration of the read loo
 - [Dispatch Engine](dispatch-engine.md) invokes `cli.invoke()` via `run_dispatch()` and manages the lifecycle around it
 - [Prompt Assembly](prompt-assembly.md) builds the prompts that are piped to stdin
 - [Streaming and Sessions](streaming-and-sessions.md) consumes the events yielded by the bridge
+- [Tool Mediation](tool-mediation.md) provides the internal MCP server that the CLI connects to

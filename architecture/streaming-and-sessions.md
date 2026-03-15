@@ -76,6 +76,8 @@ Chat messages are simple role + content pairs. The worker stores one clean assis
 
 Every NDJSON line from the CLI is stored as a `chat_event` (session_id, event_type, raw_json). This is the complete, unprocessed record — useful for debugging, replay, or analysis.
 
+Additionally, tool invocations that flow through the platform's internal MCP server are recorded as structured events in the same session. These are richer than NDJSON-parsed tool_use events because they capture the actual operation the platform performed (see [Tool Mediation](tool-mediation.md)).
+
 ## Relationship to Other Systems
 
 - [Dispatch Engine](dispatch-engine.md) drives the broadcast during dispatch processing
