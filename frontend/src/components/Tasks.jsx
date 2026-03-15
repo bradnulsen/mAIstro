@@ -4,6 +4,18 @@ import {
   createTask, updateTask, deleteTask, getTaskSubscriptions,
   dispatchTask,
 } from '../api'
+import HelpTip from './HelpTip'
+
+const TIPS = {
+  subscriptions: 'Glob patterns, one per line. * matches files in one directory; ** matches across directories recursively. Patterns serve two purposes: they determine which commits trigger this task (watch), and they inject matching files as context into every dispatch prompt.',
+  schedule: 'Five-field cron: minute hour day-of-month month day-of-week. Supports ranges (1-5), lists (0,15,30), steps (*/10), and wildcards (*). Examples: */30 * * * * (every 30 min), 0 9 * * 1-5 (weekdays at 9am). The first evaluation after setting a schedule establishes a baseline — it does not fire immediately.',
+  allowedTools: 'Comma-separated tool names the agent can use (e.g. Read, Edit, Bash, Write). When set, the agent is restricted to these tools plus any configured MCP tools. Leave empty to use the default tool set.',
+  requireApproval: 'When enabled, automated triggers (commit-watch, schedule, dependency) produce dispatches that wait for manual approval before executing. Manual dispatches bypass this gate.',
+  coalesceDispatches: 'When enabled, the task will never have more than one pending dispatch. Any new trigger merges into the existing pending dispatch instead of creating a new queue entry. Useful for tasks that should catch up in one run rather than queuing redundant work.',
+  dependencies: 'This task auto-dispatches when all selected upstream tasks complete successfully. Timed-out, failed, or cancelled dispatches do not trigger dependents.',
+  timeout: 'Maximum execution time in seconds. The platform gracefully terminates the agent when reached, then force-kills if it does not exit. Timed-out dispatches do not trigger downstream dependencies. Set to 0 for no limit.',
+  model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
+}
 
 export default function Tasks({ tasks, onRefresh, onNavigate }) {
   const [selected, setSelected] = useState(null)
@@ -316,7 +328,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               </div>
 
               <div className="field-group">
-                <label>Allowed Tools</label>
+                <div className="label-row">
+                  <label>Allowed Tools</label>
+                  <HelpTip text={TIPS.allowedTools} />
+                </div>
                 <input
                   type="text"
                   value={(getVal('base_tools') || []).join(', ')}
@@ -326,7 +341,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               </div>
 
               <div className="field-group">
-                <label>Model</label>
+                <div className="label-row">
+                  <label>Model</label>
+                  <HelpTip text={TIPS.model} />
+                </div>
                 <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
                   <option value="sonnet">Sonnet</option>
                   <option value="opus">Opus</option>
@@ -335,7 +353,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               </div>
 
               <div className="field-group">
-                <label>Timeout (seconds)</label>
+                <div className="label-row">
+                  <label>Timeout (seconds)</label>
+                  <HelpTip text={TIPS.timeout} />
+                </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <input
                     type="number"
@@ -384,26 +405,35 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
       {activeTab === 'triggers' && (
         <div className="task-tab-panel">
           <div className="field-group" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-            <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
-              <input
-                type="checkbox"
-                checked={getVal('require_approval') || false}
-                onChange={e => edit('require_approval', e.target.checked)}
-              />
-              Require approval for automatic dispatches
-            </label>
-            <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
-              <input
-                type="checkbox"
-                checked={getVal('coalesce_dispatches') || false}
-                onChange={e => edit('coalesce_dispatches', e.target.checked)}
-              />
-              Coalesce pending dispatches
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+                <input
+                  type="checkbox"
+                  checked={getVal('require_approval') || false}
+                  onChange={e => edit('require_approval', e.target.checked)}
+                />
+                Require approval for automatic dispatches
+              </label>
+              <HelpTip text={TIPS.requireApproval} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+                <input
+                  type="checkbox"
+                  checked={getVal('coalesce_dispatches') || false}
+                  onChange={e => edit('coalesce_dispatches', e.target.checked)}
+                />
+                Coalesce pending dispatches
+              </label>
+              <HelpTip text={TIPS.coalesceDispatches} />
+            </div>
           </div>
 
           <div className="field-group">
-            <label>Dependencies (runs after these tasks complete)</label>
+            <div className="label-row">
+              <label>Dependencies (runs after these tasks complete)</label>
+              <HelpTip text={TIPS.dependencies} />
+            </div>
             <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '4px 16px' }}>
               {allTasks.filter(t => t.id !== task.id).map(t => {
                 const deps = getVal('depends_on') || []
@@ -429,7 +459,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
           </div>
 
           <div className="field-group">
-            <label>Schedule (cron)</label>
+            <div className="label-row">
+              <label>Schedule (cron)</label>
+              <HelpTip text={TIPS.schedule} />
+            </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input
                 type="text"
@@ -447,7 +480,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
           </div>
 
           <div className="field-group">
-            <label>Subscriptions</label>
+            <div className="label-row">
+              <label>Subscriptions</label>
+              <HelpTip text={TIPS.subscriptions} />
+            </div>
             <AutoTextarea
               value={'subscriptions' in editing ? editing.subscriptions : arrayToLines(props.subscriptions)}
               onChange={e => edit('subscriptions', e.target.value)}

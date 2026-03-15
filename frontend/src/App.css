@@ -1036,6 +1036,72 @@ label {
   border-bottom: 2px solid var(--border-light);
 }
 
+/* ── Contextual Help Tooltip ── */
+
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 2px;
+}
+
+.label-row label {
+  margin-bottom: 0;
+}
+
+.help-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  font-size: 9px;
+  font-family: var(--font);
+  color: var(--text-muted);
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  cursor: help;
+  flex-shrink: 0;
+  line-height: 1;
+  user-select: none;
+  vertical-align: middle;
+}
+
+.help-tip:hover,
+.help-tip:focus {
+  border-color: var(--text-muted);
+  color: var(--text);
+  outline: none;
+}
+
+.help-tip-content {
+  display: none;
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  width: 280px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.5;
+  z-index: 200;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: normal;
+  pointer-events: none;
+}
+
+.help-tip:hover .help-tip-content,
+.help-tip:focus .help-tip-content {
+  display: block;
+}
+
 /* ── Utilities ── */
 
 .empty-state {

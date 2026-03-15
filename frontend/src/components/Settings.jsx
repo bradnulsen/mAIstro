@@ -3,6 +3,14 @@ import {
   getProject, getConfig, setConfig, getQueueSettings, setQueueSettings,
   listMcpServers, createMcpServer, deleteMcpServer,
 } from '../api'
+import HelpTip from './HelpTip'
+
+const TIPS = {
+  autoDispatch: 'When enabled, the background worker automatically pulls and executes pending dispatches. When disabled, dispatches remain pending until you manually trigger processing from the Queue view.',
+  mcpServers: 'External tool servers that extend agent capabilities. Registered servers are available to dispatched agents alongside the platform\'s built-in tools. Command and args specify how to launch the server process.',
+  model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
+  timeout: 'Maximum execution time in seconds applied to tasks that have no task-level override. Set to 0 or leave blank for no limit.',
+}
 
 export default function Settings() {
   const [project, setProject] = useState(null)
@@ -113,17 +121,17 @@ export default function Settings() {
         <div className="settings-section">
           <h3>Queue Behavior</h3>
           <div className="settings-field">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={queueSettings.auto_dispatch}
-                onChange={e => handleAutoDispatch(e.target.checked)}
-                style={{ width: 'auto' }}
-              />
-              Auto-dispatch queued items
-            </label>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              When enabled, the worker automatically processes pending dispatches
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={queueSettings.auto_dispatch}
+                  onChange={e => handleAutoDispatch(e.target.checked)}
+                  style={{ width: 'auto' }}
+                />
+                Auto-dispatch queued items
+              </label>
+              <HelpTip text={TIPS.autoDispatch} />
             </div>
           </div>
         </div>
@@ -133,7 +141,10 @@ export default function Settings() {
           <h3>Default Model</h3>
           <div className="settings-field" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
             <div style={{ flex: 1 }}>
-              <label>Model</label>
+              <div className="label-row">
+                <label>Model</label>
+                <HelpTip text={TIPS.model} />
+              </div>
               <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)}>
                 <option value="sonnet">sonnet</option>
                 <option value="opus">opus</option>
@@ -164,7 +175,10 @@ export default function Settings() {
 
         {/* MCP Servers */}
         <div className="settings-section">
-          <h3>MCP Servers</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8, borderBottom: '1px solid var(--border-light)', paddingBottom: 4 }}>
+            <h3 style={{ margin: 0, borderBottom: 'none', paddingBottom: 0 }}>MCP Servers</h3>
+            <HelpTip text={TIPS.mcpServers} />
+          </div>
           {mcpServers.length === 0 && (
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>
               No MCP servers configured
