@@ -145,6 +145,13 @@ export const createMcpServer = (name, command, args, env) =>
 export const deleteMcpServer = (name) =>
   fetchJSON(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' })
 
+// ── Files ──
+
+export const searchFiles = (pattern) =>
+  fetchJSON(`/api/files/?pattern=${encodeURIComponent(pattern)}`)
+
+export const readFile = (path) => fetchJSON(`/api/git/file/${path}`)
+
 // ── Git ──
 
 export const getGitDiff = (hash) => fetchJSON(`/api/git/diff/${hash}`)

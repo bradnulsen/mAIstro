@@ -1,9 +1,10 @@
 """Dispatch engine — prompt assembly, dispatch lifecycle, watch triggers."""
 
 import logging
+import os
 from typing import AsyncIterator
 
-from backend import cli, database as db, git
+from backend import cli, database as db, git, mcp_config as mcp_cfg
 
 log = logging.getLogger("maistro.dispatch")
 
@@ -46,21 +47,42 @@ async def run_dispatch(
              dispatch_id, len(system_prompt), len(user_prompt),
              f", resuming session {resume_session_id}" if resume_session_id else "")
 
-    async for event in cli.invoke(
-        prompt=user_prompt,
-        system_prompt=system_prompt,
-        cwd=project_dir,
-        model=props.get("model"),
-        allowed_tools=props.get("base_tools") or None,
-        disallowed_tools=props.get("disallowed_tools") or None,
-        cancel_event=cancel_event,
-        resume_session=resume_session_id,
-    ):
-        if event["type"] == "error":
-            log.error("[dispatch:%d] CLI error: %s", dispatch_id, event.get("message", "")[:200])
-        elif event["type"] == "tool_use":
-            log.info("[dispatch:%d] Tool use: %s", dispatch_id, event.get("tool", "?"))
-        yield event
+    # Build MCP config connecting the agent to the internal server and any
+    # enabled external servers. Config is written to a temp file and cleaned up
+    # after the dispatch completes.
+    session_id = dispatch_record.get("session_id") or ""
+    external_servers = await db.list_mcp_servers()
+    mcp_config_path = mcp_cfg.write_mcp_config(
+        task=task,
+        project_dir=project_dir,
+        session_id=session_id,
+        external_servers=external_servers,
+    )
+    log.info("[dispatch:%d] MCP config written to %s", dispatch_id, mcp_config_path)
+
+    try:
+        async for event in cli.invoke(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            cwd=project_dir,
+            model=props.get("model"),
+            allowed_tools=props.get("base_tools") or None,
+            disallowed_tools=props.get("disallowed_tools") or None,
+            mcp_config_path=mcp_config_path,
+            cancel_event=cancel_event,
+            resume_session=resume_session_id,
+        ):
+            if event["type"] == "error":
+                log.error("[dispatch:%d] CLI error: %s", dispatch_id, event.get("message", "")[:200])
+            elif event["type"] == "tool_use":
+                log.info("[dispatch:%d] Tool use: %s", dispatch_id, event.get("tool", "?"))
+            yield event
+    finally:
+        if mcp_config_path and os.path.exists(mcp_config_path):
+            try:
+                os.unlink(mcp_config_path)
+            except OSError:
+                pass
 
 
 # ── Prompt assembly ─────────────────────────────────────────

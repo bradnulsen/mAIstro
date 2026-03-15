@@ -35,6 +35,7 @@ async def invoke(
     model: str = "sonnet",
     allowed_tools: list[str] | None = None,
     disallowed_tools: list[str] | None = None,
+    mcp_config_path: str | None = None,
     max_turns: int = 50,
     resume_session: str | None = None,
     cancel_event: asyncio.Event | None = None,
@@ -67,9 +68,11 @@ async def invoke(
     if disallowed_tools:
         cmd.append("--disallowedTools")
         cmd.extend(disallowed_tools)
+    if mcp_config_path:
+        cmd.extend(["--mcp-config", mcp_config_path])
 
     log.info("[cli] Spawning: model=%s max_turns=%d prompt=<%d chars>", model, max_turns, len(prompt))
-    log.info("[cli] Tools: allowed=%s disallowed=%s", allowed_tools or "all", disallowed_tools or "none")
+    log.info("[cli] Tools: allowed=%s disallowed=%s mcp=%s", allowed_tools or "all", disallowed_tools or "none", mcp_config_path or "none")
     log.info("[cli] CWD: %s", cwd)
 
     process = subprocess.Popen(

@@ -3,6 +3,7 @@
 Route modules: task_routes.py, queue_routes.py, chat.py.
 """
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -15,7 +16,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("maistro")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -76,6 +77,12 @@ class CreateMcpServerRequest(BaseModel):
 
 class ConfigRequest(BaseModel):
     value: str
+
+class McpEventRequest(BaseModel):
+    tool: str
+    input: dict
+    result: str
+    timestamp: str
 
 
 # ── System Routes ───────────────────────────────────────────
@@ -317,6 +324,34 @@ async def delete_mcp_server(name: str):
     require_project()
     await db.delete_mcp_server(name)
     return {"status": "deleted"}
+
+
+# ── MCP Tool Event Route ────────────────────────────────────
+# Receives audit log entries from the internal MCP server subprocess.
+
+@app.post("/api/dispatch/mcp-event")
+async def log_mcp_event(req: McpEventRequest, x_session_id: str = Header(None)):
+    """Log an MCP tool invocation to the dispatch's chat session audit trail."""
+    if not x_session_id:
+        return {"status": "ignored"}
+    raw = json.dumps({
+        "tool": req.tool,
+        "input": req.input,
+        "result": req.result,
+        "timestamp": req.timestamp,
+    })
+    await db.add_chat_event(x_session_id, "mcp_tool_use", raw)
+    return {"status": "ok"}
+
+
+# ── Files Routes ─────────────────────────────────────────────
+
+@app.get("/api/files/")
+async def list_files(pattern: str = "**/*"):
+    """List project files matching a glob pattern."""
+    require_project()
+    files = git.resolve_glob_files(state.PROJECT_DIR, [pattern])
+    return files
 
 
 # ── Config Routes ───────────────────────────────────────────

@@ -4,9 +4,10 @@ import Feed from './components/Feed'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
 import Chat from './components/Chat'
+import Files from './components/Files'
 import Settings from './components/Settings'
 
-const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', settings: 'settings' }
+const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', settings: 'settings' }
 
 export default function App() {
   const [project, setProject] = useState(null)
@@ -90,6 +91,11 @@ export default function App() {
           onClick={() => setView(VIEWS.tasks)}
           title="Tasks"
         >◉</button>
+        <button
+          className={`rail-icon ${view === VIEWS.files ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.files)}
+          title="Files"
+        >&#9783;</button>
         <div className="rail-spacer" />
         <button
           className={`rail-icon ${view === VIEWS.settings ? 'active' : ''}`}
@@ -120,6 +126,7 @@ export default function App() {
         {view === VIEWS.feed && <Feed />}
         {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} onNavigate={setView} />}
         {view === VIEWS.queue && <Queue />}
+        {view === VIEWS.files && <Files />}
         {view === VIEWS.settings && <Settings />}
       </div>
 
