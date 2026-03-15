@@ -64,17 +64,17 @@ Two continuation triggers operate on existing dispatches:
 
 Subscriptions are glob patterns (supporting `**` recursion) that define a task's **relevant files**. They serve two purposes:
 
-- **Context injection** (all dispatches) — resolved files are listed in the dispatch prompt. The framing is neutral: "these files are relevant to your task." The task's instructions determine whether relevance means ownership, stewardship, input, reference, or something else entirely. The platform does not impose a relationship.
-- **Trigger matching** (commit-watch) — when a commit changes files matching a task's subscription patterns, the task is enqueued. The trigger context identifies *which subscribed files changed*, not just the commit summary. This keeps the injection agnostic: the task's instructions define whether "your subscribed files changed" means "review what happened to files you own" or "react to new upstream input." The platform triggers; the task interprets.
+- **Context injection** — every dispatch resolves the task's subscription patterns and lists matching files in the prompt as "files relevant to your task." The task's instructions define the relationship — ownership, input, reference, or anything else.
+- **Watch triggering** — when a commit changes files matching a task's subscription patterns, the task is enqueued. The trigger context carries the commit summary; the full set of subscribed files (changed or not) is always present in the prompt, giving the agent enough information to infer what happened.
 
 A task with non-empty subscriptions is watch-active. There is no separate toggle.
 
-The dual purpose is intentional but not mandatory — a task can use subscriptions purely for context (by setting `require_approval` to gate automatic triggers) or purely for triggering (by ignoring the file list in its instructions). Neither use invalidates the other.
+A task can use subscriptions purely for context (by gating automatic triggers with `require_approval`) or purely for triggering (by not referencing the file list in its instructions).
 
 ### Dependencies
 
 - Tasks declare upstream dependencies via `depends_on` (a list of task IDs). When an upstream task's dispatch completes successfully, dependent tasks are auto-enqueued.
-- Circular dependency chains are permitted. The platform does not prevent A → B → A configurations. Coalescing and sequential execution are the natural safeguards — a task that is already pending absorbs the redundant trigger rather than creating an infinite queue.
+- Circular dependency chains are permitted. Coalescing and sequential execution absorb redundant triggers — a task that is already pending absorbs the new trigger rather than creating an infinite queue.
 - Dependency context includes the upstream task name, dispatch ID, and commit range.
 
 ### Approval Gates
@@ -121,7 +121,7 @@ The dual purpose is intentional but not mandatory — a task can use subscriptio
 - **Git operations as structured tools** — `git_commit`, `git_diff`, `git_log`, `git_status` are platform-mediated tools with enforced conventions (commit authorship, message format, path restrictions). These replace unmediated shell-based git access.
 - **Read-only project context tools** — file listing, file reading, and task information retrieval are available as structured tools, scoped by the task's subscriptions and configuration.
 - **Tool invocation logging** — every MCP tool call is recorded as a structured event in the dispatch session, creating an audit trail richer than NDJSON stream parsing.
-- Agents retain access to native CLI tools (including Bash) alongside MCP tools. The MCP tools are structured alternatives that agents prefer, not a replacement that restricts them.
+- Agents retain access to native CLI tools (including Bash) alongside MCP tools. MCP tools are structured alternatives, not an exclusive replacement.
 
 ### External MCP Servers
 
@@ -148,7 +148,7 @@ Tooltips explain *rules and behavior*, not just labels. They answer: "what do I 
 
 Required tooltip surfaces:
 
-- **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the task *and* which files are included as context in the dispatch prompt. When triggered by a commit, the dispatch prompt identifies which subscribed files changed.
+- **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the task *and* which files are included as context in the dispatch prompt.
 - **Schedule (cron expression)** — five-field format: `minute hour day-of-month month day-of-week`. Ranges (`1-5`), lists (`0,15,30`), steps (`*/10`), and wildcards (`*`). Examples: `*/30 * * * *` (every 30 min), `0 9 * * 1-5` (weekdays at 9am). First evaluation after setting a schedule establishes a baseline — does not fire immediately.
 - **Allowed Tools** — comma-separated tool names that the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent is restricted to only these tools plus any MCP tools. When empty, the agent gets the default tool set.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce dispatches that wait for manual approval before executing. Manual dispatches bypass this gate.
@@ -190,5 +190,5 @@ Required tooltip surfaces:
 - **Stale sweep on startup**: any dispatch marked as in-flight when the process starts is marked interrupted. No zombie dispatches.
 - **Approval gates are non-bypassable for automated triggers**: only manual dispatch (explicit human intent) skips the approval check. All other trigger types respect `require_approval`.
 - **Timeout enforcement is mandatory**: every dispatch has a timeout. The watchdog runs unconditionally. A task cannot run forever.
-- **Dependency cycles are absorbed**: circular dependency chains are permitted. Sequential execution and coalescing are the natural safeguards — a task already pending absorbs the redundant trigger rather than spawning unbounded dispatches.
+- **Dependency cycles are absorbed**: circular dependency chains produce redundant triggers that coalescing absorbs. No unbounded dispatch growth.
 - **Hook must not obstruct git**: the post-commit hook runs asynchronously and fails silently. A hook failure never prevents or delays a commit.
