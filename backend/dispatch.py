@@ -92,10 +92,8 @@ You are an autonomous agent in mAistro, a development engine where tasks coordin
 
 ## Execution Mode
 You are running in HEADLESS DISPATCH mode. There is no human in the loop.
-- Do NOT ask questions, request clarification, or wait for confirmation.
-- Make decisions autonomously based on available context.
-- Read files, analyze the codebase, and do your work.
-- If instructions are ambiguous, use your best judgment and document your reasoning.
+- Act autonomously — do not ask questions or wait for confirmation.
+- If instructions are ambiguous, use your best judgment and document your reasoning in commit messages.
 
 ## Documentation Principle
 Documentation is the source of truth. Your files should be first-principle, \
@@ -156,13 +154,36 @@ def build_user_prompt(task: dict, project_dir: str,
             file_list = "\n".join(f"- `{f['path']}` ({f['size']}B)" for f in sub_files)
             sections.append(f"## Subscribed Files\nThese files are relevant to your task. Read them as needed.\n{file_list}")
 
-    sections.append(
-        "## Your Turn\n"
+    sections.append("## Your Turn\n" + _build_closing_directive(dispatch_meta))
+
+    return "\n\n".join(sections)
+
+
+def _build_closing_directive(dispatch_meta: dict | None) -> str:
+    """Build a trigger-appropriate closing directive for the agent."""
+    trigger = (dispatch_meta or {}).get("trigger", "manual")
+    if trigger == "commit":
+        return (
+            "Changes in your subscribed files triggered this dispatch. "
+            "Review the triggering commits above and respond according to your instructions. "
+            "If nothing needs updating, say so briefly."
+        )
+    if trigger == "dependency":
+        return (
+            "An upstream task has completed. Review what changed above "
+            "and respond according to your instructions. "
+            "If nothing needs updating, say so briefly."
+        )
+    if trigger == "schedule":
+        return (
+            "Review the project state — your instructions, subscriptions, and context above. "
+            "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
+        )
+    # manual, resume, retry — direct action
+    return (
         "Review the project state — your instructions, subscriptions, and context above. "
         "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
     )
-
-    return "\n\n".join(sections)
 
 
 # ── Task manifest ─────────────────────────────────────────
