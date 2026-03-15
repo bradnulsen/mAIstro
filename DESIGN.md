@@ -134,6 +134,25 @@ The product presents six views and a persistent chat surface:
 
 A status bar surfaces running dispatch indicators, providing ambient awareness of system activity without requiring the user to be on the Queue view.
 
+### Contextual Help (Tooltips)
+
+Configuration fields that involve syntax rules, non-obvious behavior, or domain-specific concepts provide hover tooltips. The tooltip appears on a help indicator adjacent to the field label — not on the input itself — so it does not interfere with interaction.
+
+Tooltips explain *rules and behavior*, not just labels. They answer: "what do I type here?" and "what will this do?"
+
+Required tooltip surfaces:
+
+- **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the task *and* which files are included as context in the dispatch prompt.
+- **Schedule (cron expression)** — five-field format: `minute hour day-of-month month day-of-week`. Ranges (`1-5`), lists (`0,15,30`), steps (`*/10`), and wildcards (`*`). Examples: `*/30 * * * *` (every 30 min), `0 9 * * 1-5` (weekdays at 9am). First evaluation after setting a schedule establishes a baseline — does not fire immediately.
+- **Allowed Tools** — comma-separated tool names that the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent is restricted to only these tools plus any MCP tools. When empty, the agent gets the default tool set.
+- **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce dispatches that wait for manual approval before executing. Manual dispatches bypass this gate.
+- **Coalesce Dispatches** — when enabled, the task will never have more than one pending dispatch. Any new trigger merges into the existing pending dispatch instead of creating a new queue entry. Useful for tasks that should catch up in one run rather than queuing redundant work.
+- **Dependencies** — the task auto-dispatches when *all* selected upstream tasks complete successfully. Timed-out, failed, or cancelled dispatches do not trigger dependents.
+- **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out dispatches do not trigger downstream dependencies. Set to 0 for no limit.
+- **Auto-dispatch (Settings)** — when enabled, the background worker automatically pulls and executes pending dispatches. When disabled, dispatches remain pending until the user manually triggers processing from the Queue view.
+- **MCP Servers (Settings)** — external tool servers that extend agent capabilities. Registered servers are available to dispatched agents as additional tools alongside the platform's built-in tool set. Command and args specify how to launch the server process.
+- **Model** — the LLM model for this task. Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.
+
 ---
 
 ## Constraints
