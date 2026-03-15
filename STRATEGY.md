@@ -2,7 +2,7 @@
 
 ## Current State
 
-mAistro is a fully operational multi-agent orchestration platform. The coordination layer is complete: four trigger types (manual, commit, schedule, dependency), approval gates, retry/resume, timeout enforcement, coalescing, and a queue-first dispatch model. The codebase is ~5K lines across backend and frontend, cleanly modularized with extracted routers, shared state, and a definitive schema (no migrations, no legacy fallbacks).
+mAistro is a fully operational multi-agent orchestration platform. The coordination layer is complete: four trigger types (manual, commit, schedule, dependency), approval gates, retry/resume, timeout enforcement, coalescing, and a queue-first dispatch model. The codebase is ~5K lines across backend and frontend, cleanly modularized with extracted routers, shared state, and a definitive schema. Product requirements and constraints are formalized in DESIGN.md; architecture is documented across ten subsystem descriptions.
 
 What's in place:
 - **Queue-first dispatch** — background worker, auto/manual processing, stale sweep, cancellation
@@ -19,69 +19,94 @@ What's in place:
 - **Chat with session persistence** — SSE streaming, session list, dispatch-linked audit trail
 - **Git feed** — commit diffs with file/line stats, live polling
 - **Project safety** — project switch blocked during active dispatch
+- **Tool control** — per-task `base_tools`, `disallowed_tools`, and `mcp_servers` properties; external MCP server registration
 
-## What Matters Now
+## Diagnosis
 
-The automation layer is functionally complete. The system can compose tasks into workflows, gate them for approval, trigger from multiple sources, and process them reliably. The platform is being used to develop itself — five agents (Architect, Frontend, Scribe, Strategist, Designer) plus an on-demand Prototyper coordinate through git to build mAistro.
+The automation layer works. Tasks dispatch, agents commit, dependencies cascade. But the agents themselves operate as black boxes with unconstrained tool access. The platform dispatches reliably — the problem is what happens *inside* the dispatch.
 
-The product definition is now formalized in DESIGN.md — requirements, constraints, and behavioral contracts captured as a stable reference. This means the platform's operational invariants (queue-first dispatch, sequential execution, project isolation, git as content truth) are documented and deliberate. Future features that relax these constraints should do so explicitly, not accidentally.
+Today, agents invoke tools through the Claude CLI's built-in capabilities — Bash, file operations, git — with no platform-level mediation. The platform can restrict the tool *list* (via `base_tools` / `disallowed_tools`), but it cannot observe, shape, or control what those tools actually do. An agent's git commit is indistinguishable from a human's. A Bash invocation is invisible until it shows up in the NDJSON stream after the fact.
 
-The remaining gaps are about **observability, throughput, and agent quality**:
+This is the accountability gap. The platform orchestrates work but cannot enforce *how* work gets done. And without that enforcement, scaling up agents means scaling up trust assumptions.
 
-1. **Observability** — understanding what agents accomplished requires clicking through individual dispatches. No aggregated view of system health or agent performance.
-2. **Throughput** — sequential processing bottlenecks dependency chains. Independent tasks wait unnecessarily.
-3. **Agent quality** — the platform dispatches well, but the agents themselves have no feedback loop. No way to evaluate whether a dispatch produced good output or to tune prompts based on outcomes.
+## Guiding Policy
 
-## Priority 1: Activity Dashboard
+**Control at the point of action, not observation after the fact.** Instead of building dashboards to understand what agents did (observability-first), we build infrastructure that shapes what agents *can* do (accountability-first). Observability becomes a natural byproduct — when operations flow through a controlled pipeline, logging is trivial.
 
-**The problem:** The Queue view shows individual dispatches. The Feed shows individual commits. Neither answers "what did my agents accomplish today?" or "which tasks are failing repeatedly?" As dispatch volume grows with dependencies and scheduling, users lose the thread.
+The mechanism: an **internal MCP server** that the platform hosts and agents connect to. This server is context-aware — it presents different tools to different tasks based on their configuration. It replaces unconstrained CLI tool access with platform-mediated operations where every action is observable, auditable, and policy-governed.
 
-**Why first:** Observability is what makes autonomous operation sustainable. Without it, users stop trusting the system — not because it's broken, but because they can't tell if it's working. This is especially acute now that approval gates exist: users approving dispatches need context about recent success/failure rates.
+This is a concentration bet. It advances multiple goals simultaneously: accountability (every operation is mediated), observability (every operation is logged), inter-task coordination (tasks can queue other tasks), and quality control (deterministic tool behavior replaces open-ended Bash).
 
-**Specifically:**
-- **Summary panel** on the Queue view (or a new Dashboard view): success/fail/timeout counts per task over configurable time windows (today, 7d, 30d)
-- **Task health indicators** — surface recurring failures (same task timing out repeatedly, same error pattern)
-- **Timeline view** — when dispatches ran, how long they took, gaps between runs. Simple horizontal bars, not a complex chart library
-- Data is already in `dispatch_queue` — this is a read-only aggregation, no schema changes needed
+## Priority 1: Internal MCP Server — Platform-Mediated Tool Infrastructure
 
-## Priority 2: Parallel Dispatch
+**The problem:** Agents operate through the Claude CLI's native tools (Bash, file I/O, git) with no platform-level mediation. The platform controls *when* agents run but not *how* they work. Tool invocations are opaque — visible in the NDJSON stream but not governed, shaped, or auditable at the platform level.
 
-**The problem:** The worker processes one dispatch at a time. With dependency chains, independent branches of the workflow wait in line behind each other. Two tasks that both depend on Strategist must run sequentially even though they have no relationship to each other.
-
-**Why second:** Sequential processing was the right starting point — it eliminates git conflicts and simplifies the mental model. But as workflows grow, it becomes the throughput bottleneck. The mitigation: parallel dispatch with git worktree isolation.
+**Why first:** This is the highest-leverage change on the roadmap. It creates the infrastructure layer that every future accountability, observability, and coordination feature builds on. An MCP server that mediates agent operations gives us:
+- **Observable operations** — every tool call flows through platform code, making logging and metrics trivial
+- **Context-aware tooling** — different tasks get different tool surfaces based on their configuration. A Strategist doesn't need Bash; an Engineer doesn't need queue controls
+- **Deterministic control** — platform-defined tools with precise behavior, replacing open-ended Bash for operations that should be structured (git commits, file reads within subscription scope, queue management)
+- **Policy enforcement** — the server can enforce invariants (e.g., agents only modify files within their subscription patterns, commit messages follow the task's tag format)
 
 **Specifically:**
-- Allow N concurrent dispatches (configurable, default: 1 to preserve current behavior)
-- Each concurrent dispatch operates in a git worktree, isolating file changes
-- On completion, the worktree's branch is merged back to the main branch
-- Conflict detection: if a merge has conflicts, mark the dispatch as needing manual resolution
-- Worker becomes a pool: N slots, each can run one dispatch independently
-- Worktree lifecycle is managed by the worker — create on start, merge + clean up on completion
+- **mAistro hosts an MCP server** that is started alongside the backend and registered with dispatched CLI sessions. The server runs as a sidecar to the FastAPI app (or within the same process via stdio bridge)
+- **Git operations as MCP tools** — `git_commit`, `git_diff`, `git_log`, `git_status` as structured tools with platform-enforced conventions (commit author, message format, allowed paths). This replaces agents shelling out to `git` via Bash
+- **Context-aware tool surface** — the server reads the dispatching task's configuration and presents only relevant tools. Task properties (`base_tools`, subscription patterns, a new `mcp_tools` property) control what the server offers
+- **Tool invocation logging** — every MCP tool call is recorded as a structured event in the dispatch session, creating an audit trail richer than NDJSON parsing
+- **Phase 1 scope**: git tools + read-only project context tools (list files, read file, get task info). Bash restriction is *not* in phase 1 — agents keep Bash access but gain structured alternatives they'll prefer. Phase 1 proves the architecture
 
-**Design consideration:** This is the hardest feature on the roadmap and the only priority that relaxes a documented design constraint (DESIGN.md states "exactly one dispatch runs at a time"). Git worktrees add real complexity — merge conflicts, branch management, cleanup on failure. The tracer bullet should be: two concurrent dispatches in separate worktrees, auto-merge on clean completion, error on conflict. Fancy conflict resolution comes later. When this ships, DESIGN.md's sequential execution constraint should be updated to reflect the new concurrency model.
+**Second-order effects:** Once agents operate through MCP tools, several deferred features become straightforward: cost tracking (tool calls are countable), structured error types (tool-level errors are typed), and dispatch evaluation (tool call patterns are analyzable).
 
-## Priority 3: Dispatch Evaluation
+## Priority 2: Queue Tools — Inter-Task Coordination
 
-**The problem:** There's no feedback loop on agent output quality. A dispatch completes, commits are made, but there's no mechanism to assess whether the work was good, whether the prompt produced the intended result, or whether the task instructions need tuning. The only signal is "did it error or not."
+**The problem:** Tasks cannot communicate with or trigger other tasks except through the existing trigger system (commit-watch, dependency, schedule). There's no way for an agent to say "I found an issue that the Engineer should address" or "this needs Architect review before I proceed." The only coordination primitive is git commits triggering subscription-matched dispatches.
 
-**Why third:** The platform is now reliable enough that the bottleneck shifts from "does it work" to "does it work well." As the system develops itself, the quality of each dispatch compounds — a bad Architect dispatch creates tech debt that other agents inherit. Evaluation closes the loop.
+**Why second:** This is the first *capability* built on the MCP infrastructure from P1. It transforms the platform from a dispatch-and-forget system into one where agents actively coordinate. It also provides an immediate, visceral demonstration that the MCP architecture works — agents using platform tools to orchestrate other agents.
 
 **Specifically:**
-- **Dispatch rating** — simple thumbs up/down on completed dispatches, stored in dispatch_queue
-- **Outcome summary** — auto-generated one-line summary of what the dispatch changed (diff stat + commit messages), shown in queue list without requiring click-through
-- **Prompt effectiveness tracking** — correlate task instruction changes with dispatch success rates over time
+- **`dispatch_task` MCP tool** — allows an agent to enqueue a dispatch for another task, with a message explaining why. Creates a `manual`-like trigger attributed to the dispatching task
+- **`get_queue_status` MCP tool** — read-only view of the queue (what's pending, what's running, what recently completed). Gives agents situational awareness
+- **Task-level access control** — a task property controls which tasks an agent can dispatch. Not every agent should be able to trigger every other agent
+- **Dispatch attribution** — queue entries created by agents are tagged with the originating task and dispatch, creating a provenance chain
+
+**Design consideration:** This is the first place where agent actions have *platform-level side effects* beyond git commits. The MCP server must validate permissions and prevent loops (task A dispatches B dispatches A). Start with simple safeguards: no self-dispatch, depth limit on dispatch chains, and the existing coalescing logic absorbs redundant enqueues.
+
+## Priority 3: Activity Dashboard
+
+**The problem:** Understanding what agents accomplished requires clicking through individual dispatches. No aggregated view of system health, agent performance, or operational patterns. As dispatch volume grows with dependencies, scheduling, and now inter-task coordination, users lose the thread.
+
+**Why third:** With P1 and P2 in place, there's significantly richer data to display — not just dispatch success/fail, but tool call patterns, coordination events, and policy violations. Building the dashboard after the MCP infrastructure means building it once with the right data model, rather than retrofitting.
+
+**Specifically:**
+- **Summary panel** — success/fail/timeout counts per task over configurable time windows (today, 7d, 30d)
+- **Task health indicators** — surface recurring failures, timeout patterns, common error types
+- **Tool usage patterns** — which tools each task uses most, which operations flow through MCP vs. native CLI (this data only exists after P1)
+- **Coordination graph** — which tasks dispatch which other tasks, how dependency chains flow (this data only exists after P2)
+- **Timeline view** — when dispatches ran, how long they took. Simple horizontal bars, no chart library
+- Data comes from `dispatch_queue` plus the new MCP tool call log — read-only aggregation, no schema changes to core tables
+
+## Priority 4: Dispatch Evaluation
+
+**The problem:** No feedback loop on agent output quality. A dispatch completes, commits are made, but there's no mechanism to assess whether the work was good or whether task instructions need tuning.
+
+**Why fourth:** With the MCP audit trail (P1), coordination events (P2), and dashboard (P3), evaluation has rich signals to work with. Tool call patterns, commit quality, downstream task reactions — all become inputs to evaluation that don't exist today.
+
+**Specifically:**
+- **Dispatch rating** — thumbs up/down on completed dispatches, stored in dispatch_queue
+- **Outcome summary** — auto-generated summary of what the dispatch changed (diff stat + commit messages), shown in queue list
+- **Prompt effectiveness tracking** — correlate task instruction changes with dispatch success rates
 - Start with manual rating; auto-evaluation (LLM judges output quality) is a future extension
 
 ## Deferred
 
 Valuable but not blocking the current phase:
 
-- **Conditional dependencies** — "only run if upstream output matches X." Useful for branching workflows but adds significant complexity to the trigger model. Wait until linear dependency chains prove insufficient.
-- **Richer dependency context** — upstream dispatch output summary injected into downstream context. Currently dependencies pass trigger type, upstream task ID, and commit info. Enriching further requires reading/summarizing upstream dispatch output.
+- **Bash lockdown** — restricting or removing Bash access for agents once MCP tools cover their operational needs. This is the end state of the accountability story but requires P1 to be mature and comprehensive. Premature restriction breaks agents. Let the MCP tools prove themselves first, then tighten.
+- **Parallel dispatch** — concurrent execution via git worktrees. High complexity (merge conflicts, branch management, cleanup on failure), and the sequential constraint is documented in DESIGN.md. The MCP server architecture actually makes this harder (server must handle concurrent sessions with different tool contexts). Defer until sequential processing is a proven bottleneck, not a theoretical one.
+- **Conditional dependencies** — "only run if upstream output matches X." Useful for branching workflows but adds significant complexity to the trigger model.
+- **Richer dependency context** — upstream dispatch output summary injected into downstream context.
 - **Multi-project orchestration** — cross-project dispatch. Needs careful design around DB isolation and global `PROJECT_DIR` state.
-- **Cost tracking** — token usage per dispatch. Claude CLI doesn't expose this cleanly yet.
-- **Structured error types** — error classification (timeout, cancelled, context_limit, tool_error) would improve observability and enable smarter retry. Wait for the activity dashboard to surface which error patterns matter.
-- **Status bar click-through** — task chips navigate to the running dispatch in Queue. Small UX win.
+- **Cost tracking** — token usage per dispatch. Becomes feasible once MCP tool calls are logged (tool calls are the unit of cost), but Claude CLI doesn't expose token counts cleanly yet.
+- **Structured error types** — error classification becomes natural once tool operations are platform-mediated, but wait for P1 to land first.
 
 ## Non-Goals
 
@@ -89,18 +114,20 @@ Valuable but not blocking the current phase:
 - **State management library** — useState/useEffect is sufficient at this scale.
 - **Test suite** — codebase is small and changing fast. Tests would slow iteration without proportional value.
 - **Electron/Tauri packaging** — Vite + Python works for the target user.
-- **Custom agent runtime** — Claude CLI subprocess model works. Building a custom LLM layer is massive effort for marginal gain.
+- **Custom agent runtime** — Claude CLI subprocess model works. The MCP server extends it rather than replacing it.
+- **Full Bash removal** — agents need escape hatches. The goal is structured alternatives that agents prefer, not a sandbox that breaks them.
 
 ## Completed
 
-- **Approval Gates** (was P1) — per-task `require_approval` property, `dispatch_queue.approval` column (null/pending/approved/rejected), manual dispatch bypasses, queue UI with pending indicator and approve/reject actions. Shipped across `9bdc8aa` through `df1c67a`.
-- **Project Switch Safety** — block project switch/close during active dispatch (409 from `/api/project/open`). Shipped in `be79408`.
-- **Schema Cleanup** — stripped backward compatibility, consolidated to definitive schema with no migrations or legacy fallbacks. Shipped in `4f4d1f7`.
-- **Trigger Context Migration** — `dispatch_queue.triggers` JSON array replaces flat `trigger`/`trigger_detail`/`context` columns. Each entry has `trigger`, `detail`, `context`. Shipped across `adf3be9` through `8be2810`.
-- **Task Dependencies** (was P1) — `depends_on` JSON property, `dependency` trigger type with same-type coalescing, auto-enqueue on upstream completion, circular dependency prevention, frontend checkboxes in Triggers tab. Shipped in `43d1ac7` through `429259e`.
-- **Watch Semantics Cleanup** — removed `watch_enabled` toggle; subscriptions presence = watch active. Commit coalescing is now automatic. Shipped in `8727171`.
-- **Settings and Configuration UI** — queue behavior, default model, default timeout, MCP server management. Shipped in `afc7f5c`.
-- **Route Modularization** — `task_routes.py`, `queue_routes.py`, `chat.py` as separate routers; `state.py` for shared mutable state; Pydantic models throughout. Shipped across `b35b3cc` through `86c7ab6`.
-- **Dispatch Diff View** — `start_commit`/`result_commit` with inline diff display. Shipped in `def9824`.
-- **Dispatch Continuity** — resume via `--resume`, retry as re-enqueue. Shipped in `fdd357b`.
-- **Dispatch Timeout Enforcement** — per-task timeout, watchdog, graceful terminate + kill. Shipped across `52d1722` through `d0e4426`.
+- **Approval Gates** (was P1) — per-task `require_approval` property, `dispatch_queue.approval` column (null/pending/approved/rejected), manual dispatch bypasses, queue UI with pending indicator and approve/reject actions.
+- **Project Switch Safety** — block project switch/close during active dispatch.
+- **Schema Cleanup** — stripped backward compatibility, consolidated to definitive schema with no migrations or legacy fallbacks.
+- **Trigger Context Migration** — `dispatch_queue.triggers` JSON array replaces flat columns. Each entry has `trigger`, `detail`, `context`.
+- **Task Dependencies** — `depends_on` JSON property, `dependency` trigger type with same-type coalescing, auto-enqueue on upstream completion, circular dependency prevention.
+- **Watch Semantics Cleanup** — removed `watch_enabled` toggle; subscriptions presence = watch active.
+- **Settings and Configuration UI** — queue behavior, default model, default timeout, MCP server management.
+- **Route Modularization** — separate routers, shared state module, Pydantic models throughout.
+- **Dispatch Diff View** — `start_commit`/`result_commit` with inline diff display.
+- **Dispatch Continuity** — resume via `--resume`, retry as re-enqueue.
+- **Dispatch Timeout Enforcement** — per-task timeout, watchdog, graceful terminate + kill.
+- **Product Formalization** — DESIGN.md with requirements and constraints. Architecture descriptions across ten subsystems.
