@@ -62,13 +62,19 @@ Two continuation triggers operate on existing dispatches:
 
 ### Subscriptions
 
-- Subscriptions are glob patterns (supporting `**` recursion) that serve two purposes: **trigger matching** (which commits activate the task) and **context injection** (resolved files are listed in the dispatch prompt for the agent to read).
-- A task with non-empty subscriptions is watch-active. There is no separate toggle.
+Subscriptions are glob patterns (supporting `**` recursion) that define a task's **relevant files**. They serve two purposes:
+
+- **Context injection** (all dispatches) — resolved files are listed in the dispatch prompt. The framing is neutral: "these files are relevant to your task." The task's instructions determine whether relevance means ownership, stewardship, input, reference, or something else entirely. The platform does not impose a relationship.
+- **Trigger matching** (commit-watch) — when a commit changes files matching a task's subscription patterns, the task is enqueued. The trigger context identifies *which subscribed files changed*, not just the commit summary. This keeps the injection agnostic: the task's instructions define whether "your subscribed files changed" means "review what happened to files you own" or "react to new upstream input." The platform triggers; the task interprets.
+
+A task with non-empty subscriptions is watch-active. There is no separate toggle.
+
+The dual purpose is intentional but not mandatory — a task can use subscriptions purely for context (by setting `require_approval` to gate automatic triggers) or purely for triggering (by ignoring the file list in its instructions). Neither use invalidates the other.
 
 ### Dependencies
 
 - Tasks declare upstream dependencies via `depends_on` (a list of task IDs). When an upstream task's dispatch completes successfully, dependent tasks are auto-enqueued.
-- Circular dependencies are prevented at configuration time.
+- Circular dependency chains are permitted. The platform does not prevent A → B → A configurations. Coalescing and sequential execution are the natural safeguards — a task that is already pending absorbs the redundant trigger rather than creating an infinite queue.
 - Dependency context includes the upstream task name, dispatch ID, and commit range.
 
 ### Approval Gates
@@ -142,12 +148,12 @@ Tooltips explain *rules and behavior*, not just labels. They answer: "what do I 
 
 Required tooltip surfaces:
 
-- **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the task *and* which files are included as context in the dispatch prompt.
+- **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the task *and* which files are included as context in the dispatch prompt. When triggered by a commit, the dispatch prompt identifies which subscribed files changed.
 - **Schedule (cron expression)** — five-field format: `minute hour day-of-month month day-of-week`. Ranges (`1-5`), lists (`0,15,30`), steps (`*/10`), and wildcards (`*`). Examples: `*/30 * * * *` (every 30 min), `0 9 * * 1-5` (weekdays at 9am). First evaluation after setting a schedule establishes a baseline — does not fire immediately.
 - **Allowed Tools** — comma-separated tool names that the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent is restricted to only these tools plus any MCP tools. When empty, the agent gets the default tool set.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce dispatches that wait for manual approval before executing. Manual dispatches bypass this gate.
 - **Coalesce Dispatches** — when enabled, the task will never have more than one pending dispatch. Any new trigger merges into the existing pending dispatch instead of creating a new queue entry. Useful for tasks that should catch up in one run rather than queuing redundant work.
-- **Dependencies** — the task auto-dispatches when *all* selected upstream tasks complete successfully. Timed-out, failed, or cancelled dispatches do not trigger dependents.
+- **Dependencies** — the task auto-dispatches when *any* selected upstream task completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled dispatches do not trigger dependents.
 - **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out dispatches do not trigger downstream dependencies. Set to 0 for no limit.
 - **Auto-dispatch (Settings)** — when enabled, the background worker automatically pulls and executes pending dispatches. When disabled, dispatches remain pending until the user manually triggers processing from the Queue view.
 - **MCP Servers (Settings)** — external tool servers that extend agent capabilities. Registered servers are available to dispatched agents as additional tools alongside the platform's built-in tool set. Command and args specify how to launch the server process.
@@ -184,5 +190,5 @@ Required tooltip surfaces:
 - **Stale sweep on startup**: any dispatch marked as in-flight when the process starts is marked interrupted. No zombie dispatches.
 - **Approval gates are non-bypassable for automated triggers**: only manual dispatch (explicit human intent) skips the approval check. All other trigger types respect `require_approval`.
 - **Timeout enforcement is mandatory**: every dispatch has a timeout. The watchdog runs unconditionally. A task cannot run forever.
-- **Dependency cycles are prevented**: the system validates `depends_on` at configuration time to prevent circular dependency chains.
+- **Dependency cycles are absorbed**: circular dependency chains are permitted. Sequential execution and coalescing are the natural safeguards — a task already pending absorbs the redundant trigger rather than spawning unbounded dispatches.
 - **Hook must not obstruct git**: the post-commit hook runs asynchronously and fails silently. A hook failure never prevents or delays a commit.
