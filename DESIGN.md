@@ -108,17 +108,34 @@ Two continuation triggers operate on existing dispatches:
 - The platform reads git state (log, diff, head hash, changed files) but does not write to git directly — only agents commit.
 - Dispatch diffs are tracked via `start_commit` and `result_commit`, enabling before/after comparison.
 
-### MCP Servers
+### Platform-Mediated Tool Access
+
+- The platform hosts an internal MCP server that dispatched agents connect to. This server mediates agent operations — every tool call flows through platform code, making actions observable, auditable, and policy-governed.
+- The internal server is context-aware: it reads the dispatching task's configuration and presents only relevant tools. Different tasks get different tool surfaces based on their properties and subscriptions.
+- **Git operations as structured tools** — `git_commit`, `git_diff`, `git_log`, `git_status` are platform-mediated tools with enforced conventions (commit authorship, message format, path restrictions). These replace unmediated shell-based git access.
+- **Read-only project context tools** — file listing, file reading, and task information retrieval are available as structured tools, scoped by the task's subscriptions and configuration.
+- **Tool invocation logging** — every MCP tool call is recorded as a structured event in the dispatch session, creating an audit trail richer than NDJSON stream parsing.
+- Agents retain access to native CLI tools (including Bash) alongside MCP tools. The MCP tools are structured alternatives that agents prefer, not a replacement that restricts them.
+
+### Inter-Task Coordination
+
+- Agents can enqueue dispatches for other tasks via platform-mediated tools, with a message explaining why. These are attributed to the originating task and dispatch, creating a provenance chain.
+- Agents can read queue status (pending, running, recently completed) for situational awareness.
+- Task-level access control governs which tasks an agent can dispatch. Not every agent can trigger every other agent.
+- Self-dispatch is prohibited. Dispatch chains have a depth limit to prevent loops.
+
+### External MCP Servers
 
 - External tool servers can be registered (name, command, args, env) and enabled/disabled. These extend the capabilities available to dispatched agents.
 
 ### User Interface
 
-The product presents five views and a persistent chat surface:
+The product presents six views and a persistent chat surface:
 
 - **Queue** — the operational center. Shows pending, active, and completed dispatches. Provides controls for processing, cancelling, approving/rejecting, resuming, and retrying. Selecting a dispatch shows its streamed output.
 - **Feed** — git history enriched with dispatch metadata. Shows what changed and which dispatches produced those changes.
 - **Tasks** — task configuration: create, edit, reorder, delete. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution.
+- **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
 - **Settings** — platform configuration: queue processing mode, default model, default timeout, MCP server management.
 - **Chat** — a persistent, resizable tray providing interactive conversation with the LLM in the project context.
 
@@ -143,6 +160,12 @@ A status bar surfaces running dispatch indicators, providing ambient awareness o
 - **Trigger context is immutable at the enqueue site**: each trigger entry's context string is built when the trigger fires, not when the dispatch executes. This preserves the causal record — the prompt reflects what was true when the trigger occurred.
 - **Cascading deletes**: task deletion removes all associated data (properties, dispatches, sessions). No orphaned records.
 - **Running state is derived, not stored**: whether a dispatch is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL), never persisted as a separate status field.
+
+### Accountability
+
+- **Tool mediation is observable**: every tool call that flows through the internal MCP server is logged as a structured event. The platform can reconstruct exactly what an agent did, not just what it produced.
+- **Coordination is attributed**: when an agent enqueues a dispatch for another task, the resulting queue entry records the originating task and dispatch. Provenance chains are traceable.
+- **Context-aware tool surfaces**: the set of tools available to an agent is determined by the task's configuration, not by the agent's own choices. The platform controls what actions are possible.
 
 ### Safety
 
