@@ -24,6 +24,8 @@ What's in place:
 
 The automation layer is functionally complete. The system can compose tasks into workflows, gate them for approval, trigger from multiple sources, and process them reliably. The platform is being used to develop itself — five agents (Architect, Frontend, Scribe, Strategist, Designer) plus an on-demand Prototyper coordinate through git to build mAistro.
 
+The product definition is now formalized in DESIGN.md — requirements, constraints, and behavioral contracts captured as a stable reference. This means the platform's operational invariants (queue-first dispatch, sequential execution, project isolation, git as content truth) are documented and deliberate. Future features that relax these constraints should do so explicitly, not accidentally.
+
 The remaining gaps are about **observability, throughput, and agent quality**:
 
 1. **Observability** — understanding what agents accomplished requires clicking through individual dispatches. No aggregated view of system health or agent performance.
@@ -56,7 +58,7 @@ The remaining gaps are about **observability, throughput, and agent quality**:
 - Worker becomes a pool: N slots, each can run one dispatch independently
 - Worktree lifecycle is managed by the worker — create on start, merge + clean up on completion
 
-**Design consideration:** This is the hardest feature on the roadmap. Git worktrees add real complexity — merge conflicts, branch management, cleanup on failure. The tracer bullet should be: two concurrent dispatches in separate worktrees, auto-merge on clean completion, error on conflict. Fancy conflict resolution comes later.
+**Design consideration:** This is the hardest feature on the roadmap and the only priority that relaxes a documented design constraint (DESIGN.md states "exactly one dispatch runs at a time"). Git worktrees add real complexity — merge conflicts, branch management, cleanup on failure. The tracer bullet should be: two concurrent dispatches in separate worktrees, auto-merge on clean completion, error on conflict. Fancy conflict resolution comes later. When this ships, DESIGN.md's sequential execution constraint should be updated to reflect the new concurrency model.
 
 ## Priority 3: Dispatch Evaluation
 
