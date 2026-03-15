@@ -253,6 +253,9 @@ async def reorder_tasks(task_ids: list[str]):
 
 async def delete_task(task_id: str) -> bool:
     db = await get_db()
+    # Clean up referencing rows not covered by ON DELETE CASCADE
+    await db.execute("DELETE FROM chat_sessions WHERE task_id = ?", (task_id,))
+    await db.execute("DELETE FROM dispatch_queue WHERE task_id = ?", (task_id,))
     cursor = await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     await db.commit()
     return cursor.rowcount > 0
