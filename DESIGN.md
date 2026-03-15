@@ -117,13 +117,6 @@ Two continuation triggers operate on existing dispatches:
 - **Tool invocation logging** — every MCP tool call is recorded as a structured event in the dispatch session, creating an audit trail richer than NDJSON stream parsing.
 - Agents retain access to native CLI tools (including Bash) alongside MCP tools. The MCP tools are structured alternatives that agents prefer, not a replacement that restricts them.
 
-### Inter-Task Coordination
-
-- Agents can enqueue dispatches for other tasks via platform-mediated tools, with a message explaining why. These are attributed to the originating task and dispatch, creating a provenance chain.
-- Agents can read queue status (pending, running, recently completed) for situational awareness.
-- Task-level access control governs which tasks an agent can dispatch. Not every agent can trigger every other agent.
-- Self-dispatch is prohibited. Dispatch chains have a depth limit to prevent loops.
-
 ### External MCP Servers
 
 - External tool servers can be registered (name, command, args, env) and enabled/disabled. These extend the capabilities available to dispatched agents.
@@ -164,7 +157,6 @@ A status bar surfaces running dispatch indicators, providing ambient awareness o
 ### Accountability
 
 - **Tool mediation is observable**: every tool call that flows through the internal MCP server is logged as a structured event. The platform can reconstruct exactly what an agent did, not just what it produced.
-- **Coordination is attributed**: when an agent enqueues a dispatch for another task, the resulting queue entry records the originating task and dispatch. Provenance chains are traceable.
 - **Context-aware tool surfaces**: the set of tools available to an agent is determined by the task's configuration, not by the agent's own choices. The platform controls what actions are possible.
 
 ### Safety
