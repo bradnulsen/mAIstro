@@ -43,11 +43,13 @@ A background scheduler evaluates cron expressions. When a task's schedule fires,
 
 ### Dependency
 
-When a task completes successfully, the worker scans for tasks that declare it as an upstream dependency and enqueues them.
+When a task completes successfully, the worker scans for tasks that declare it as an upstream dependency and enqueues them. A dependent task fires when *any* of its upstream tasks completes — it does not wait for all upstreams.
 
 **Flow**: `_enqueue_dependents()` in `worker.py` — runs after every successful dispatch completion.
 
 **Coalescing**: coalesces with other pending `dependency`-triggered dispatches for the same task. Multiple upstream completions while a dependent is pending → one run.
+
+**Circular chains**: circular dependency chains are permitted. Coalescing absorbs the redundant triggers — a task that is already pending absorbs the new dependency trigger rather than creating unbounded queue growth.
 
 **Context**: includes the upstream task name, dispatch ID, result commit, and commit range (start..result).
 
@@ -83,11 +85,14 @@ The `triggers` column accumulates all trigger entries that contributed to a disp
 
 ## Subscriptions as Dual-Purpose
 
-Subscription glob patterns serve two functions:
-- **Trigger matching**: determines which commits activate the task (watch mode)
-- **Context injection**: resolved files are listed in the dispatch prompt so the agent knows which files to read
+Subscription glob patterns define a task's relevant files and serve two functions:
+
+- **Context injection**: every dispatch resolves the task's subscription patterns and lists matching files in the prompt as files relevant to the task. The task's instructions define the relationship — ownership, input, reference, or anything else.
+- **Watch triggering**: when a commit changes files matching a task's subscription patterns, the task is enqueued. The trigger context carries the commit summary; the full set of subscribed files (changed or not) is always present in the prompt, giving the agent enough information to infer what happened.
 
 A task with non-empty subscriptions is watch-active. There is no separate toggle — subscriptions presence = watch enabled.
+
+A task can use subscriptions purely for context (by gating automatic triggers with `require_approval`) or purely for triggering (by not referencing the file list in its instructions).
 
 ## Relationship to Other Systems
 

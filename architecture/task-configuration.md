@@ -39,9 +39,8 @@ Tasks have an explicit `sort_order` property. The `reorder` endpoint accepts an 
 Tasks declare upstream dependencies via `depends_on`. The system prevents:
 
 - **Self-dependency**: rejected at the API layer before any graph analysis
-- **Circular dependencies**: DFS cycle detection runs against the full dependency graph with the proposed change applied. If a cycle is found, the update is rejected with the cycle path
 
-Validation runs at configuration time only — there is no runtime cycle check during dispatch. The invariant is maintained by rejecting invalid configurations.
+Circular dependency chains are permitted. When task A depends on task B and vice versa, each completion triggers the other — but coalescing absorbs redundant triggers. A task that is already pending absorbs the new dependency trigger rather than creating unbounded queue growth. The combination of coalescing and sequential execution makes cycles safe without requiring graph analysis at configuration time.
 
 ## CRUD Operations
 

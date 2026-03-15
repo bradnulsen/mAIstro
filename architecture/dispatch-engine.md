@@ -67,7 +67,9 @@ On startup (once per project open), the worker marks any dispatches that are `st
 
 ### Dependent Task Propagation
 
-After successful completion (no error, no timeout), the worker scans all tasks for those declaring the completed task in their `depends_on` list. For each match, it enqueues a new dispatch with `dependency` trigger, including context about the upstream task and its commit range.
+After successful completion (no error, no timeout), the worker scans all tasks for those declaring the completed task in their `depends_on` list. For each match, it enqueues a new dispatch with `dependency` trigger, including context about the upstream task and its commit range. A dependent task fires when *any* of its upstream tasks completes — it does not wait for all upstreams.
+
+Circular dependency chains are safe: coalescing absorbs redundant triggers, and sequential execution ensures no concurrent amplification. A cycle produces at most one pending dispatch per task at any time.
 
 Timed-out and failed dispatches explicitly do not trigger dependents.
 
