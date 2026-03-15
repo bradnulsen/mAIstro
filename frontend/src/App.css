@@ -10,10 +10,13 @@
   --accent: #222;
   --accent-hover: #444;
   --rail-bg: #fafaf5;
+  --hover-bg: #eee;
   --danger: #c44;
   --success: #4a4;
   --running: #e90;
   --warning: #e6a117;
+  --code-bg: #1a1a1a;
+  --code-text: #e0e0e0;
   --font: 'Courier New', monospace;
 }
 
@@ -71,7 +74,7 @@ body {
   font-family: var(--font);
 }
 
-.rail-icon:hover { background: #eee; color: var(--text); }
+.rail-icon:hover { background: var(--hover-bg); color: var(--text); }
 .rail-icon.active { background: var(--accent); color: #fff; }
 
 .rail-spacer { flex: 1; }
@@ -138,7 +141,7 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #aaa;
+  background: var(--text-muted);
 }
 
 .status-dot.running {
@@ -258,7 +261,7 @@ label {
 }
 
 .feed-item.active {
-  background: #eee;
+  background: var(--hover-bg);
 }
 
 .feed-item.running {
@@ -330,8 +333,8 @@ label {
   gap: 4px;
 }
 
-.feed-stat-add { color: #4a4; }
-.feed-stat-del { color: #c44; }
+.feed-stat-add { color: var(--success); }
+.feed-stat-del { color: var(--danger); }
 
 /* ── Queue Status ── */
 
@@ -357,8 +360,8 @@ label {
 .queue-status.completed { color: var(--success); }
 .queue-status.error { color: var(--danger); }
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
-.queue-status.timed_out { color: var(--warning, #e6a117); }
-.queue-status.pending_approval { color: var(--warning, #e6a117); }
+.queue-status.timed_out { color: var(--warning); }
+.queue-status.pending_approval { color: var(--warning); }
 .queue-status.rejected { color: var(--text-muted); text-decoration: line-through; }
 
 /* ── Task List + Detail ── */
@@ -389,7 +392,7 @@ label {
   font-size: 12px;
 }
 
-.task-list-item:hover { background: #eee; }
+.task-list-item:hover { background: var(--hover-bg); }
 .task-list-item.active { background: var(--accent); color: #fff; }
 
 .task-list-item .status-dot {
@@ -780,7 +783,7 @@ label {
   font-size: 11px;
 }
 
-.chat-session-item:hover { background: #eee; }
+.chat-session-item:hover { background: var(--hover-bg); }
 .chat-session-item.active { background: var(--accent); color: #fff; }
 
 .chat-session-title {
@@ -994,8 +997,8 @@ label {
   border-radius: 3px;
 }
 .md-content pre {
-  background: #1a1a1a;
-  color: #e0e0e0;
+  background: var(--code-bg);
+  color: var(--code-text);
   padding: 6px 8px;
   border-radius: 4px;
   overflow-x: auto;
@@ -1157,8 +1160,8 @@ label {
 
 .diff-view {
   font-size: 11px;
-  background: #1a1a1a;
-  color: #e0e0e0;
+  background: var(--code-bg);
+  color: var(--code-text);
   padding: 8px;
   border-radius: 4px;
   overflow: auto;

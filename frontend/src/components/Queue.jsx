@@ -460,7 +460,7 @@ export default function Queue() {
                     )}
                     <button
                       className="small"
-                      onClick={() => setRetryContext(getTriggers(selected).slice(-1)[0]?.context || '')}
+                      onClick={() => setRetryContext('')}
                       title="Queue a fresh dispatch — edit context first"
                     >
                       ↺ Retry
@@ -639,7 +639,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       {item.result_commit && (
         <div style={{ marginBottom: 12 }}>
           <label>Commits</label>
-          <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
+          <div style={{ fontSize: 11, fontFamily: 'var(--font)' }}>
             {item.start_commit
               ? `${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`
               : item.result_commit.slice(0, 8)}
