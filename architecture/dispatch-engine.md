@@ -81,6 +81,19 @@ Approval and rejection are API operations:
 
 Manual processing via `process_one()` auto-approves pending-approval dispatches (explicit intent, same rationale as manual dispatch).
 
+## Commit Tracking (No Auto-Commit)
+
+The worker captures `start_commit` (HEAD at dispatch start) and `result_commit` (HEAD at dispatch end) to track what an agent produced. These bookend the agent's work — if `start_commit == result_commit`, the agent made no commits.
+
+**The platform does not auto-commit.** Agents have structured git tools via the internal MCP server (see [Tool Mediation](tool-mediation.md)) and are instructed to commit in the system prompt. The platform trusts agents to commit their own work. Rationale:
+
+- **Authorship integrity**: every commit carries the task's identity (`[TaskName]` prefix, task-specific author). An auto-commit would break this — the platform would have to guess what message and authorship to apply.
+- **Atomic intent**: agents decide what constitutes a logical commit. They may make multiple commits for distinct changes or one commit for related changes. Auto-commit would force a single "catch-all" commit with no meaningful message.
+- **Parallel dispatch future**: if dispatches ever run concurrently, auto-commit becomes intractable — the working tree contains interleaved changes from multiple agents, and there's no way to attribute which changes belong to which dispatch.
+- **Observable failure**: when `start_commit == result_commit` but the agent was supposed to produce changes, the dispatch output and audit trail reveal what happened. This is more useful than silently committing unknown changes.
+
+The commit range (`start_commit..result_commit`) feeds into dependency trigger context — downstream tasks see exactly which commits their upstream produced.
+
 ## Retry and Resume
 
 - **Retry**: resurrects the original dispatch record — resets all lifecycle fields (`started_at`, `completed_at`, `error`, commits, session), resets `created_at` to now (so it doesn't jump ahead in the queue), appends a retry trigger to the triggers array. The dispatch ID is preserved.

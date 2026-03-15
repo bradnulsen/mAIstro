@@ -32,6 +32,14 @@ A project file browser providing read-only access to project content. The user s
 ### Settings (`Settings.jsx`)
 Queue settings (auto-dispatch toggle), MCP server management, and global configuration.
 
+## Contextual Help
+
+Configuration fields that involve syntax rules, non-obvious behavior, or domain concepts surface hover tooltips. The tooltip attaches to a help indicator adjacent to the field label — not on the input itself — preserving normal interaction.
+
+Tooltips explain rules and behavior, not just labels. They answer "what do I type here?" and "what will this do?" Required surfaces include: subscription glob syntax, cron expression format, allowed tools, approval gates, coalescing, dependencies, timeout, auto-dispatch, MCP servers, and model selection.
+
+This is a frontend-only concern — tooltip content is static, derived from the domain rules documented in DESIGN.md. No backend involvement.
+
 ### Chat (`Chat.jsx`)
 Interactive conversation interface in the side tray. Manages chat sessions, displays message history, and streams responses via SSE.
 

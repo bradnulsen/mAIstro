@@ -1,6 +1,6 @@
 # Git Integration
 
-Git is the content source of truth. The platform reads git state extensively but writes to it only for two operational purposes: hook installation and gitignore management. All project content changes come from agents committing through their own tools.
+Git is the content source of truth. The platform reads git state extensively but writes to it only for two operational purposes: hook installation and gitignore management. All project content changes come from agents committing through their own tools — the platform never auto-commits on behalf of agents (see [Dispatch Engine — Commit Tracking](dispatch-engine.md#commit-tracking-no-auto-commit) for rationale).
 
 **Module**: `backend/git.py`
 
