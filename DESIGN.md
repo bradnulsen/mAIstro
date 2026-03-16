@@ -31,13 +31,14 @@ A job is a template. A task is an instance. One job produces many tasks over tim
 - A job is a named, configurable unit of work. It has a short description, detailed instructions (the prompt body), a model, and behavioral properties.
 - Job identity is derived from the name (slugified). The name is the human-facing label; the slug is the system-facing key. Once created, the slug is immutable — renaming a job does not change its identity.
 - Jobs are ordered. The user controls sort order by dragging jobs into position.
+- Each job has a **color** — a visual identifier that distinguishes it across every surface where jobs appear. Color is assigned randomly on creation from a curated palette of distinguishable hues. The user can change the color at any time via a simple color picker (a hue wheel or equivalent minimal control). The color is cosmetic metadata — it carries no behavioral semantics. It exists purely to let the user visually parse job-related elements at a glance: queue items, task cards, status indicators, and anywhere else the job's identity appears.
 - Job deletion cascades: removing a job removes its properties, dispatch history, and chat sessions.
 
 ### Job Properties
 
 - Properties follow an entity-attribute-value pattern: a registry of property definitions (with types and defaults) and per-job overrides.
 - Property types: `string`, `json`, `integer`, `boolean`. The platform casts stored strings to the declared type on read.
-- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `require_approval`, `coalesce_dispatches`, `allowed_tools`, `mcp_servers`, `sort_order`.
+- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `require_approval`, `coalesce_dispatches`, `allowed_tools`, `mcp_servers`, `sort_order`, `color`.
 
 ### Dispatch
 
@@ -309,6 +310,7 @@ MCP server configuration is a first-class surface with its own rail item. It is 
 - **Running state is derived**: whether a task is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL). Whether a task is queued is computed from `queued_at` (queued_at IS NOT NULL AND started_at IS NULL). Whether a task is pending is the absence of both. State is not persisted as a separate status field — it is derived from the presence of lifecycle timestamps.
 - **Outcome summaries are derived from git**: the summary is computed from commits between `start_commit` and `result_commit`. It reflects what the repository records, not what the agent claims. A task that produces no commits has no summary.
 - **Ratings are optional and user-initiated**: a task's rating defaults to null (unrated). The user explicitly sets it. Ratings are never inferred or auto-assigned.
+- **Job color is non-null**: every job has a color from creation. The platform assigns a random color from a curated palette when a job is created. The palette is chosen for visual distinguishability — high saturation, evenly distributed hues, readable against both light and dark backgrounds. The user can override the color at any time. Color has no behavioral effect — it is purely visual metadata.
 - **Merge preserves trigger history**: merging pending tasks concatenates their trigger arrays. No trigger entry is lost or rewritten. The surviving task's triggers are the union of all source tasks' triggers, ordered by original creation time.
 - **Split produces valid tasks**: each task created by split carries exactly one trigger entry from the original. The original task retains its first trigger and identity; new tasks get fresh IDs and are appended to the pending queue.
 - **Composition operates on pre-execution tasks only**: merge and split apply exclusively to pending or queued tasks that have not started execution. Active, completed, and pending-approval tasks are ineligible. This preserves lifecycle monotonicity — once a task starts, its trigger set is fixed.
