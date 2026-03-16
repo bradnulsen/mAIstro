@@ -161,9 +161,9 @@ Three tool sources exist, each requiring discovery:
 - **Internal MCP tools** — the tools hosted by the platform's own MCP server (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_tasks`). The platform knows these directly — it defines them. They are always available and not subject to per-job selection (the internal server is always connected).
 - **External MCP server tools** — tools provided by registered external servers. When a server is registered and enabled, the platform connects to it and discovers its tool list. These tools become visible in the per-job configuration surface alongside built-in tools.
 
-The configuration surface for `allowed_tools` presents the full inventory of available tools as a selectable list — checkboxes, multi-select, or equivalent. The user picks from what exists rather than typing names into a text field. The same applies to per-job MCP server selection: registered servers appear as selectable options, not free-text entries.
+The configuration surface for `allowed_tools` presents the full inventory of available tools as a selectable list — checkboxes, multi-select, or equivalent. The user selects from available options.
 
-This is a discoverability requirement, not a UI prescription. The essential behavior: the user sees what is available, selects what they want, and cannot select something that does not exist.
+This is a discoverability requirement, not a UI prescription. The essential behavior: the user sees what is available and selects what they want.
 
 ### External MCP Servers
 
