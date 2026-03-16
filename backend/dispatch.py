@@ -62,13 +62,21 @@ async def run_dispatch(
     log.info("[dispatch:%d] MCP config written to %s", dispatch_id, mcp_config_path)
 
     try:
+        # Compute tool scoping: allowed_tools is the only user-facing property.
+        # When set, the platform computes the complement and passes --disallowedTools
+        # to hide everything else — critical with --dangerously-skip-permissions.
+        allowed = props.get("allowed_tools") or None
+        disallowed = None
+        if allowed:
+            disallowed = sorted(cli.CLI_NATIVE_TOOLS - set(allowed))
+
         async for event in cli.invoke(
             prompt=user_prompt,
             system_prompt=system_prompt,
             cwd=project_dir,
             model=props.get("model"),
-            allowed_tools=props.get("base_tools") or None,
-            disallowed_tools=props.get("disallowed_tools") or None,
+            allowed_tools=allowed,
+            disallowed_tools=disallowed,
             mcp_config_path=mcp_config_path,
             cancel_event=cancel_event,
             resume_session=resume_session_id,

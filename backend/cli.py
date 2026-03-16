@@ -27,6 +27,14 @@ from typing import AsyncIterator
 
 log = logging.getLogger("maistro.cli")
 
+# Known Claude CLI native tools — used by the dispatch layer to compute the
+# complement of a job's allowed_tools (i.e. what to pass as --disallowedTools).
+CLI_NATIVE_TOOLS = frozenset([
+    "Read", "Edit", "Write", "Bash", "Glob", "Grep",
+    "Agent", "TodoWrite", "NotebookEdit",
+    "WebFetch", "WebSearch",
+])
+
 
 async def invoke(
     prompt: str,

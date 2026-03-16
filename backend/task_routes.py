@@ -25,8 +25,7 @@ class UpdateTaskRequest(BaseModel):
     description: str | None = None
     instructions: str | None = None
     model: str | None = None
-    base_tools: list[str] | None = None
-    disallowed_tools: list[str] | None = None
+    allowed_tools: list[str] | None = None
     mcp_servers: list[str] | None = None
     subscriptions: list[str] | None = None
     coalesce_dispatches: bool | None = None
