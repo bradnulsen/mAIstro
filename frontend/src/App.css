@@ -591,9 +591,28 @@ label.muted-text {
   padding-top: 2px;
 }
 
-.task-def-columns {
+.task-tab-panel--definition {
   display: flex;
-  gap: 16px;
+  flex-direction: column;
+}
+
+.field-group--grow {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.field-group--grow textarea,
+.field-group--grow .instructions-preview {
+  flex: 1;
+  min-height: 0;
+}
+
+.instructions-textarea {
+  resize: vertical;
+  min-height: calc(100vh - 440px);
+  width: 100%;
 }
 
 .trigger-options {
@@ -608,15 +627,7 @@ label.muted-text {
   flex-wrap: wrap;
   gap: 4px 16px;
 }
-.task-def-left {
-  flex: 0 0 clamp(260px, 45%, 480px);
-  min-width: 0;
-}
-.task-def-right {
-  flex: 1;
-  min-width: 0;
-}
-.task-def-right .instructions-preview {
+.instructions-preview {
   min-height: 200px;
   overflow-y: auto;
 }

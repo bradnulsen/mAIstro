@@ -307,136 +307,94 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
           className={`task-tab-btn${activeTab === 'definition' ? ' active' : ''}`}
           onClick={() => setActiveTab('definition')}
         >
-          Task Configuration
+          Job Definition
         </button>
         <button
-          className={`task-tab-btn${activeTab === 'triggers' ? ' active' : ''}`}
-          onClick={() => setActiveTab('triggers')}
+          className={`task-tab-btn${activeTab === 'dispatch' ? ' active' : ''}`}
+          onClick={() => setActiveTab('dispatch')}
         >
-          Triggers
+          Dispatch
+        </button>
+        <button
+          className={`task-tab-btn${activeTab === 'tools' ? ' active' : ''}`}
+          onClick={() => setActiveTab('tools')}
+        >
+          Tools
         </button>
       </div>
 
       {activeTab === 'definition' && (
-        <div className="task-tab-panel">
-          <div className="task-def-columns">
-            <div className="task-def-left">
-              <div className="field-group">
-                <label>Description</label>
-                <AutoTextarea
-                  value={getVal('description') || ''}
-                  onChange={e => edit('description', e.target.value)}
-                  placeholder="Short description for the task registry..."
-                  maxHeight={200}
-                  minRows={3}
-                />
-              </div>
+        <div className="task-tab-panel task-tab-panel--definition">
+          <div className="field-group">
+            <label>Description</label>
+            <AutoTextarea
+              value={getVal('description') || ''}
+              onChange={e => edit('description', e.target.value)}
+              placeholder="Short description for the task registry..."
+              maxHeight={200}
+              minRows={3}
+            />
+          </div>
 
-              <div className="field-group">
-                <div className="label-row">
-                  <label>Allowed Tools</label>
-                  <HelpTip text={TIPS.allowedTools} />
-                </div>
-                <input
-                  type="text"
-                  value={(getVal('allowed_tools') || []).join(', ')}
-                  onChange={e => edit('allowed_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-                  placeholder="Comma-separated tool names..."
-                />
-              </div>
-
-              <div className="field-group">
-                <div className="label-row">
-                  <label>Model</label>
-                  <HelpTip text={TIPS.model} />
-                </div>
-                <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
-                  <option value="sonnet">Sonnet</option>
-                  <option value="opus">Opus</option>
-                  <option value="haiku">Haiku</option>
-                </select>
-              </div>
-
-              <div className="field-group">
-                <div className="label-row">
-                  <label>Timeout (seconds)</label>
-                  <HelpTip text={TIPS.timeout} />
-                </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input
-                    type="number"
-                    value={getVal('timeout') ?? 900}
-                    onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
-                    min={0}
-                    step={60}
-                    style={{ width: 100 }}
-                  />
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                    {(() => {
-                      const v = getVal('timeout') ?? 900
-                      if (v === 0) return 'no limit'
-                      const mins = Math.floor(v / 60)
-                      const secs = v % 60
-                      return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
-                    })()}
-                  </span>
-                </div>
-              </div>
-
-              {availableMcpServers.length > 0 && (
-                <div className="field-group">
-                  <div className="label-row">
-                    <label>MCP Servers</label>
-                    <HelpTip text={TIPS.mcpServers} />
-                  </div>
-                  <div className="checkbox-list">
-                    {availableMcpServers.map(s => {
-                      const enabled = getVal('mcp_servers') || []
-                      const checked = enabled.includes(s.name)
-                      return (
-                        <label key={s.name} className="checkbox-label" style={{ fontSize: 12 }}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => {
-                              const next = checked ? enabled.filter(n => n !== s.name) : [...enabled, s.name]
-                              edit('mcp_servers', next)
-                            }}
-                          />
-                          {s.name}
-                        </label>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
+          <div className="field-group">
+            <div className="label-row">
+              <label>Model</label>
+              <HelpTip text={TIPS.model} />
             </div>
+            <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
+              <option value="sonnet">Sonnet</option>
+              <option value="opus">Opus</option>
+              <option value="haiku">Haiku</option>
+            </select>
+          </div>
 
-            <div className="task-def-right">
-              <div className="field-group">
-                <label>Instructions</label>
-                {editingInstructions || !getVal('instructions') ? (
-                  <textarea
-                    value={getVal('instructions') || ''}
-                    onChange={e => edit('instructions', e.target.value)}
-                    placeholder="Detailed instructions for what this task should do..."
-                    rows={10}
-                    autoFocus={editingInstructions}
-                    style={{ resize: 'vertical', minHeight: 200 }}
-                  />
-                ) : (
-                  <div className="instructions-preview md-content" onClick={() => setEditingInstructions(true)}>
-                    <Markdown>{getVal('instructions')}</Markdown>
-                  </div>
-                )}
+          <div className="field-group field-group--grow">
+            <label>Instructions</label>
+            {editingInstructions || !getVal('instructions') ? (
+              <textarea
+                value={getVal('instructions') || ''}
+                onChange={e => edit('instructions', e.target.value)}
+                placeholder="Detailed instructions for what this task should do..."
+                autoFocus={editingInstructions}
+                className="instructions-textarea"
+              />
+            ) : (
+              <div className="instructions-preview md-content" onClick={() => setEditingInstructions(true)}>
+                <Markdown>{getVal('instructions')}</Markdown>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}
 
-      {activeTab === 'triggers' && (
+      {activeTab === 'dispatch' && (
         <div className="task-tab-panel">
+          <div className="field-group">
+            <div className="label-row">
+              <label>Timeout (seconds)</label>
+              <HelpTip text={TIPS.timeout} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="number"
+                value={getVal('timeout') ?? 900}
+                onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
+                min={0}
+                step={60}
+                style={{ width: 100 }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                {(() => {
+                  const v = getVal('timeout') ?? 900
+                  if (v === 0) return 'no limit'
+                  const mins = Math.floor(v / 60)
+                  const secs = v % 60
+                  return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
+                })()}
+              </span>
+            </div>
+          </div>
+
           <div className="field-group trigger-options">
             <div className="label-row">
               <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
@@ -547,6 +505,56 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                 </div>
               )}
             </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'tools' && (
+        <div className="task-tab-panel">
+          <div className="field-group">
+            <div className="label-row">
+              <label>Allowed Tools</label>
+              <HelpTip text={TIPS.allowedTools} />
+            </div>
+            <input
+              type="text"
+              value={(getVal('allowed_tools') || []).join(', ')}
+              onChange={e => edit('allowed_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+              placeholder="Comma-separated tool names..."
+            />
+          </div>
+
+          {availableMcpServers.length > 0 && (
+            <div className="field-group">
+              <div className="label-row">
+                <label>MCP Servers</label>
+                <HelpTip text={TIPS.mcpServers} />
+              </div>
+              <div className="checkbox-list">
+                {availableMcpServers.map(s => {
+                  const enabled = getVal('mcp_servers') || []
+                  const checked = enabled.includes(s.name)
+                  return (
+                    <label key={s.name} className="checkbox-label" style={{ fontSize: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          const next = checked ? enabled.filter(n => n !== s.name) : [...enabled, s.name]
+                          edit('mcp_servers', next)
+                        }}
+                      />
+                      {s.name}
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {availableMcpServers.length === 0 && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              No MCP servers registered. Add servers in Settings.
+            </span>
           )}
         </div>
       )}
