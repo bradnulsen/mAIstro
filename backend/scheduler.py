@@ -1,8 +1,8 @@
-"""Cron-based task scheduler — enqueues dispatches on a schedule.
+"""Cron-based job scheduler — enqueues tasks on a schedule.
 
-Runs as a background asyncio task alongside the dispatch worker.
-Checks task schedules every 30 seconds and enqueues when due.
-Stores last-fire timestamps per task in the config table to survive restarts.
+Runs as a background asyncio task alongside the task worker.
+Checks job schedules every 30 seconds and enqueues when due.
+Stores last-fire timestamps per job in the config table to survive restarts.
 """
 
 import asyncio
@@ -35,47 +35,44 @@ async def stop():
     log.info("[scheduler] Stopped")
 
 
-def _config_key(task_id: str) -> str:
-    return f"schedule_last_fire_{task_id}"
+def _config_key(job_id: str) -> str:
+    return f"schedule_last_fire_{job_id}"
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _set_last_fire(task_id: str, dt: datetime):
-    await db.set_config(_config_key(task_id), dt.isoformat())
+async def _set_last_fire(job_id: str, dt: datetime):
+    await db.set_config(_config_key(job_id), dt.isoformat())
 
 
 async def _loop():
-    """Main scheduler loop — checks all task schedules periodically."""
+    """Main scheduler loop — checks all job schedules periodically."""
     while True:
         try:
             if not state.PROJECT_DIR or not db.DB_PATH:
                 await asyncio.sleep(_CHECK_INTERVAL)
                 continue
 
-            tasks = await db.list_tasks()
+            jobs = await db.list_jobs()
             now = _now_utc()
 
-            # Batch-load all last-fire timestamps in one query instead of one per task
             last_fire_map = await db.get_config_prefix("schedule_last_fire_")
 
-            for task in tasks:
-                schedule = task["properties"].get("schedule", "")
+            for job in jobs:
+                schedule = job["properties"].get("schedule", "")
                 if not schedule or not schedule.strip():
                     continue
 
-                # Validate cron expression
                 if not croniter.is_valid(schedule):
-                    log.warning("[scheduler] Invalid cron '%s' on task %s", schedule, task["id"])
+                    log.warning("[scheduler] Invalid cron '%s' on job %s", schedule, job["id"])
                     continue
 
-                # Skip if task is already running or has pending dispatches
-                if task["properties"].get("running"):
+                if job["properties"].get("running"):
                     continue
 
-                raw = last_fire_map.get(_config_key(task["id"]))
+                raw = last_fire_map.get(_config_key(job["id"]))
                 last_fire: datetime | None = None
                 if raw:
                     try:
@@ -83,35 +80,28 @@ async def _loop():
                     except ValueError:
                         pass
 
-                # Determine if we should fire
                 if last_fire is None:
-                    # First time — set baseline to now, don't fire immediately
-                    await _set_last_fire(task["id"], now)
-                    log.info("[scheduler] Initialized schedule for %s: %s", task["id"], schedule)
+                    await _set_last_fire(job["id"], now)
+                    log.info("[scheduler] Initialized schedule for %s: %s", job["id"], schedule)
                     continue
 
-                # Get next fire time after last fire
                 cron = croniter(schedule, last_fire)
                 next_fire = cron.get_next(datetime)
-                # Make timezone-aware if needed
                 if next_fire.tzinfo is None:
                     next_fire = next_fire.replace(tzinfo=timezone.utc)
 
                 if next_fire <= now:
-                    # Include HEAD commit so the dispatch knows codebase state at queue time
                     head = git.head_hash(state.PROJECT_DIR)
                     head_note = f" at {head[:8]}" if head else ""
 
-                    log.info("[scheduler] Firing %s (schedule: %s)", task["id"], schedule)
-                    # enqueue_dispatch auto-coalesces for schedule triggers,
-                    # so repeated fires merge into a single pending dispatch
-                    await db.enqueue_dispatch(
-                        task["id"],
+                    log.info("[scheduler] Firing %s (schedule: %s)", job["id"], schedule)
+                    await db.enqueue_task(
+                        job["id"],
                         "schedule",
                         trigger_detail=schedule,
                         context=f"**Schedule** (`{schedule}`){head_note}",
                     )
-                    await _set_last_fire(task["id"], now)
+                    await _set_last_fire(job["id"], now)
 
                     worker.notify()
 

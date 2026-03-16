@@ -29,58 +29,58 @@ export const getRecentProjects = () => fetchJSON('/api/project/recent')
 export const removeRecentProject = (path) =>
   fetchJSON(`/api/project/recent?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
 
-// ── Tasks ──
+// ── Jobs (persistent config) ──
 
-export const listTasks = () => fetchJSON('/api/tasks/')
+export const listJobs = () => fetchJSON('/api/jobs/')
 
-export const createTask = (name, properties) =>
-  fetchJSON('/api/tasks/', { method: 'POST', body: JSON.stringify({ name, properties }) })
+export const createJob = (name, properties) =>
+  fetchJSON('/api/jobs/', { method: 'POST', body: JSON.stringify({ name, properties }) })
 
-export const updateTask = (id, updates) =>
-  fetchJSON(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
+export const updateJob = (id, updates) =>
+  fetchJSON(`/api/jobs/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
 
-export const deleteTask = (id) =>
-  fetchJSON(`/api/tasks/${id}`, { method: 'DELETE' })
+export const deleteJob = (id) =>
+  fetchJSON(`/api/jobs/${id}`, { method: 'DELETE' })
 
-export const getTaskSubscriptions = (id) => fetchJSON(`/api/tasks/${id}/subscriptions`)
+export const getJobSubscriptions = (id) => fetchJSON(`/api/jobs/${id}/subscriptions`)
 
-export const reorderTasks = (taskIds) =>
-  fetchJSON('/api/tasks/reorder', { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) })
+export const reorderJobs = (jobIds) =>
+  fetchJSON('/api/jobs/reorder', { method: 'POST', body: JSON.stringify({ job_ids: jobIds }) })
 
-// ── Dispatch ──
+// ── Tasks (atomic work items) ──
 
-export const dispatchTask = (taskId, context) =>
-  fetchJSON(`/api/dispatch/${taskId}`, {
+export const enqueueTask = (jobId, context) =>
+  fetchJSON(`/api/tasks/${jobId}`, {
     method: 'POST',
     body: JSON.stringify({ context: context || undefined }),
   })
 
-export const getDispatchQueue = () => fetchJSON('/api/dispatch/queue')
+export const getTaskQueue = () => fetchJSON('/api/tasks/queue')
 
-export const getDispatchOutput = (dispatchId) =>
-  fetchJSON(`/api/dispatch/${dispatchId}/output`)
+export const getTaskOutput = (taskId) =>
+  fetchJSON(`/api/tasks/${taskId}/output`)
 
-export const updateDispatch = (id, updates) =>
-  fetchJSON(`/api/dispatch/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
+export const updateTask = (id, updates) =>
+  fetchJSON(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
 
-export const getDispatchDiff = (id) => fetchJSON(`/api/dispatch/${id}/diff`)
+export const getTaskDiff = (id) => fetchJSON(`/api/tasks/${id}/diff`)
 
-export const getDispatchOutcome = (id) => fetchJSON(`/api/dispatch/${id}/outcome`)
+export const getTaskOutcome = (id) => fetchJSON(`/api/tasks/${id}/outcome`)
 
-export const cancelDispatch = (id) =>
-  fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
+export const cancelTask = (id) =>
+  fetchJSON(`/api/tasks/cancel/${id}`, { method: 'POST' })
 
-export const resumeDispatch = (id) =>
-  fetchJSON(`/api/dispatch/${id}/resume`, { method: 'POST' })
+export const resumeTask = (id) =>
+  fetchJSON(`/api/tasks/${id}/resume`, { method: 'POST' })
 
-export const retryDispatch = (id, context) =>
-  fetchJSON(`/api/dispatch/${id}/retry`, {
+export const retryTask = (id, context) =>
+  fetchJSON(`/api/tasks/${id}/retry`, {
     method: 'POST',
     body: JSON.stringify({ context }),
   })
 
-export const streamDispatch = (dispatchId, onEvent) =>
-  fetchSSE(`/api/dispatch/${dispatchId}/stream`, {}, onEvent)  // returns { abort, done }
+export const streamTask = (taskId, onEvent) =>
+  fetchSSE(`/api/tasks/${taskId}/stream`, {}, onEvent)
 
 // ── Queue Control ──
 
@@ -89,26 +89,26 @@ export const getQueueSettings = () => fetchJSON('/api/queue/settings')
 export const setQueueSettings = (settings) =>
   fetchJSON('/api/queue/settings', { method: 'POST', body: JSON.stringify(settings) })
 
-export const processOne = (dispatchId) =>
-  fetchJSON(`/api/queue/process/${dispatchId}`, { method: 'POST' })
+export const processOne = (taskId) =>
+  fetchJSON(`/api/queue/process/${taskId}`, { method: 'POST' })
 
-export const reorderDispatches = (dispatchIds) =>
-  fetchJSON('/api/queue/reorder', { method: 'POST', body: JSON.stringify({ dispatch_ids: dispatchIds }) })
+export const reorderTasks = (taskIds) =>
+  fetchJSON('/api/queue/reorder', { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) })
 
-export const approveDispatch = (id) =>
-  fetchJSON(`/api/dispatch/${id}/approve`, { method: 'POST' })
+export const approveTask = (id) =>
+  fetchJSON(`/api/tasks/${id}/approve`, { method: 'POST' })
 
-export const rejectDispatch = (id) =>
-  fetchJSON(`/api/dispatch/${id}/reject`, { method: 'POST' })
+export const rejectTask = (id) =>
+  fetchJSON(`/api/tasks/${id}/reject`, { method: 'POST' })
 
-export const mergeDispatches = (dispatchIds) =>
-  fetchJSON('/api/dispatch/merge', { method: 'POST', body: JSON.stringify({ dispatch_ids: dispatchIds }) })
+export const mergeTasks = (taskIds) =>
+  fetchJSON('/api/tasks/merge', { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) })
 
-export const splitDispatch = (id) =>
-  fetchJSON(`/api/dispatch/${id}/split`, { method: 'POST' })
+export const splitTask = (id) =>
+  fetchJSON(`/api/tasks/${id}/split`, { method: 'POST' })
 
-export const rateDispatch = (id, rating) =>
-  fetchJSON(`/api/dispatch/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
+export const rateTask = (id, rating) =>
+  fetchJSON(`/api/tasks/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
 
 // ── Feed ──
 

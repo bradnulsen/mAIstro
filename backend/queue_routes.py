@@ -1,7 +1,7 @@
-"""Dispatch and queue routes — extracted from main.py.
+"""Task queue routes — atomic work item lifecycle and queue control.
 
-Handles dispatch lifecycle (enqueue, stream, output, cancel, resume, retry),
-dispatch editing, and queue control (settings, process).
+Handles task enqueue, streaming, output, cancel, resume, retry,
+editing, merge/split, and queue settings.
 """
 
 import asyncio
@@ -15,7 +15,7 @@ from backend import database as db, git, worker
 from backend import state
 from backend.state import utcnow, require_project
 
-router = APIRouter(tags=["dispatch", "queue"])
+router = APIRouter(tags=["tasks", "queue"])
 
 
 # ── Pydantic Models ────────────────────────────────────────
@@ -23,18 +23,17 @@ router = APIRouter(tags=["dispatch", "queue"])
 class DispatchRequest(BaseModel):
     context: str | None = None
 
-class UpdateDispatchRequest(BaseModel):
+class UpdateTaskRequest(BaseModel):
     context: str | None = None
-    trigger_index: int | None = None
 
 class RetryRequest(BaseModel):
     context: str | None = None
 
-class ReorderDispatchesRequest(BaseModel):
-    dispatch_ids: list[int]
+class ReorderTasksRequest(BaseModel):
+    task_ids: list[int]
 
 class MergeRequest(BaseModel):
-    dispatch_ids: list[int]
+    task_ids: list[int]
 
 class RateRequest(BaseModel):
     rating: str | None = None
@@ -43,17 +42,17 @@ class QueueSettingsRequest(BaseModel):
     auto_dispatch: bool = False
 
 
-# ── Dispatch Routes ─────────────────────────────────────────
+# ── Task Routes ────────────────────────────────────────────
 
-@router.post("/api/dispatch/{task_id}")
-async def dispatch_task(task_id: str, req: DispatchRequest | None = None):
-    """Enqueue a dispatch. The worker processes it."""
+@router.post("/api/tasks/{job_id}")
+async def enqueue_job(job_id: str, req: DispatchRequest | None = None):
+    """Enqueue a task for a job. The worker processes it."""
     require_project()
-    task = await db.get_task(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    if task["properties"].get("running"):
-        raise HTTPException(409, "Task is already running")
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["properties"].get("running"):
+        raise HTTPException(409, "Job is already running")
 
     user_context = req.context if req else None
     head = git.head_hash(state.PROJECT_DIR)
@@ -62,33 +61,31 @@ async def dispatch_task(task_id: str, req: DispatchRequest | None = None):
         context = f"**Manual**{ref}: {user_context}"
     else:
         context = f"**Manual**{ref}"
-    dispatch_id = await db.enqueue_dispatch(task_id, "manual", trigger_detail=head, context=context)
+    task_id = await db.enqueue_task(job_id, "manual", trigger_detail=head, context=context)
     worker.notify()
-    return {"dispatch_id": dispatch_id}
+    return {"task_id": task_id}
 
 
-@router.get("/api/dispatch/queue")
-async def get_dispatch_queue():
+@router.get("/api/tasks/queue")
+async def get_task_queue():
     require_project()
-    return await db.get_dispatch_queue()
+    return await db.get_task_queue()
 
 
-@router.get("/api/dispatch/{dispatch_id}/stream")
-async def stream_dispatch(dispatch_id: int):
-    """SSE stream of live events for a running dispatch."""
+@router.get("/api/tasks/{task_id}/stream")
+async def stream_task(task_id: int):
+    """SSE stream of live events for a running task."""
     require_project()
-    dispatch = await db.get_dispatch(dispatch_id)
-    if not dispatch:
-        raise HTTPException(404, "Dispatch not found")
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
 
-    # If already completed, return immediately with done
-    if dispatch.get("completed_at"):
+    if task.get("completed_at"):
         async def done_stream():
             yield {"event": "done", "data": json.dumps({"status": "completed"})}
         return EventSourceResponse(done_stream())
 
-    # Subscribe to live events from the worker
-    q = worker.subscribe(dispatch_id)
+    q = worker.subscribe(task_id)
 
     async def stream():
         try:
@@ -114,51 +111,51 @@ async def stream_dispatch(dispatch_id: int):
                 elif etype == "session_id":
                     yield {"event": "session_id", "data": json.dumps(event)}
         finally:
-            worker.unsubscribe(dispatch_id, q)
+            worker.unsubscribe(task_id, q)
 
     return EventSourceResponse(stream())
 
 
-@router.get("/api/dispatch/{dispatch_id}/output")
-async def get_dispatch_output(dispatch_id: int):
-    """Get stored output for a dispatch."""
+@router.get("/api/tasks/{task_id}/output")
+async def get_task_output(task_id: int):
+    """Get stored output for a task."""
     require_project()
-    dispatch = await db.get_dispatch(dispatch_id)
-    if not dispatch:
-        raise HTTPException(404, "Dispatch not found")
-    session_id = dispatch.get("session_id")
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    session_id = task.get("session_id")
     if not session_id:
-        return {"messages": [], "status": "pending", "dispatch": dispatch}
+        return {"messages": [], "status": "pending", "task": task}
     messages = await db.get_chat_messages(session_id)
-    status = "running" if dispatch.get("started_at") and not dispatch.get("completed_at") else \
-             "completed" if dispatch.get("completed_at") else "pending"
-    return {"messages": messages, "status": status, "dispatch": dispatch}
+    status = "running" if task.get("started_at") and not task.get("completed_at") else \
+             "completed" if task.get("completed_at") else "pending"
+    return {"messages": messages, "status": status, "task": task}
 
 
-@router.get("/api/dispatch/{dispatch_id}/outcome")
-async def get_dispatch_outcome(dispatch_id: int):
-    """Get the outcome summary for a completed dispatch (derived from git)."""
+@router.get("/api/tasks/{task_id}/outcome")
+async def get_task_outcome(task_id: int):
+    """Get the outcome summary for a completed task (derived from git)."""
     require_project()
-    dispatch = await db.get_dispatch(dispatch_id)
-    if not dispatch:
-        raise HTTPException(404, "Dispatch not found")
-    start = dispatch.get("start_commit")
-    end = dispatch.get("result_commit")
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    start = task.get("start_commit")
+    end = task.get("result_commit")
     if not start or not end or start == end:
         return {"summary": None}
     summary = git.outcome_summary(state.PROJECT_DIR, start, end)
     return {"summary": summary}
 
 
-@router.get("/api/dispatch/{dispatch_id}/diff")
-async def get_dispatch_diff(dispatch_id: int):
-    """Get the git diff for a completed dispatch (start_commit..result_commit)."""
+@router.get("/api/tasks/{task_id}/diff")
+async def get_task_diff(task_id: int):
+    """Get the git diff for a completed task (start_commit..result_commit)."""
     require_project()
-    dispatch = await db.get_dispatch(dispatch_id)
-    if not dispatch:
-        raise HTTPException(404, "Dispatch not found")
-    start = dispatch.get("start_commit")
-    end = dispatch.get("result_commit")
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    start = task.get("start_commit")
+    end = task.get("result_commit")
     if not start or not end:
         return {"files": [], "insertions": 0, "deletions": 0, "diff": ""}
     if start == end:
@@ -166,150 +163,126 @@ async def get_dispatch_diff(dispatch_id: int):
     return git.diff_range(state.PROJECT_DIR, start, end)
 
 
-@router.patch("/api/dispatch/{dispatch_id}")
-async def update_dispatch_route(dispatch_id: int, req: UpdateDispatchRequest):
-    """Edit a pending dispatch (only before it starts running)."""
+@router.patch("/api/tasks/{task_id}")
+async def update_task_route(task_id: int, req: UpdateTaskRequest):
+    """Edit a pending task's context (only before it starts running)."""
     require_project()
-    dispatch = await db.get_dispatch(dispatch_id)
-    if not dispatch:
-        raise HTTPException(404, "Dispatch not found")
-    if dispatch.get("started_at"):
-        raise HTTPException(409, "Cannot edit a dispatch that has already started")
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.get("started_at"):
+        raise HTTPException(409, "Cannot edit a task that has already started")
 
     if req.context is not None:
-        triggers = dispatch.get("triggers") or []
-        idx = req.trigger_index if req.trigger_index is not None else -1
-        if triggers and -len(triggers) <= idx < len(triggers):
-            triggers[idx]["context"] = req.context
-        await db.update_dispatch(dispatch_id, triggers=json.dumps(triggers))
+        await db.update_task(task_id, context=req.context)
     return {"status": "ok"}
 
 
-@router.post("/api/dispatch/cancel/{dispatch_id}")
-async def cancel_dispatch(dispatch_id: int):
+@router.post("/api/tasks/cancel/{task_id}")
+async def cancel_task(task_id: int):
     require_project()
-    # Kill the running process if this dispatch is active
-    was_running = worker.cancel(dispatch_id)
+    was_running = worker.cancel(task_id)
     now = utcnow()
-    # Mark as cancelled in DB (worker will also mark it, but this covers pending dispatches)
-    await db.update_dispatch(dispatch_id, completed_at=now, error="cancelled")
-    # Propagate to subordinates
-    subs = await db.get_subordinate_dispatches(dispatch_id)
+    await db.update_task(task_id, completed_at=now, error="cancelled")
+    subs = await db.get_subordinate_tasks(task_id)
     for sub in subs:
         if not sub.get("completed_at"):
-            await db.update_dispatch(sub["id"], completed_at=now, error="cancelled")
+            await db.update_task(sub["id"], completed_at=now, error="cancelled")
     return {"status": "cancelled", "was_running": was_running}
 
 
-@router.post("/api/dispatch/{dispatch_id}/resume")
-async def resume_dispatch(dispatch_id: int):
-    """Resume a failed/timed-out dispatch using its CLI session ID."""
+@router.post("/api/tasks/{task_id}/resume")
+async def resume_task(task_id: int):
+    """Resume a failed/timed-out task using its CLI session ID."""
     require_project()
-    dispatch = await db.get_dispatch(dispatch_id)
-    if not dispatch:
-        raise HTTPException(404, "Dispatch not found")
-    if not dispatch.get("completed_at"):
-        raise HTTPException(409, "Dispatch is not completed")
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if not task.get("completed_at"):
+        raise HTTPException(409, "Task is not completed")
 
-    # Find the CLI session ID from the chat session
-    session_id = dispatch.get("session_id")
+    session_id = task.get("session_id")
     if not session_id:
-        raise HTTPException(409, "No session found for this dispatch")
+        raise HTTPException(409, "No session found for this task")
     chat_session = await db.get_chat_session(session_id)
     cli_session_id = chat_session.get("cli_session_id") if chat_session else None
     if not cli_session_id:
         raise HTTPException(409, "No CLI session ID available — cannot resume")
 
-    # Enqueue a new dispatch with resume_session_id
     head = git.head_hash(state.PROJECT_DIR)
-    new_id = await db.enqueue_dispatch(
-        dispatch["task_id"], "resume",
+    new_id = await db.enqueue_task(
+        task["job_id"], "resume",
         trigger_detail=head,
-        context=f"**Resume** — continuing from dispatch #{dispatch_id}",
+        context=f"**Resume** — continuing from task #{task_id}",
     )
-    await db.update_dispatch(new_id, resume_session_id=cli_session_id)
+    await db.update_task(new_id, resume_session_id=cli_session_id)
     worker.notify()
-    return {"dispatch_id": new_id, "resuming_from": dispatch_id}
+    return {"task_id": new_id, "resuming_from": task_id}
 
 
-@router.post("/api/dispatch/{dispatch_id}/retry")
-async def retry_dispatch(dispatch_id: int, req: RetryRequest | None = None):
-    """Retry a completed dispatch — resurrects the original with a retry trigger appended."""
+@router.post("/api/tasks/{task_id}/retry")
+async def retry_task(task_id: int, req: RetryRequest | None = None):
+    """Retry a completed task — creates a new task with retry context."""
     require_project()
-    dispatch = await db.get_dispatch(dispatch_id)
-    if not dispatch:
-        raise HTTPException(404, "Dispatch not found")
-    if not dispatch.get("completed_at"):
-        raise HTTPException(409, "Dispatch is not completed")
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if not task.get("completed_at"):
+        raise HTTPException(409, "Task is not completed")
 
-    # Build the retry trigger context: include outcome of previous run + user notes
     parts = []
-    error = dispatch.get("error")
+    error = task.get("error")
     if error:
         parts.append(f"previous run failed: {error}")
-    start = dispatch.get("start_commit")
-    end = dispatch.get("result_commit")
+    start = task.get("start_commit")
+    end = task.get("result_commit")
     if start and end and start != end:
         parts.append(f"commits {start[:8]}..{end[:8]}")
     user_notes = req.context if req and req.context else None
     if user_notes:
         parts.append(user_notes)
     retry_summary = " — ".join(parts) if parts else "fresh re-dispatch"
-    retry_context = f"**Retry**: {retry_summary}"
+    retry_context = f"**Retry** of task #{task_id}: {retry_summary}"
 
-    # Append retry trigger to the existing triggers array
-    triggers = dispatch.get("triggers") or []
-    triggers.append({"trigger": "retry", "detail": str(dispatch_id), "context": retry_context})
-
-    # Resurrect: reset lifecycle fields, keep trigger history.
-    # Reset created_at so the retried dispatch doesn't jump ahead of newer
-    # pending dispatches (get_oldest_pending_dispatch orders by created_at ASC).
-    await db.update_dispatch(
-        dispatch_id,
-        created_at=utcnow(),
-        started_at=None,
-        completed_at=None,
-        error=None,
-        result_commit=None,
-        start_commit=None,
-        session_id=None,
-        resume_session_id=None,
-        triggers=json.dumps(triggers),
+    new_id = await db.enqueue_task(
+        task["job_id"], "retry",
+        trigger_detail=str(task_id),
+        context=retry_context,
     )
     worker.notify()
-    return {"dispatch_id": dispatch_id}
+    return {"task_id": new_id}
 
 
-@router.post("/api/dispatch/merge")
-async def merge_dispatches_route(req: MergeRequest):
-    """Merge pending same-job dispatches into one logical unit."""
+@router.post("/api/tasks/merge")
+async def merge_tasks_route(req: MergeRequest):
+    """Merge pending same-job tasks into one logical unit."""
     require_project()
     try:
-        root_id = await db.merge_dispatches(req.dispatch_ids)
+        root_id = await db.merge_tasks(req.task_ids)
         return {"root_id": root_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
-@router.post("/api/dispatch/{dispatch_id}/split")
-async def split_dispatch_route(dispatch_id: int):
-    """Split a merged dispatch — make subordinates independent again."""
+@router.post("/api/tasks/{task_id}/split")
+async def split_task_route(task_id: int):
+    """Split a merged task — make subordinates independent again."""
     require_project()
     try:
-        split_ids = await db.split_dispatch(dispatch_id)
+        split_ids = await db.split_task(task_id)
         return {"split_ids": split_ids}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
-@router.post("/api/dispatch/{dispatch_id}/rate")
-async def rate_dispatch_route(dispatch_id: int, req: RateRequest):
-    """Rate a completed dispatch (positive/negative/null)."""
+@router.post("/api/tasks/{task_id}/rate")
+async def rate_task_route(task_id: int, req: RateRequest):
+    """Rate a completed task (positive/negative/null)."""
     require_project()
     try:
-        ok = await db.rate_dispatch(dispatch_id, req.rating)
+        ok = await db.rate_task(task_id, req.rating)
         if not ok:
-            raise HTTPException(404, "Dispatch not found or not completed")
+            raise HTTPException(404, "Task not found or not completed")
         return {"status": "ok"}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -333,42 +306,40 @@ async def set_queue_settings(req: QueueSettingsRequest):
     return {"status": "ok"}
 
 
-@router.post("/api/dispatch/{dispatch_id}/approve")
-async def approve_dispatch_route(dispatch_id: int):
-    """Approve a pending-approval dispatch so the worker can process it."""
+@router.post("/api/tasks/{task_id}/approve")
+async def approve_task_route(task_id: int):
+    """Approve a pending-approval task so the worker can process it."""
     require_project()
-    ok = await db.approve_dispatch(dispatch_id)
+    ok = await db.approve_task(task_id)
     if not ok:
-        raise HTTPException(404, "Dispatch not found or not pending approval")
+        raise HTTPException(404, "Task not found or not pending approval")
     worker.notify()
     return {"status": "approved"}
 
 
-@router.post("/api/dispatch/{dispatch_id}/reject")
-async def reject_dispatch_route(dispatch_id: int):
-    """Reject a pending-approval dispatch (marks as skipped)."""
+@router.post("/api/tasks/{task_id}/reject")
+async def reject_task_route(task_id: int):
+    """Reject a pending-approval task (marks as skipped)."""
     require_project()
-    ok = await db.reject_dispatch(dispatch_id)
+    ok = await db.reject_task(task_id)
     if not ok:
-        raise HTTPException(404, "Dispatch not found or not pending approval")
+        raise HTTPException(404, "Task not found or not pending approval")
     return {"status": "rejected"}
 
 
 @router.post("/api/queue/reorder")
-async def reorder_dispatches(req: ReorderDispatchesRequest):
-    """Reorder pending dispatches to control execution priority."""
+async def reorder_tasks_route(req: ReorderTasksRequest):
+    """Reorder pending tasks to control execution priority."""
     require_project()
-    await db.reorder_dispatches(req.dispatch_ids)
+    await db.reorder_tasks(req.task_ids)
     return {"status": "ok"}
 
 
-@router.post("/api/queue/process/{dispatch_id}")
-async def queue_process_one(dispatch_id: int):
-    """Manually process a specific pending dispatch by ID."""
+@router.post("/api/queue/process/{task_id}")
+async def queue_process_one(task_id: int):
+    """Manually process a specific pending task by ID."""
     require_project()
-    dispatch = await worker.process_one(dispatch_id)
-    if dispatch is None:
-        raise HTTPException(404, "Dispatch not found or not pending")
-    return {"processed": [dispatch["id"]]}
-
-
+    task = await worker.process_one(task_id)
+    if task is None:
+        raise HTTPException(404, "Task not found or not pending")
+    return {"processed": [task["id"]]}

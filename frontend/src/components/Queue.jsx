@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import Markdown from 'react-markdown'
 import {
-  getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
-  getDispatchDiff, getDispatchOutcome, getQueueSettings, setQueueSettings, processOne,
-  streamDispatch, resumeDispatch, retryDispatch, approveDispatch, rejectDispatch,
-  reorderDispatches, mergeDispatches, splitDispatch, rateDispatch,
+  getTaskQueue, cancelTask, updateTask, getTaskOutput,
+  getTaskDiff, getTaskOutcome, getQueueSettings, setQueueSettings, processOne,
+  streamTask, resumeTask, retryTask, approveTask, rejectTask,
+  reorderTasks, mergeTasks, splitTask, rateTask,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
@@ -46,16 +46,12 @@ function isUpcoming(item) {
   return s === 'pending' || s === 'running' || s === 'pending_approval'
 }
 
-function getTriggers(item) {
-  return item.triggers || []
-}
-
-function triggerLabel(entry) {
-  const base = TRIGGER_LABELS[entry.trigger] || entry.trigger
-  if (entry.trigger === 'commit' && entry.detail) return `${base} (${entry.detail.slice(0, 8)})`
-  if (entry.trigger === 'dependency' && entry.detail) return `${base} (${entry.detail})`
-  if (entry.trigger === 'manual' && entry.detail) return `${base} @ ${entry.detail.slice(0, 8)}`
-  if (entry.trigger === 'schedule' && entry.detail) return `${base} (${entry.detail})`
+function triggerLabel(item) {
+  const base = TRIGGER_LABELS[item.trigger] || item.trigger
+  if (item.trigger === 'commit' && item.trigger_detail) return `${base} (${item.trigger_detail.slice(0, 8)})`
+  if (item.trigger === 'dependency' && item.trigger_detail) return `${base} (${item.trigger_detail})`
+  if (item.trigger === 'manual' && item.trigger_detail) return `${base} @ ${item.trigger_detail.slice(0, 8)}`
+  if (item.trigger === 'schedule' && item.trigger_detail) return `${base} (${item.trigger_detail})`
   return base
 }
 
@@ -79,13 +75,12 @@ export default function Queue() {
   const detailScrollRef = useRef(null)
   const [dragIdx, setDragIdx] = useState(null)
   const [dragOverIdx, setDragOverIdx] = useState(null)
-  const [dropZone, setDropZone] = useState(null) // 'reorder-before' | 'reorder-after' | 'merge'
+  const [dropZone, setDropZone] = useState(null)
 
   const refresh = useCallback(async () => {
     try {
-      const queue = await getDispatchQueue()
+      const queue = await getTaskQueue()
       setItems(queue)
-      // Keep selected item in sync with fresh data
       setSelected(prev => {
         if (!prev) return null
         const updated = queue.find(q => q.id === prev.id)
@@ -106,26 +101,21 @@ export default function Queue() {
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Load queue settings
   useEffect(() => {
     getQueueSettings().then(s => setAutoDispatch(s.auto_dispatch)).catch(() => {})
   }, [])
 
-  // Auto-refresh every 5s
   useEffect(() => {
     const interval = setInterval(refresh, 5000)
     return () => clearInterval(interval)
   }, [refresh])
 
-  // Live stream state for running dispatches
   const [liveText, setLiveText] = useState('')
   const [liveTools, setLiveTools] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
 
-  // Clear transient action error when selection changes
   useEffect(() => { setActionError(''); setRetryContext(null); setConfirmCancel(null) }, [selected?.id])
 
-  // Load output when selection changes — SSE for running, stored for completed
   useEffect(() => {
     if (!selected) { setOutput(null); setLiveText(''); setLiveTools([]); setIsStreaming(false); return }
     let cancelled = false
@@ -133,14 +123,13 @@ export default function Queue() {
 
     const status = getStatus(selected)
     if (status === 'running') {
-      // Subscribe to live SSE stream
       setOutput(null)
       setLiveText('')
       setLiveTools([])
       setIsStreaming(true)
 
       try {
-        const { abort, done } = streamDispatch(selected.id, (event) => {
+        const { abort, done } = streamTask(selected.id, (event) => {
           if (cancelled) return
           const type = event.type
           if (type === 'text') {
@@ -151,9 +140,8 @@ export default function Queue() {
               return prev.includes(tool) ? prev : [...prev, tool]
             })
           } else if (type === 'done') {
-            // Stream finished — load stored output
             setIsStreaming(false)
-            getDispatchOutput(selected.id).then(data => {
+            getTaskOutput(selected.id).then(data => {
               if (!cancelled) setOutput(data)
             }).catch(() => {})
           } else if (type === 'error') {
@@ -162,28 +150,25 @@ export default function Queue() {
         })
         sseHandle = { abort }
         done.catch(() => {
-          // SSE failed — fall back to stored output
           if (!cancelled) {
             setIsStreaming(false)
-            getDispatchOutput(selected.id).then(data => {
+            getTaskOutput(selected.id).then(data => {
               if (!cancelled) setOutput(data)
             }).catch(() => {})
           }
         })
       } catch {
-        // fetchSSE setup failed
         setIsStreaming(false)
       }
 
       return () => { cancelled = true; if (sseHandle) sseHandle.abort() }
     } else {
-      // Completed/pending — load stored output
       setLiveText('')
       setLiveTools([])
       setIsStreaming(false)
       const load = async () => {
         try {
-          const data = await getDispatchOutput(selected.id)
+          const data = await getTaskOutput(selected.id)
           if (!cancelled) setOutput(data)
         } catch { if (!cancelled) setOutput(null) }
       }
@@ -209,7 +194,7 @@ export default function Queue() {
   const handleApprove = async (id) => {
     setActionError('')
     try {
-      await approveDispatch(id)
+      await approveTask(id)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -219,7 +204,7 @@ export default function Queue() {
   const handleReject = async (id) => {
     setActionError('')
     try {
-      await rejectDispatch(id)
+      await rejectTask(id)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -228,7 +213,7 @@ export default function Queue() {
 
   const handleCancel = async (id) => {
     try {
-      await cancelDispatch(id)
+      await cancelTask(id)
       setConfirmCancel(null)
       await refresh()
       if (selected?.id === id) setSelected(null)
@@ -238,9 +223,9 @@ export default function Queue() {
   const handleResume = async (id) => {
     setActionError('')
     try {
-      const result = await resumeDispatch(id)
+      const result = await resumeTask(id)
       const queue = await refresh()
-      const newItem = queue.find(q => q.id === result.dispatch_id)
+      const newItem = queue.find(q => q.id === result.task_id)
       if (newItem) { setSelected(newItem); setFilter('upcoming') }
     } catch (e) {
       setActionError(e.message)
@@ -250,7 +235,7 @@ export default function Queue() {
   const handleMergePair = async (draggedId, targetId) => {
     setActionError('')
     try {
-      await mergeDispatches([draggedId, targetId])
+      await mergeTasks([draggedId, targetId])
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -260,7 +245,7 @@ export default function Queue() {
   const handleSplit = async (id) => {
     setActionError('')
     try {
-      await splitDispatch(id)
+      await splitTask(id)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -270,41 +255,38 @@ export default function Queue() {
   const handleRate = async (id, rating) => {
     setActionError('')
     try {
-      await rateDispatch(id, rating)
+      await rateTask(id, rating)
       await refresh()
     } catch (e) {
       setActionError(e.message)
     }
   }
 
-  const [retryContext, setRetryContext] = useState(null) // null = not editing
+  const [retryContext, setRetryContext] = useState(null)
 
   const handleRetry = async (id, context) => {
     setActionError('')
     try {
-      const result = await retryDispatch(id, context)
+      const result = await retryTask(id, context)
       setRetryContext(null)
       const queue = await refresh()
-      const newItem = queue.find(q => q.id === result.dispatch_id)
+      const newItem = queue.find(q => q.id === result.task_id)
       if (newItem) { setSelected(newItem); setFilter('upcoming') }
     } catch (e) {
       setActionError(e.message)
     }
   }
 
-  // Scroll detail panel to top when selection changes
   useLayoutEffect(() => {
     if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0
   }, [selected?.id])
 
-  // Auto-scroll detail panel to bottom while live streaming
   useEffect(() => {
     if (!liveText || !detailScrollRef.current) return
     const el = detailScrollRef.current
     el.scrollTop = el.scrollHeight
   }, [liveText])
 
-  // Escape: dismiss dialogs in order, then close detail panel
   useEffect(() => {
     const handleKey = (e) => {
       if (e.key !== 'Escape') return
@@ -316,17 +298,15 @@ export default function Queue() {
     return () => document.removeEventListener('keydown', handleKey)
   }, [selected, confirmCancel, retryContext])
 
-  // Compute drop zone from cursor position within a row element
-  const MERGE_ZONE_RATIO = 0.5 // central 50% is merge zone, top/bottom 25% each is reorder
+  const MERGE_ZONE_RATIO = 0.5
   const computeDropZone = (e, rowEl, draggedItem, targetItem) => {
     const rect = rowEl.getBoundingClientRect()
     const y = e.clientY - rect.top
     const ratio = y / rect.height
     const edgeSize = (1 - MERGE_ZONE_RATIO) / 2
-    // Merge zone only activates for same-job pending targets
     const canMerge = targetItem && draggedItem &&
       getStatus(targetItem) === 'pending' && getStatus(draggedItem) === 'pending' &&
-      targetItem.task_id === draggedItem.task_id
+      targetItem.job_id === draggedItem.job_id
     if (ratio < edgeSize) return 'reorder-before'
     if (ratio > 1 - edgeSize) return 'reorder-after'
     return canMerge ? 'merge' : (ratio < 0.5 ? 'reorder-before' : 'reorder-after')
@@ -345,12 +325,10 @@ export default function Queue() {
   const handleDragEnd = async () => {
     if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
       if (dropZone === 'merge') {
-        // Merge dragged task into drop target
         const draggedItem = filtered[dragIdx]
         const targetItem = filtered[dragOverIdx]
         await handleMergePair(draggedItem.id, targetItem.id)
       } else {
-        // Reorder: insert at the target position
         const reordered = [...filtered]
         const [moved] = reordered.splice(dragIdx, 1)
         const insertIdx = dropZone === 'reorder-before'
@@ -358,7 +336,7 @@ export default function Queue() {
           : (dragOverIdx < dragIdx ? dragOverIdx + 1 : dragOverIdx)
         reordered.splice(insertIdx, 0, moved)
         const pendingIds = reordered.filter(i => getStatus(i) !== 'running').map(i => i.id)
-        try { await reorderDispatches(pendingIds); await refresh() } catch {}
+        try { await reorderTasks(pendingIds); await refresh() } catch {}
       }
     }
     setDragIdx(null)
@@ -373,7 +351,6 @@ export default function Queue() {
   if (filter === 'past') {
     filtered.sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
   } else {
-    // Pending dispatches: sort_order first (null last), then created_at; running items stay at top
     filtered.sort((a, b) => {
       const aRunning = getStatus(a) === 'running' ? 0 : 1
       const bRunning = getStatus(b) === 'running' ? 0 : 1
@@ -411,21 +388,15 @@ export default function Queue() {
       </div>
 
       <div className="split-body">
-        {/* Queue list */}
         <div className="feed-list">
           {loading && <div className="loading">Loading queue...</div>}
           {!loading && filtered.length === 0 && (
             <div className="empty-state">
-              {filter === 'upcoming' ? 'No pending or running dispatches' : 'No past dispatches'}
+              {filter === 'upcoming' ? 'No pending or running tasks' : 'No past tasks'}
             </div>
           )}
           {filtered.map((item, i) => {
             const status = getStatus(item)
-            const triggers = getTriggers(item)
-            const triggerTypes = [...new Set(triggers.map(t => t.trigger))]
-            // First context that has content, for preview
-            const previewCtx = triggers.find(t => t.context)?.context
-            const triggerCount = triggers.length > 1 ? ` (${triggers.length})` : ''
             const draggable = filter === 'upcoming' && status !== 'running'
             const isDropTarget = dragOverIdx === i && dragIdx !== null && dragIdx !== i
             const dropClass = isDropTarget
@@ -443,21 +414,22 @@ export default function Queue() {
                 onDragEnd={draggable ? handleDragEnd : undefined}
               >
                 <div className="feed-avatar">
-                  {(item.task_name || '?')[0].toUpperCase()}
+                  {(item.job_name || '?')[0].toUpperCase()}
                 </div>
                 <div className="feed-body">
                   <div className="feed-meta">
                     <span className="feed-trigger">
-                      {triggerTypes.map(t => TRIGGER_ICONS[t] || '').join('')}{triggerCount}
+                      {TRIGGER_ICONS[item.trigger] || ''}
+                      {item.subordinate_count > 0 ? ` (${item.subordinate_count + 1})` : ''}
                     </span>
-                    <span className="feed-author">{item.task_name}</span>
+                    <span className="feed-author">{item.job_name}</span>
                     <span className={`queue-status ${status}`}>
                       {STATUS_LABELS[status]}
                     </span>
                     <span>{formatDate(isUpcoming(item) ? item.created_at : (item.completed_at || item.created_at), true)}</span>
                   </div>
                   <div className="feed-message">
-                    {previewCtx || `${TRIGGER_LABELS[item.trigger] || item.trigger} dispatch`}
+                    {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
                   </div>
                 </div>
               </div>
@@ -465,16 +437,15 @@ export default function Queue() {
           })}
         </div>
 
-        {/* Detail panel */}
         {selected && (
           <div className="detail-panel">
             <div className="detail-panel-header">
-              <h3>#{selected.id} — {selected.task_name}</h3>
+              <h3>#{selected.id} — {selected.job_name}</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
             <div ref={detailScrollRef} className="detail-scroll">
-              <DispatchDetail item={selected} output={output} onUpdate={refresh}
+              <TaskDetail item={selected} output={output} onUpdate={refresh}
                 liveText={liveText} liveTools={liveTools} isStreaming={isStreaming}
                 onSplit={handleSplit} onRate={handleRate} />
             </div>
@@ -483,7 +454,7 @@ export default function Queue() {
               <div className="detail-actions">
                 {confirmCancel === selected.id ? (
                   <div className="action-row">
-                    <span style={{ fontSize: 12 }}>Cancel this dispatch?</span>
+                    <span style={{ fontSize: 12 }}>Cancel this task?</span>
                     <button className="danger small" onClick={() => handleCancel(selected.id)}>Confirm</button>
                     <button className="small" onClick={() => setConfirmCancel(null)}>No</button>
                   </div>
@@ -511,7 +482,7 @@ export default function Queue() {
                           className="small primary"
                           onClick={() => handleProcessOne(selected.id)}
                           disabled={anyRunning}
-                          title={anyRunning ? 'Another dispatch is running' : 'Run this dispatch now'}
+                          title={anyRunning ? 'Another task is running' : 'Run this task now'}
                         >
                           ▶ Run Now
                         </button>
@@ -519,7 +490,7 @@ export default function Queue() {
                           <button
                             className="small"
                             onClick={() => handleSplit(selected.id)}
-                            title="Split merged tasks into individual dispatches"
+                            title="Split merged tasks into individual items"
                           >
                             Split ({selected.subordinate_count})
                           </button>
@@ -563,7 +534,7 @@ export default function Queue() {
                     <button
                       className="small"
                       onClick={() => setRetryContext('')}
-                      title="Queue a fresh dispatch — edit context first"
+                      title="Queue a fresh task — edit context first"
                     >
                       ↺ Retry
                     </button>
@@ -600,48 +571,37 @@ function ContextEditor({ value, onChange, autoFocus = false }) {
   )
 }
 
-function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, onSplit, onRate }) {
+function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, onSplit, onRate }) {
   const status = getStatus(item)
-  const triggers = getTriggers(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
   const isPending = status === 'pending'
 
-  // Selected trigger index for context display
-  const [selectedTrigger, setSelectedTrigger] = useState(triggers.length - 1)
-
-  // Editable context for pending dispatches
-  const selectedCtx = triggers[selectedTrigger]?.context || ''
   const [editingContext, setEditingContext] = useState(null)
   const [saveError, setSaveError] = useState('')
 
-  // Diff state
   const [diffData, setDiffData] = useState(null)
   const [diffOpen, setDiffOpen] = useState(false)
   const [diffLoading, setDiffLoading] = useState(false)
 
-  // Outcome summary
   const [outcomeSummary, setOutcomeSummary] = useState(null)
 
-  // Reset editing state when item changes
-  useEffect(() => { setSelectedTrigger(triggers.length - 1); setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false); setOutcomeSummary(null) }, [item.id])
+  useEffect(() => { setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false); setOutcomeSummary(null) }, [item.id])
 
-  // Load outcome summary for completed dispatches with commit range
   useEffect(() => {
     if (!item.completed_at || !item.start_commit || !item.result_commit || item.start_commit === item.result_commit) return
     let cancelled = false
-    getDispatchOutcome(item.id).then(data => {
+    getTaskOutcome(item.id).then(data => {
       if (!cancelled) setOutcomeSummary(data.summary)
     }).catch(() => {})
     return () => { cancelled = true }
   }, [item.id, item.completed_at, item.start_commit, item.result_commit])
 
-  // Load diff when opened (lazy)
   useEffect(() => {
     if (!diffOpen || diffData || diffLoading) return
     if (!item.start_commit || !item.result_commit || item.start_commit === item.result_commit) return
     let cancelled = false
     setDiffLoading(true)
-    getDispatchDiff(item.id).then(data => {
+    getTaskDiff(item.id).then(data => {
       if (!cancelled) setDiffData(data)
     }).catch(() => {}).finally(() => {
       if (!cancelled) setDiffLoading(false)
@@ -653,19 +613,20 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
     if (editingContext === null) return
     setSaveError('')
     try {
-      await updateDispatch(item.id, { context: editingContext, trigger_index: selectedTrigger })
+      await updateTask(item.id, { context: editingContext })
       setEditingContext(null)
       if (onUpdate) await onUpdate()
     } catch (e) { setSaveError(e.message) }
   }
 
-  // Tick every second while running so duration stays current
   const [, setTick] = useState(0)
   useEffect(() => {
     if (status !== 'running') return
     const interval = setInterval(() => setTick(t => t + 1), 1000)
     return () => clearInterval(interval)
   }, [status])
+
+  const ctx = item.context || ''
 
   return (
     <>
@@ -677,17 +638,11 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       </div>
 
       <div className="detail-section">
-        <label>Triggers</label>
+        <label>Trigger</label>
         <div className="trigger-chips">
-          {triggers.map((entry, i) => (
-            <span
-              key={i}
-              onClick={() => setSelectedTrigger(i)}
-              className={`trigger-chip ${i === selectedTrigger ? 'active' : ''}`}
-            >
-              {TRIGGER_ICONS[entry.trigger] || ''} {triggerLabel(entry)}
-            </span>
-          ))}
+          <span className="trigger-chip active">
+            {TRIGGER_ICONS[item.trigger] || ''} {triggerLabel(item)}
+          </span>
         </div>
       </div>
 
@@ -705,23 +660,23 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         ) : isPending ? (
           <div className="context-pending-wrap">
             <pre
-              onClick={() => setEditingContext(selectedCtx)}
+              onClick={() => setEditingContext(ctx)}
               className="context-pending"
               style={{
-                color: selectedCtx ? 'inherit' : 'var(--text-muted)',
-                fontStyle: selectedCtx ? 'normal' : 'italic',
+                color: ctx ? 'inherit' : 'var(--text-muted)',
+                fontStyle: ctx ? 'normal' : 'italic',
               }}
             >
-              {selectedCtx || 'click to add context...'}
+              {ctx || 'click to add context...'}
             </pre>
             <span className="context-edit-hint">✎</span>
           </div>
         ) : (
           <pre className="context-display" style={{
-            color: selectedCtx ? 'inherit' : 'var(--text-muted)',
-            fontStyle: selectedCtx ? 'normal' : 'italic',
+            color: ctx ? 'inherit' : 'var(--text-muted)',
+            fontStyle: ctx ? 'normal' : 'italic',
           }}>
-            {selectedCtx || 'not provided'}
+            {ctx || 'not provided'}
           </pre>
         )}
       </div>
@@ -783,12 +738,11 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         <div className="detail-section">
           <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
           <div className={`detail-meta ${status === 'timed_out' ? 'warning-text' : 'error-text'}`}>
-            {status === 'timed_out' ? 'Dispatch exceeded timeout limit' : item.error}
+            {status === 'timed_out' ? 'Task exceeded timeout limit' : item.error}
           </div>
         </div>
       )}
 
-      {/* Live streaming output — visible while streaming, or while liveText exists but stored output hasn't loaded yet */}
       {(isStreaming || (liveText && !assistantMsgs.length)) && (
         <div className="detail-section">
           <label>
@@ -816,7 +770,6 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         </div>
       )}
 
-      {/* Stored output (after completion) */}
       {assistantMsgs.length > 0 && (
         <div className="detail-section">
           <label>Output</label>
@@ -832,7 +785,6 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         </div>
       )}
 
-      {/* Dispatch diff — collapsible, for completed dispatches with commit range */}
       {item.start_commit && item.result_commit && item.start_commit !== item.result_commit && (
         <div className="detail-section">
           <label

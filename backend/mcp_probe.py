@@ -8,11 +8,12 @@ Used by the tool inventory endpoint to surface external server capabilities.
 import asyncio
 import json
 import logging
+import shutil
 
 log = logging.getLogger("maistro.mcp_probe")
 
 # Timeout for the full probe handshake (seconds)
-PROBE_TIMEOUT = 10
+PROBE_TIMEOUT = 30
 
 
 async def probe_server(command: str, args: list[str], env: dict[str, str] | None = None) -> dict:
@@ -26,9 +27,13 @@ async def probe_server(command: str, args: list[str], env: dict[str, str] | None
     import os
     proc_env = {**os.environ, **(env or {})}
 
+    # Resolve bare command names via PATH (needed on Windows where
+    # create_subprocess_exec doesn't search PATH the same way a shell does)
+    resolved = shutil.which(command) or command
+
     try:
         proc = await asyncio.create_subprocess_exec(
-            command, *args,
+            resolved, *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

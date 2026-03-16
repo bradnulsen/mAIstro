@@ -35,9 +35,9 @@ CHAT_SYSTEM_PROMPT = """\
 You are the mAistro executive assistant — an intelligent coordinator for a development engine \
 where LLM-powered tasks coordinate through git.
 
-You have full awareness of the project's administrative state (tasks, dispatches, configuration) \
+You have full awareness of the project's administrative state (jobs, tasks, configuration) \
 and its content (files, git history). Help the user understand project status, plan work, \
-troubleshoot issues, and manage their tasks.
+troubleshoot issues, and manage their jobs.
 
 You can read files, search code, and analyze the project. Always commit after making code changes. \
 You are NOT running a task dispatch — you are having a conversation with the human operator.
@@ -45,11 +45,11 @@ You are NOT running a task dispatch — you are having a conversation with the h
 ## Working Directory
 {project_dir}
 
-## Current Tasks
-{task_summary}
+## Current Jobs
+{job_summary}
 
-## Recent Dispatches
-{dispatch_summary}
+## Recent Tasks
+{task_summary}
 
 ## Recent Git Activity
 {git_summary}"""
@@ -57,35 +57,34 @@ You are NOT running a task dispatch — you are having a conversation with the h
 
 async def _build_chat_context() -> str:
     """Build the mAistro executive assistant system prompt with live state."""
-    tasks = await db.list_tasks()
-    task_lines = []
-    for t in tasks:
-        props = t["properties"]
+    jobs = await db.list_jobs()
+    job_lines = []
+    for j in jobs:
+        props = j["properties"]
         status = "RUNNING" if props.get("running") else "idle"
         desc = props.get("description") or "(no description)"
         watch = "watch" if props.get("subscriptions") else "manual"
-        task_lines.append(f"- **{t['name']}** [{watch}, {status}] — {desc}")
-    task_summary = "\n".join(task_lines) if task_lines else "(no tasks configured)"
+        job_lines.append(f"- **{j['name']}** [{watch}, {status}] — {desc}")
+    job_summary = "\n".join(job_lines) if job_lines else "(no jobs configured)"
 
-    queue = await db.get_dispatch_queue(limit=10)
-    dispatch_lines = []
-    for d in (queue or []):
-        status = "error" if d.get("error") else "completed" if d.get("completed_at") else "running" if d.get("started_at") else "pending"
-        dispatch_lines.append(f"- #{d['id']} {d.get('task_name', '?')} [{status}] {d.get('created_at', '')}")
-    dispatch_summary = "\n".join(dispatch_lines) if dispatch_lines else "(no recent dispatches)"
+    queue = await db.get_task_queue(limit=10)
+    task_lines = []
+    for t in (queue or []):
+        status = "error" if t.get("error") else "completed" if t.get("completed_at") else "running" if t.get("started_at") else "pending"
+        task_lines.append(f"- #{t['id']} {t.get('job_name', '?')} [{status}] {t.get('created_at', '')}")
+    task_summary = "\n".join(task_lines) if task_lines else "(no recent tasks)"
 
     git_summary = git.log_oneline(state.PROJECT_DIR) or "(no commits)"
 
     return CHAT_SYSTEM_PROMPT.format(
         project_dir=state.PROJECT_DIR,
+        job_summary=job_summary,
         task_summary=task_summary,
-        dispatch_summary=dispatch_summary,
         git_summary=git_summary,
     )
 
 
 # Active chat streams — background tasks push events here, SSE reads from here.
-# Key: session_id, Value: asyncio.Queue of SSE event dicts (None = done sentinel)
 _active_chats: dict[str, asyncio.Queue] = {}
 
 
@@ -113,11 +112,9 @@ async def chat(req: ChatRequest):
 
     system_prompt = await _build_chat_context()
 
-    # Event queue shared between background task and SSE stream
     event_queue: asyncio.Queue = asyncio.Queue()
     _active_chats[session_id] = event_queue
 
-    # Background task: runs CLI and saves to DB regardless of client connection
     async def _run_cli():
         full_response = []
         streaming_text = []
@@ -133,12 +130,10 @@ async def chat(req: ChatRequest):
             ):
                 etype = event["type"]
 
-                # Buffer raw events — flush in batch at end (avoids per-event commits)
                 if etype == "_raw":
                     raw_event_buffer.append((event["event_type"], event["raw_json"]))
                     continue
 
-                # assistant_complete: DB storage only, don't stream
                 if etype == "assistant_complete":
                     full_response.append(event.get("content", ""))
                     continue
@@ -148,33 +143,28 @@ async def chat(req: ChatRequest):
                 elif etype == "session_id":
                     new_cli_session_id = event.get("cli_session_id")
 
-                # Push translated events to queue for SSE consumer
                 await event_queue.put(event)
         except Exception as e:
             log.exception("[chat] CLI error for session %s: %s", session_id, e)
             await event_queue.put({"type": "error", "message": str(e)})
         finally:
-            # Always save to DB — this runs even if client disconnected
             await db.add_chat_events_batch(session_id, raw_event_buffer)
-            # Prefer assistant_complete (authoritative), fall back to streamed deltas
             response_text = "".join(full_response) or "".join(streaming_text)
             if response_text:
                 await db.add_chat_message(session_id, "assistant", response_text)
             if new_cli_session_id:
                 await db.update_chat_session(session_id, cli_session_id=new_cli_session_id)
-            await event_queue.put(None)  # sentinel: stream done
+            await event_queue.put(None)
             _active_chats.pop(session_id, None)
 
     asyncio.create_task(_run_cli())
 
-    # SSE stream: reads from queue. If client disconnects, background task still runs.
     async def stream():
         yield {"event": "session_id", "data": json.dumps({"session_id": session_id})}
         while True:
             try:
                 event = await asyncio.wait_for(event_queue.get(), timeout=60)
             except asyncio.TimeoutError:
-                # Send keepalive to prevent proxy/browser timeout
                 yield {"event": "ping", "data": "{}"}
                 continue
             if event is None:

@@ -1,24 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from 'react-markdown'
 import {
-  createTask, updateTask, deleteTask, getTaskSubscriptions,
-  dispatchTask, listMcpServers, getToolInventory, reorderTasks,
+  createJob, updateJob, deleteJob, getJobSubscriptions,
+  enqueueTask, listMcpServers, getToolInventory, reorderJobs,
 } from '../api'
 import HelpTip from './HelpTip'
 
 const TIPS = {
-  subscriptions: 'Glob patterns, one per line. * matches files in one directory; ** matches across directories recursively. Patterns serve two purposes: they determine which commits trigger this task (watch), and they inject matching files as context into every dispatch prompt.',
+  subscriptions: 'Glob patterns, one per line. * matches files in one directory; ** matches across directories recursively. Patterns serve two purposes: they determine which commits trigger this job (watch), and they inject matching files as context into every task prompt.',
   schedule: 'Five-field cron: minute hour day-of-month month day-of-week. Supports ranges (1-5), lists (0,15,30), steps (*/10), and wildcards (*). Examples: */30 * * * * (every 30 min), 0 9 * * 1-5 (weekdays at 9am). The first evaluation after setting a schedule establishes a baseline — it does not fire immediately.',
   allowedTools: 'CLI tools the agent can use, selected from the platform\'s discovered tool inventory. When a subset is selected, the platform computes the complement and hides all other tools from the agent. All checked = default (no restrictions).',
-  requireApproval: 'When enabled, automated triggers (commit-watch, schedule, dependency) produce dispatches that wait for manual approval before executing. Manual dispatches bypass this gate.',
-  coalesceDispatches: 'When enabled, the task will never have more than one pending dispatch. Any new trigger merges into the existing pending dispatch instead of creating a new queue entry. Useful for tasks that should catch up in one run rather than queuing redundant work.',
-  dependencies: 'This task auto-dispatches when all selected upstream tasks complete successfully. Timed-out, failed, or cancelled dispatches do not trigger dependents.',
-  timeout: 'Maximum execution time in seconds. The platform gracefully terminates the agent when reached, then force-kills if it does not exit. Timed-out dispatches do not trigger downstream dependencies. Set to 0 for no limit.',
-  model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
-  mcpServers: 'External MCP servers to connect to this task\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
+  requireApproval: 'When enabled, automated triggers (commit-watch, schedule, dependency) produce tasks that wait for manual approval before executing. Manual tasks bypass this gate.',
+  coalesceTasks: 'When enabled, the job will never have more than one pending task. Any new trigger coalesces into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.',
+  dependencies: 'This job auto-dispatches when all selected upstream jobs complete successfully. Timed-out, failed, or cancelled tasks do not trigger dependents.',
+  timeout: 'Maximum execution time in seconds. The platform gracefully terminates the agent when reached, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.',
+  model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.',
+  mcpServers: 'External MCP servers to connect to this job\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
 }
 
-export default function Tasks({ tasks, onRefresh, onNavigate }) {
+export default function Tasks({ jobs, onRefresh, onNavigate }) {
   const [selected, setSelected] = useState(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -28,13 +28,13 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
   const [dragIdx, setDragIdx] = useState(null)
   const [dragOverIdx, setDragOverIdx] = useState(null)
 
-  const filteredTasks = tasks.filter(t => {
+  const filteredJobs = jobs.filter(j => {
     if (!search.trim()) return true
     const q = search.toLowerCase()
-    const props = t.properties || {}
+    const props = j.properties || {}
     const fields = [
-      t.name,
-      t.id,
+      j.name,
+      j.id,
       props.description,
       props.instructions,
       props.model,
@@ -49,44 +49,44 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
 
   const handleDragEnd = async () => {
     if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
-      const ids = tasks.map(t => t.id)
+      const ids = jobs.map(j => j.id)
       const [moved] = ids.splice(dragIdx, 1)
       ids.splice(dragOverIdx, 0, moved)
-      try { await reorderTasks(ids); await onRefresh() } catch {}
+      try { await reorderJobs(ids); await onRefresh() } catch {}
     }
     setDragIdx(null)
     setDragOverIdx(null)
   }
 
   useEffect(() => {
-    if (!selected && tasks.length > 0) {
-      setSelected(tasks[0].id)
+    if (!selected && jobs.length > 0) {
+      setSelected(jobs[0].id)
     }
-  }, [tasks, selected])
+  }, [jobs, selected])
 
   const handleCreate = async () => {
     if (!newName.trim()) return
     setCreateError('')
     try {
-      const task = await createTask(newName.trim())
+      const job = await createJob(newName.trim())
       setNewName('')
       setCreating(false)
       await onRefresh()
-      setSelected(task.id)
+      setSelected(job.id)
     } catch (e) {
       setCreateError(e.message)
     }
   }
 
-  const activeTask = tasks.find(t => t.id === selected)
-  // When search is active and the selected task is filtered out, don't show its detail —
-  // the task isn't visible in the list so showing it in the panel is confusing.
-  const detailVisible = !search.trim() || !!filteredTasks.find(t => t.id === selected)
+  const activeJob = jobs.find(j => j.id === selected)
+  // When search is active and the selected job is filtered out, don't show its detail —
+  // the job isn't visible in the list so showing it in the panel is confusing.
+  const detailVisible = !search.trim() || !!filteredJobs.find(j => j.id === selected)
 
   return (
     <>
       <div className="header-bar">
-        <h1>Tasks</h1>
+        <h1>Jobs</h1>
       </div>
 
       <div className="tasks-layout">
@@ -95,7 +95,7 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
             <input
               ref={searchRef}
               type="text"
-              placeholder="Filter tasks..."
+              placeholder="Filter jobs..."
               value={search}
               onChange={e => setSearch(e.target.value)}
               onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
@@ -105,21 +105,21 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
             )}
           </div>
           <div className="scroll-area">
-            {filteredTasks.length === 0 && search && (
+            {filteredJobs.length === 0 && search && (
               <div className="muted-text" style={{ padding: '12px' }}>No matches</div>
             )}
-            {filteredTasks.map((t, i) => (
+            {filteredJobs.map((j, i) => (
               <div
-                key={t.id}
-                className={`task-list-item ${selected === t.id ? 'active' : ''}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}${dragIdx === i ? ' dragging' : ''}`}
-                onClick={() => setSelected(t.id)}
+                key={j.id}
+                className={`task-list-item ${selected === j.id ? 'active' : ''}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}${dragIdx === i ? ' dragging' : ''}`}
+                onClick={() => setSelected(j.id)}
                 draggable={canDrag}
                 onDragStart={e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }}
                 onDragOver={e => { e.preventDefault(); setDragOverIdx(i) }}
                 onDragEnd={handleDragEnd}
               >
-                <span className={`status-dot ${t.properties?.running ? 'running' : 'idle'}`} />
-                <span>{t.name}</span>
+                <span className={`status-dot ${j.properties?.running ? 'running' : 'idle'}`} />
+                <span>{j.name}</span>
               </div>
             ))}
           </div>
@@ -129,7 +129,7 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
                 <div style={{ display: 'flex', gap: 4 }}>
                   <input
                     type="text"
-                    placeholder="Task name"
+                    placeholder="Job name"
                     value={newName}
                     onChange={e => { setNewName(e.target.value); setCreateError('') }}
                     onKeyDown={e => e.key === 'Enter' && handleCreate()}
@@ -143,17 +143,17 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
               </div>
             ) : (
               <button className="small" style={{ width: '100%' }} onClick={() => setCreating(true)}>
-                + New Task
+                + New Job
               </button>
             )}
           </div>
         </div>
 
         <div className="task-detail">
-          {detailVisible && activeTask ? (
-            <TaskDetail key={activeTask.id} task={activeTask} allTasks={tasks} onRefresh={onRefresh} onDelete={() => setSelected(null)} onNavigate={onNavigate} />
+          {detailVisible && activeJob ? (
+            <JobDetail key={activeJob.id} job={activeJob} allJobs={jobs} onRefresh={onRefresh} onDelete={() => setSelected(null)} onNavigate={onNavigate} />
           ) : (
-            <div className="empty-state">Select or create a task</div>
+            <div className="empty-state">Select or create a job</div>
           )}
         </div>
       </div>
@@ -161,13 +161,13 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
   )
 }
 
-function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
+function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
   const [editing, setEditing] = useState({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [dispatching, setDispatching] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
-  const [lastDispatchId, setLastDispatchId] = useState(null)
+  const [lastTaskId, setLastTaskId] = useState(null)
   const [context, setContext] = useState('')
   const [subs, setSubs] = useState(null)
   const [subsOpen, setSubsOpen] = useState(false)
@@ -177,11 +177,11 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   const [activeTab, setActiveTab] = useState('definition')
   const [availableMcpServers, setAvailableMcpServers] = useState([])
   const [toolInventory, setToolInventory] = useState({ cli_native: [], internal_mcp: [], external_servers: {} })
-  const props = task.properties || {}
+  const props = job.properties || {}
 
   const refreshSubs = useCallback(() => {
-    getTaskSubscriptions(task.id).then(setSubs).catch(() => setSubs(null))
-  }, [task.id])
+    getJobSubscriptions(job.id).then(setSubs).catch(() => setSubs(null))
+  }, [job.id])
 
   useEffect(() => { refreshSubs() }, [refreshSubs])
 
@@ -197,7 +197,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
     setDispatchError('')
     setConfirmDelete(false)
     setDeleteError('')
-  }, [task.id])
+  }, [job.id])
 
   const edit = (key, value) => setEditing(prev => ({ ...prev, [key]: value }))
 
@@ -212,7 +212,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
       payload.subscriptions = linesToArray(payload.subscriptions)
     }
     try {
-      await updateTask(task.id, payload)
+      await updateJob(job.id, payload)
       setEditing({})
       await onRefresh()
       refreshSubs()
@@ -225,7 +225,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   const handleDelete = async () => {
     setDeleteError('')
     try {
-      await deleteTask(task.id)
+      await deleteJob(job.id)
       onDelete()
       await onRefresh()
     } catch (e) {
@@ -238,8 +238,8 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
     setDispatching(true)
     setDispatchError('')
     try {
-      const result = await dispatchTask(task.id, context || undefined)
-      setLastDispatchId(result.dispatch_id)
+      const result = await enqueueTask(job.id, context || undefined)
+      setLastTaskId(result.task_id)
       setContext('')
       await onRefresh()
     } catch (e) {
@@ -249,10 +249,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   }
 
   useEffect(() => {
-    if (!lastDispatchId) return
-    const t = setTimeout(() => setLastDispatchId(null), 4000)
+    if (!lastTaskId) return
+    const t = setTimeout(() => setLastTaskId(null), 4000)
     return () => clearTimeout(t)
-  }, [lastDispatchId])
+  }, [lastTaskId])
 
   const isDirty = Object.keys(editing).length > 0
 
@@ -270,8 +270,8 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: props.description ? 4 : 12 }}>
-        <h2 style={{ flex: 1 }}>{task.name}</h2>
-        <span className="muted-text">id: {task.id}</span>
+        <h2 style={{ flex: 1 }}>{job.name}</h2>
+        <span className="muted-text">id: {job.id}</span>
       </div>
       {props.description && (
         <div className="task-description-display md-content">
@@ -299,7 +299,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
           className="primary"
           onClick={handleDispatch}
           disabled={dispatching || props.running}
-          title={props.running ? 'Task is currently running' : undefined}
+          title={props.running ? 'Job is currently running' : undefined}
           style={{ alignSelf: 'flex-end' }}
         >
           {dispatching
@@ -310,9 +310,9 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
         </button>
       </div>
 
-      {lastDispatchId && (
+      {lastTaskId && (
         <div className="dispatch-queued">
-          <span>✓ Queued as dispatch #{lastDispatchId}</span>
+          <span>✓ Queued as task #{lastTaskId}</span>
           {onNavigate && (
             <button className="small" onClick={() => onNavigate('queue')}>View in Queue →</button>
           )}
@@ -351,7 +351,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
             <AutoTextarea
               value={getVal('description') || ''}
               onChange={e => edit('description', e.target.value)}
-              placeholder="Short description for the task registry..."
+              placeholder="Short description for the job registry..."
               maxHeight={200}
               minRows={3}
             />
@@ -375,7 +375,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               <textarea
                 value={getVal('instructions') || ''}
                 onChange={e => edit('instructions', e.target.value)}
-                placeholder="Detailed instructions for what this task should do..."
+                placeholder="Detailed instructions for what this job should do..."
                 autoFocus={editingInstructions}
                 className="instructions-textarea"
               />
@@ -424,7 +424,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                   checked={getVal('require_approval') || false}
                   onChange={e => edit('require_approval', e.target.checked)}
                 />
-                Require approval for automatic dispatches
+                Require approval for automatic tasks
               </label>
               <HelpTip text={TIPS.requireApproval} />
             </div>
@@ -432,40 +432,40 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
                 <input
                   type="checkbox"
-                  checked={getVal('coalesce_dispatches') || false}
-                  onChange={e => edit('coalesce_dispatches', e.target.checked)}
+                  checked={getVal('coalesce_tasks') || false}
+                  onChange={e => edit('coalesce_tasks', e.target.checked)}
                 />
-                Coalesce pending dispatches
+                Coalesce pending tasks
               </label>
-              <HelpTip text={TIPS.coalesceDispatches} />
+              <HelpTip text={TIPS.coalesceTasks} />
             </div>
           </div>
 
           <div className="field-group">
             <div className="label-row">
-              <label>Dependencies (runs after these tasks complete)</label>
+              <label>Dependencies (runs after these jobs complete)</label>
               <HelpTip text={TIPS.dependencies} />
             </div>
             <div className="checkbox-list">
-              {allTasks.filter(t => t.id !== task.id).map(t => {
+              {allJobs.filter(j => j.id !== job.id).map(j => {
                 const deps = getVal('depends_on') || []
-                const checked = deps.includes(t.id)
+                const checked = deps.includes(j.id)
                 return (
-                  <label key={t.id} className="checkbox-label" style={{ fontSize: 12 }}>
+                  <label key={j.id} className="checkbox-label" style={{ fontSize: 12 }}>
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() => {
-                        const next = checked ? deps.filter(d => d !== t.id) : [...deps, t.id]
+                        const next = checked ? deps.filter(d => d !== j.id) : [...deps, j.id]
                         edit('depends_on', next)
                       }}
                     />
-                    {t.name}
+                    {j.name}
                   </label>
                 )
               })}
-              {allTasks.length <= 1 && (
-                <span className="muted-text">No other tasks to depend on</span>
+              {allJobs.length <= 1 && (
+                <span className="muted-text">No other jobs to depend on</span>
               )}
             </div>
           </div>
@@ -643,12 +643,12 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
         <h3>Danger Zone</h3>
         {confirmDelete ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12 }}>Delete "{task.name}"?</span>
+            <span style={{ fontSize: 12 }}>Delete "{job.name}"?</span>
             <button className="danger small" onClick={handleDelete}>Confirm</button>
             <button className="small" onClick={() => setConfirmDelete(false)}>Cancel</button>
           </div>
         ) : (
-          <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Task</button>
+          <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Job</button>
         )}
         {deleteError && <div className="error-text" style={{ marginTop: 6 }}>{deleteError}</div>}
       </div>

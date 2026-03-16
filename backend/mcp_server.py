@@ -1,11 +1,11 @@
-"""Internal MCP stdio server for mAistro dispatches.
+"""Internal MCP stdio server for mAistro task dispatches.
 
 Provides structured git operations and project context tools to dispatched
 agents. Invoked as a subprocess by the Claude CLI via --mcp-config.
 
-Each dispatch gets an instance configured via environment variables:
-    MAISTRO_TASK_ID         task slug (e.g. "engineer")
-    MAISTRO_TASK_NAME       display name (e.g. "Engineer")
+Each task gets an instance configured via environment variables:
+    MAISTRO_JOB_ID          job slug (e.g. "engineer")
+    MAISTRO_JOB_NAME        display name (e.g. "Engineer")
     MAISTRO_PROJECT_DIR     absolute path to project directory
     MAISTRO_SESSION_ID      chat session ID for audit logging
     MAISTRO_BACKEND_PORT    backend HTTP port (default 8420)
@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 
 # ── Context from environment ─────────────────────────────────
 
-TASK_ID = os.environ.get("MAISTRO_TASK_ID", "unknown")
-TASK_NAME = os.environ.get("MAISTRO_TASK_NAME", "Unknown")
+JOB_ID = os.environ.get("MAISTRO_JOB_ID", "unknown")
+JOB_NAME = os.environ.get("MAISTRO_JOB_NAME", "Unknown")
 PROJECT_DIR = os.environ.get("MAISTRO_PROJECT_DIR", ".")
 SESSION_ID = os.environ.get("MAISTRO_SESSION_ID", "")
 BACKEND_PORT = int(os.environ.get("MAISTRO_BACKEND_PORT", "8420"))
@@ -80,8 +80,8 @@ def tool_git_commit(args: dict) -> str:
     if not message:
         return "Error: message is required"
 
-    # Enforce [TaskName] message prefix
-    prefix = f"[{TASK_NAME}]"
+    # Enforce [JobName] message prefix
+    prefix = f"[{JOB_NAME}]"
     if not message.startswith(prefix):
         message = f"{prefix} {message}"
 
@@ -94,7 +94,7 @@ def tool_git_commit(args: dict) -> str:
         return f"Error staging files: {stage.stderr.strip()}"
 
     # Commit with enforced authorship convention
-    author = f"{TASK_NAME} <{TASK_ID}@maistro.local>"
+    author = f"{JOB_NAME} <{JOB_ID}@maistro.local>"
     ok, out = _run_git("commit", "-m", message, f"--author={author}")
     if not ok:
         return f"Error: {out}"
@@ -140,22 +140,22 @@ def tool_read_file(args: dict) -> str:
         return f"Error reading file: {e}"
 
 
-def tool_list_tasks(args: dict) -> str:
+def tool_list_jobs(args: dict) -> str:
     try:
-        url = f"http://localhost:{BACKEND_PORT}/api/tasks/"
+        url = f"http://localhost:{BACKEND_PORT}/api/jobs/"
         with urllib.request.urlopen(url, timeout=5) as resp:
-            tasks = json.loads(resp.read())
+            jobs = json.loads(resp.read())
         lines = []
-        for t in tasks:
-            props = t.get("properties", {})
+        for j in jobs:
+            props = j.get("properties", {})
             desc = props.get("description") or "(no description)"
             subs = ", ".join(props.get("subscriptions") or []) or "(none)"
             running = " [RUNNING]" if props.get("running") else ""
-            lines.append(f"- **{t['name']}**{running}: {desc}")
+            lines.append(f"- **{j['name']}**{running}: {desc}")
             lines.append(f"  Subscriptions: {subs}")
-        return "\n".join(lines) if lines else "(no tasks configured)"
+        return "\n".join(lines) if lines else "(no jobs configured)"
     except Exception as e:
-        return f"Error fetching tasks: {e}"
+        return f"Error fetching jobs: {e}"
 
 
 # ── Tool registry ────────────────────────────────────────────
@@ -208,14 +208,14 @@ TOOLS = [
         "name": "git_commit",
         "description": (
             f"Commit staged/unstaged changes with enforced authorship "
-            f"({TASK_NAME} <{TASK_ID}@maistro.local>) and message prefix ([{TASK_NAME}])."
+            f"({JOB_NAME} <{JOB_ID}@maistro.local>) and message prefix ([{JOB_NAME}])."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "message": {
                     "type": "string",
-                    "description": "Commit message (the [TaskName] prefix is added automatically if missing)",
+                    "description": "Commit message (the [JobName] prefix is added automatically if missing)",
                 },
                 "paths": {
                     "type": "array",
@@ -258,8 +258,8 @@ TOOLS = [
         },
     },
     {
-        "name": "list_tasks",
-        "description": "List all configured tasks in this mAistro project with their descriptions and current status.",
+        "name": "list_jobs",
+        "description": "List all configured jobs in this mAistro project with their descriptions and current status.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -274,7 +274,7 @@ TOOL_HANDLERS = {
     "git_commit": tool_git_commit,
     "list_files": tool_list_files,
     "read_file": tool_read_file,
-    "list_tasks": tool_list_tasks,
+    "list_jobs": tool_list_jobs,
 }
 
 
@@ -292,7 +292,7 @@ def _log_tool_call(tool_name: str, input_args: dict, result: str):
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }).encode("utf-8")
         req = urllib.request.Request(
-            f"http://localhost:{BACKEND_PORT}/api/dispatch/mcp-event",
+            f"http://localhost:{BACKEND_PORT}/api/tasks/mcp-event",
             data=payload,
             headers={
                 "Content-Type": "application/json",
@@ -302,7 +302,7 @@ def _log_tool_call(tool_name: str, input_args: dict, result: str):
         )
         urllib.request.urlopen(req, timeout=3)
     except Exception:
-        pass  # audit logging is best-effort — never block the tool call
+        pass
 
 
 # ── MCP JSON-RPC protocol ────────────────────────────────────
@@ -371,7 +371,6 @@ def main():
         req_id = msg.get("id")
         params = msg.get("params") or {}
 
-        # Notifications have no id — no response required
         if req_id is None:
             continue
 

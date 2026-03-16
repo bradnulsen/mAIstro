@@ -1,6 +1,6 @@
-"""Task CRUD routes — extracted from main.py.
+"""Job CRUD routes — persistent configuration for mAistro jobs.
 
-Handles task listing, creation, update, deletion, reordering,
+Handles job listing, creation, update, deletion, reordering,
 and subscription resolution.
 """
 
@@ -11,16 +11,16 @@ from backend import database as db, git
 from backend import state
 from backend.state import require_project
 
-router = APIRouter(tags=["tasks"])
+router = APIRouter(tags=["jobs"])
 
 
 # ── Pydantic Models ────────────────────────────────────────
 
-class CreateTaskRequest(BaseModel):
+class CreateJobRequest(BaseModel):
     name: str
     properties: dict | None = None
 
-class UpdateTaskRequest(BaseModel):
+class UpdateJobRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
@@ -28,7 +28,7 @@ class UpdateTaskRequest(BaseModel):
     allowed_tools: list[str] | None = None
     mcp_servers: list[str] | None = None
     subscriptions: list[str] | None = None
-    coalesce_dispatches: bool | None = None
+    coalesce_tasks: bool | None = None
     schedule: str | None = None
     timeout: int | None = None
     depends_on: list[str] | None = None
@@ -36,73 +36,72 @@ class UpdateTaskRequest(BaseModel):
     sort_order: int | None = None
 
 class ReorderRequest(BaseModel):
-    task_ids: list[str]
+    job_ids: list[str]
 
 
 # ── Routes ─────────────────────────────────────────────────
 
-@router.get("/api/tasks/")
-async def list_tasks():
+@router.get("/api/jobs/")
+async def list_jobs():
     require_project()
-    return await db.list_tasks()
+    return await db.list_jobs()
 
 
-@router.post("/api/tasks/")
-async def create_task(req: CreateTaskRequest):
+@router.post("/api/jobs/")
+async def create_job(req: CreateJobRequest):
     require_project()
-    return await db.create_task(req.name, req.properties or {})
+    return await db.create_job(req.name, req.properties or {})
 
 
-@router.get("/api/tasks/{task_id}")
-async def get_task(task_id: str):
+@router.get("/api/jobs/{job_id}")
+async def get_job(job_id: str):
     require_project()
-    task = await db.get_task(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    return task
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
 
 
-@router.patch("/api/tasks/{task_id}")
-async def update_task(task_id: str, req: UpdateTaskRequest):
+@router.patch("/api/jobs/{job_id}")
+async def update_job(job_id: str, req: UpdateJobRequest):
     require_project()
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No updates provided")
 
-    # Validate depends_on: no self-dependency (circular chains are permitted)
     if "depends_on" in updates:
         new_deps = updates["depends_on"]
-        if task_id in new_deps:
-            raise HTTPException(400, "A task cannot depend on itself")
+        if job_id in new_deps:
+            raise HTTPException(400, "A job cannot depend on itself")
 
-    task = await db.update_task(task_id, updates)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    return task
+    job = await db.update_job(job_id, updates)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
 
 
-@router.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str):
+@router.delete("/api/jobs/{job_id}")
+async def delete_job(job_id: str):
     require_project()
-    ok = await db.delete_task(task_id)
+    ok = await db.delete_job(job_id)
     if not ok:
-        raise HTTPException(404, "Task not found")
+        raise HTTPException(404, "Job not found")
     return {"status": "deleted"}
 
 
-@router.post("/api/tasks/reorder")
-async def reorder_tasks(req: ReorderRequest):
+@router.post("/api/jobs/reorder")
+async def reorder_jobs(req: ReorderRequest):
     require_project()
-    await db.reorder_tasks(req.task_ids)
+    await db.reorder_jobs(req.job_ids)
     return {"status": "ok"}
 
 
-@router.get("/api/tasks/{task_id}/subscriptions")
-async def get_task_subscriptions(task_id: str):
+@router.get("/api/jobs/{job_id}/subscriptions")
+async def get_job_subscriptions(job_id: str):
     require_project()
-    task = await db.get_task(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    props = task["properties"]
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    props = job["properties"]
     subs = git.resolve_glob_files(state.PROJECT_DIR, props.get("subscriptions") or [])
     return {"subscriptions": subs}

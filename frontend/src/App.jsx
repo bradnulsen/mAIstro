@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listTasks } from './api'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs } from './api'
 import Feed from './components/Feed'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
@@ -13,7 +13,7 @@ export default function App() {
   const [project, setProject] = useState(null)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState(VIEWS.queue)
-  const [tasks, setTasks] = useState([])
+  const [jobs, setJobs] = useState([])
   const [chatOpen, setChatOpen] = useState(false)
   const [chatWidth, setChatWidth] = useState(380)
   const chatTrayRef = useRef(null)
@@ -25,22 +25,22 @@ export default function App() {
       .finally(() => setLoading(false))
   }, [])
 
-  const refreshTasks = useCallback(async () => {
+  const refreshJobs = useCallback(async () => {
     try {
-      const list = await listTasks()
-      setTasks(list)
+      const list = await listJobs()
+      setJobs(list)
     } catch {}
   }, [])
 
   useEffect(() => {
-    if (project) refreshTasks()
-  }, [project, refreshTasks])
+    if (project) refreshJobs()
+  }, [project, refreshJobs])
 
   useEffect(() => {
     if (!project) return
-    const interval = setInterval(refreshTasks, 5000)
+    const interval = setInterval(refreshJobs, 5000)
     return () => clearInterval(interval)
-  }, [project, refreshTasks])
+  }, [project, refreshJobs])
 
   const handleTabMouseDown = useCallback((e) => {
     e.preventDefault()
@@ -75,7 +75,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <nav className="rail">
-        <div className="rail-logo" onClick={() => { setProject(null); setTasks([]) }} title="Switch project">⬡</div>
+        <div className="rail-logo" onClick={() => { setProject(null); setJobs([]) }} title="Switch project">⬡</div>
         <button
           className={`rail-icon ${view === VIEWS.queue ? 'active' : ''}`}
           onClick={() => setView(VIEWS.queue)}
@@ -106,25 +106,25 @@ export default function App() {
 
       <div className="main-area">
         <div className="status-bar">
-          {tasks.map(t => t.properties?.running ? (
+          {jobs.map(j => j.properties?.running ? (
             <div
-              key={t.id}
+              key={j.id}
               className="status-chip running"
               onClick={() => setView(VIEWS.queue)}
               title="View in Dispatch"
               style={{ cursor: 'pointer' }}
             >
               <span className="status-dot running" />
-              {t.name}
+              {j.name}
             </div>
           ) : (
-            <span key={t.id} className="status-idle-task">{t.name}</span>
+            <span key={j.id} className="status-idle-task">{j.name}</span>
           ))}
-          {tasks.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No jobs configured</span>}
+          {jobs.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No jobs configured</span>}
         </div>
 
         {view === VIEWS.feed && <Feed />}
-        {view === VIEWS.tasks && <Tasks tasks={tasks} onRefresh={refreshTasks} onNavigate={setView} />}
+        {view === VIEWS.tasks && <Tasks jobs={jobs} onRefresh={refreshJobs} onNavigate={setView} />}
         {view === VIEWS.queue && <Queue />}
         {view === VIEWS.files && <Files />}
         {view === VIEWS.settings && <Settings />}

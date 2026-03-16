@@ -219,7 +219,7 @@ External MCP servers extend the tool surface available to agents beyond the plat
 
 ### User Interface
 
-The product presents six views and a persistent chat surface:
+The product presents seven views and a persistent chat surface:
 
 - **Dispatch** — the operational center. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Dragging pending tasks serves dual purpose — reorder or merge — distinguished by drop position tolerance. When the user drags a task mostly between two other tasks (near the gap), the system shows a reorder indicator and inserts the task at that position. When the user drags a task directly onto another task (within the task's central zone), the system shows a merge indicator and combines the two tasks. Merge is only available when both tasks belong to the same job — dragging onto a task from a different job shows no merge affordance and falls back to reorder behavior. Split breaks a multi-trigger pending task into individual tasks. Selecting a task shows its streamed output.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.

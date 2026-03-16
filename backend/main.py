@@ -1,6 +1,6 @@
 """mAistro backend — FastAPI app, lifespan, and remaining routes.
 
-Route modules: task_routes.py, queue_routes.py, chat.py.
+Route modules: job_routes.py, queue_routes.py, chat.py.
 """
 
 import json
@@ -25,7 +25,7 @@ from backend.chat import router as chat_router
 from backend.cli import CLI_NATIVE_TOOLS
 from backend.mcp_probe import probe_server
 from backend.queue_routes import router as queue_router
-from backend.task_routes import router as task_router
+from backend.job_routes import router as job_router
 from backend.dispatch import check_watch_triggers
 from backend.state import require_project
 from backend import state
@@ -56,7 +56,7 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(queue_router)
-app.include_router(task_router)
+app.include_router(job_router)
 
 
 # ── Pydantic Models ────────────────────────────────────────
@@ -116,11 +116,10 @@ async def open_project(req: OpenProjectRequest):
     if not os.path.isdir(path):
         raise HTTPException(404, "Directory not found")
 
-    # Block project switch while a dispatch is running (prevents silent DB corruption)
     if state.PROJECT_DIR and os.path.normpath(path) != os.path.normpath(state.PROJECT_DIR):
-        active = worker.get_active_dispatch_id()
+        active = worker.get_active_task_id()
         if active is not None:
-            raise HTTPException(409, f"Cannot switch projects while dispatch #{active} is running. Cancel it first or wait for completion.")
+            raise HTTPException(409, f"Cannot switch projects while task #{active} is running. Cancel it first or wait for completion.")
 
     git.ensure_repo(path)
     state.PROJECT_DIR = path
@@ -194,9 +193,9 @@ async def remove_recent_project(path: str):
 
 @app.post("/api/project/close")
 async def close_project():
-    active = worker.get_active_dispatch_id()
+    active = worker.get_active_task_id()
     if active is not None:
-        raise HTTPException(409, f"Cannot close project while dispatch #{active} is running. Cancel it first or wait for completion.")
+        raise HTTPException(409, f"Cannot close project while task #{active} is running. Cancel it first or wait for completion.")
     state.PROJECT_DIR = None
     await db.close_db()
     return {"status": "ok"}
@@ -205,27 +204,27 @@ async def close_project():
 # ── Feed Routes ─────────────────────────────────────────────
 
 @app.get("/api/feed/")
-async def get_feed(limit: int = 50, offset: int = 0, task_id: str | None = None, path: str | None = None):
+async def get_feed(limit: int = 50, offset: int = 0, job_id: str | None = None, path: str | None = None):
     require_project()
     entries = git.log(state.PROJECT_DIR, limit=limit, skip=offset, path=path, with_stats=True)
 
-    queue = await db.get_dispatch_queue(limit=200)
-    dispatch_by_commit = {d["result_commit"]: d for d in queue if d.get("result_commit")}
+    queue = await db.get_task_queue(limit=200)
+    task_by_commit = {t["result_commit"]: t for t in queue if t.get("result_commit")}
 
     feed = []
     for entry in entries:
         item = {**entry}
-        dispatch = dispatch_by_commit.get(entry["hash"])
-        if dispatch:
-            item["dispatch"] = dispatch
-            item["trigger"] = dispatch["trigger"]
+        task = task_by_commit.get(entry["hash"])
+        if task:
+            item["task"] = task
+            item["trigger"] = task["trigger"]
         else:
             item["trigger"] = "task" if entry.get("email", "").endswith("@maistro.local") else "human"
         feed.append(item)
 
-    if task_id:
-        feed = [f for f in feed if f.get("dispatch", {}).get("task_id") == task_id
-                or f.get("email") == f"{task_id}@maistro.local"]
+    if job_id:
+        feed = [f for f in feed if f.get("task", {}).get("job_id") == job_id
+                or f.get("email") == f"{job_id}@maistro.local"]
 
     return feed
 
@@ -290,13 +289,13 @@ async def post_commit_hook(req: PostCommitRequest):
     triggered = await check_watch_triggers(req.commit_hash, state.PROJECT_DIR)
     dispatched = []
 
-    for task in triggered:
+    for job in triggered:
         summary = git.commit_oneline(state.PROJECT_DIR, req.commit_hash) or req.commit_hash[:8]
         context = f"**Commit** `{req.commit_hash[:8]}`: {summary}"
-        await db.enqueue_dispatch(
-            task["id"], "commit", trigger_detail=req.commit_hash, context=context
+        await db.enqueue_task(
+            job["id"], "commit", trigger_detail=req.commit_hash, context=context
         )
-        dispatched.append(task["id"])
+        dispatched.append(job["id"])
 
     if dispatched:
         worker.notify()
@@ -305,12 +304,10 @@ async def post_commit_hook(req: PostCommitRequest):
 
 
 # ── Tool Inventory Route ───────────────────────────────────
-# Exposes the platform's discovered tool inventory so configuration
-# surfaces can present selectable options rather than free-text input.
 
 INTERNAL_MCP_TOOLS = [
     "git_status", "git_log", "git_diff", "git_commit",
-    "list_files", "read_file", "list_tasks",
+    "list_files", "read_file", "list_jobs",
 ]
 
 @app.get("/api/tools/inventory")
@@ -322,7 +319,6 @@ async def get_tool_inventory():
         "external_servers": {},
     }
 
-    # Probe enabled external servers for their tool inventories (parallel)
     if state.PROJECT_DIR:
         import asyncio
         servers = await db.list_mcp_servers()
@@ -399,11 +395,10 @@ async def delete_mcp_server(name: str):
 
 
 # ── MCP Tool Event Route ────────────────────────────────────
-# Receives audit log entries from the internal MCP server subprocess.
 
-@app.post("/api/dispatch/mcp-event")
+@app.post("/api/tasks/mcp-event")
 async def log_mcp_event(req: McpEventRequest, x_session_id: str = Header(None)):
-    """Log an MCP tool invocation to the dispatch's chat session audit trail."""
+    """Log an MCP tool invocation to the task's chat session audit trail."""
     if not x_session_id:
         return {"status": "ignored"}
     raw = json.dumps({
