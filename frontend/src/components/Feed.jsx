@@ -63,9 +63,9 @@ export default function Feed() {
         </button>
       </div>
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+      <div className="split-body">
         {/* Feed list */}
-        <div className="feed-list" style={{ flex: 1 }}>
+        <div className="feed-list">
           {loading && <div className="loading">Loading feed...</div>}
           {!loading && items.length === 0 && (
             <div className="empty-state">No commits yet. Create a task and run it.</div>
@@ -111,14 +111,14 @@ export default function Feed() {
               <h3>Commit Detail</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4, flexShrink: 0 }}>
+            <div className="commit-meta">
               {selected.hash?.slice(0, 8)} by {selected.author}
             </div>
-            <div style={{ fontSize: 12, marginBottom: 12, fontWeight: 'bold', flexShrink: 0 }}>
+            <div className="commit-headline">
               {selected.message}
             </div>
             {selected.files && (
-              <div style={{ marginBottom: 12, flexShrink: 0 }}>
+              <div className="detail-section" style={{ flexShrink: 0 }}>
                 <label>Changed Files</label>
                 {selected.files.map(f => (
                   <div key={f} style={{ fontSize: 11, padding: '1px 0' }}>{f}</div>

@@ -330,9 +330,9 @@ export default function Queue() {
         )}
       </div>
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+      <div className="split-body">
         {/* Queue list */}
-        <div className="feed-list" style={{ flex: 1 }}>
+        <div className="feed-list">
           {loading && <div className="loading">Loading queue...</div>}
           {!loading && filtered.length === 0 && (
             <div className="empty-state">
@@ -383,13 +383,13 @@ export default function Queue() {
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
-            <div ref={detailScrollRef} style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <div ref={detailScrollRef} className="detail-scroll">
               <DispatchDetail item={selected} output={output} onUpdate={refresh}
                 liveText={liveText} liveTools={liveTools} isStreaming={isStreaming} />
             </div>
 
             {isUpcoming(selected) && (
-              <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0 }}>
+              <div className="detail-actions">
                 {confirmCancel === selected.id ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 12 }}>Cancel this dispatch?</span>
@@ -435,7 +435,7 @@ export default function Queue() {
               </div>
             )}
             {!isUpcoming(selected) && (
-              <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12, flexShrink: 0 }}>
+              <div className="detail-actions">
                 {retryContext !== null ? (
                   <>
                     <label style={{ fontSize: 11 }}>Edit context before retrying</label>
@@ -554,14 +554,14 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
   return (
     <>
-      <div style={{ marginBottom: 12 }}>
+      <div className="detail-section">
         <label>Status</label>
         <span className={`queue-status ${status}`} style={{ fontSize: 12 }}>
           {STATUS_LABELS[status]}
         </span>
       </div>
 
-      <div style={{ marginBottom: 12 }}>
+      <div className="detail-section">
         <label>Triggers</label>
         <div style={{ fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {triggers.map((entry, i) => (
@@ -582,7 +582,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         </div>
       </div>
 
-      <div style={{ marginBottom: 12 }}>
+      <div className="detail-section">
         <label>Context</label>
         {isPending && editingContext !== null ? (
           <>
@@ -617,7 +617,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         )}
       </div>
 
-      <div style={{ marginBottom: 12 }}>
+      <div className="detail-section">
         <label>Timeline</label>
         <div style={{ fontSize: 11 }}>
           <div>Created: {formatDate(item.created_at, true)}</div>
@@ -637,7 +637,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       </div>
 
       {item.result_commit && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="detail-section">
           <label>Commits</label>
           <div style={{ fontSize: 11, fontFamily: 'var(--font)' }}>
             {item.start_commit
@@ -648,9 +648,9 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       )}
 
       {item.error && status !== 'cancelled' && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="detail-section">
           <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
-          <div style={{ fontSize: 11, color: status === 'timed_out' ? 'var(--warning, #e6a117)' : 'var(--danger)' }}>
+          <div style={{ fontSize: 11, color: status === 'timed_out' ? 'var(--warning)' : 'var(--danger)' }}>
             {status === 'timed_out' ? 'Dispatch exceeded timeout limit' : item.error}
           </div>
         </div>
@@ -658,7 +658,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
       {/* Live streaming output — visible while streaming, or while liveText exists but stored output hasn't loaded yet */}
       {(isStreaming || (liveText && !assistantMsgs.length)) && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="detail-section">
           <label>
             Live Output
             {isStreaming && <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>
@@ -668,27 +668,12 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
           {liveTools.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
               Tools: {liveTools.map((t, i) => (
-                <span key={i} style={{
-                  display: 'inline-block',
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border-light)',
-                  borderRadius: 3,
-                  padding: '1px 5px',
-                  marginRight: 4,
-                  marginBottom: 2,
-                  fontSize: 10,
-                }}>{t}</span>
+                <span key={i} className="tool-badge">{t}</span>
               ))}
             </div>
           )}
           {liveText ? (
-            <div className="md-content" style={{
-              fontSize: 12,
-              padding: '8px 10px',
-              background: 'var(--surface)',
-              border: '1px solid var(--border-light)',
-              borderRadius: 4,
-            }}>
+            <div className="md-content md-output">
               <Markdown>{mdBreaks(liveText)}</Markdown>
             </div>
           ) : isStreaming ? (
@@ -701,20 +686,13 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
       {/* Stored output (after completion) */}
       {assistantMsgs.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="detail-section">
           <label>Output</label>
           {assistantMsgs.map((msg, i) => {
             const content = getMessageContent(msg)
             if (!content.trim()) return null
             return (
-              <div key={i} className="md-content" style={{
-                fontSize: 12,
-                padding: '8px 10px',
-                background: 'var(--surface)',
-                border: '1px solid var(--border-light)',
-                borderRadius: 4,
-                marginBottom: 6,
-              }}>
+              <div key={i} className="md-content md-output" style={{ marginBottom: 6 }}>
                 <Markdown>{mdBreaks(content)}</Markdown>
               </div>
             )
@@ -724,7 +702,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
       {/* Dispatch diff — collapsible, for completed dispatches with commit range */}
       {item.start_commit && item.result_commit && item.start_commit !== item.result_commit && (
-        <div style={{ marginBottom: 12 }}>
+        <div className="detail-section">
           <label
             onClick={() => setDiffOpen(o => !o)}
             style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
@@ -748,7 +726,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
                 <>
                   <div style={{ marginBottom: 8 }}>
                     {diffData.files.map(f => (
-                      <div key={f.path} style={{ fontSize: 11, padding: '1px 0', display: 'flex', gap: 6 }}>
+                      <div key={f.path} className="diff-file-row">
                         <span style={{ flex: 1 }}>{f.path}</span>
                         {f.insertions > 0 && <span className="feed-stat-add">+{f.insertions}</span>}
                         {f.deletions > 0 && <span className="feed-stat-del">-{f.deletions}</span>}

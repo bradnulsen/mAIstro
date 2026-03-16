@@ -1397,3 +1397,77 @@ label {
   background: transparent;
   overflow-x: auto;
 }
+
+/* ── Split Body (master-detail layout wrapper) ── */
+
+.split-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Detail Panel Sections ── */
+
+.detail-section {
+  margin-bottom: 12px;
+}
+
+.detail-actions {
+  border-top: 1px solid var(--border-light);
+  padding-top: 12px;
+  flex-shrink: 0;
+}
+
+.detail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* ── Output Block (rendered markdown in dispatch/commit panels) ── */
+
+.md-output {
+  font-size: 12px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+}
+
+/* ── Tool Badge (streaming tool name chips) ── */
+
+.tool-badge {
+  display: inline-block;
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-right: 4px;
+  margin-bottom: 2px;
+  font-size: 10px;
+}
+
+/* ── Diff File Row ── */
+
+.diff-file-row {
+  font-size: 11px;
+  padding: 1px 0;
+  display: flex;
+  gap: 6px;
+}
+
+/* ── Commit Detail ── */
+
+.commit-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.commit-headline {
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
