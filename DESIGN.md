@@ -84,12 +84,18 @@ Coalescing prevents redundant pending tasks. Two mechanisms exist: **automatic c
 
 The user can merge and split pending tasks directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly.
 
-**Merge** — the user selects two or more pending tasks for the same job and combines them into a single task. All trigger entries from the source tasks are collected into the surviving task's `triggers` array. The oldest task (by `created_at`) survives; the others are removed from the queue. The surviving task retains its queue position.
+**Merge** — the user drags a pending task directly onto another pending task for the same job. The two tasks combine into a single task. All trigger entries from both tasks are collected into the surviving task's `triggers` array. The older task (by `created_at`) survives; the dragged task is removed from the queue. The surviving task retains its queue position.
 
 - Only pending tasks can be merged (not started, not completed, not pending-approval).
-- Only tasks belonging to the same job can be merged. Merging across jobs would produce a task with ambiguous identity — one task cannot represent two jobs.
+- Only tasks belonging to the same job can be merged. Merging across jobs would produce a task with ambiguous identity — one task cannot represent two jobs. The UI enforces this by suppressing the merge affordance when the dragged task and the drop target belong to different jobs.
 - The merge operation is the manual equivalent of what automatic coalescing does at enqueue time: multiple reasons to run become one run that addresses all of them.
 - Trigger context is preserved verbatim. Each trigger entry retains the context string it was created with — merge does not rewrite history.
+
+**Drag Interaction Model** — reorder and merge share a single drag gesture, disambiguated by drop position:
+
+- **Reorder zone** — the upper and lower edges of each task row (the gaps between tasks). Dropping here inserts the dragged task at that position. Visual feedback: an insertion line between tasks.
+- **Merge zone** — the central area of a task row. Dropping here merges the dragged task into the drop target. Visual feedback: the target task highlights with a merge indicator. The merge zone activates only when the drop target is a pending task belonging to the same job as the dragged task. When the same-job condition is not met, the central zone behaves as a reorder zone — no merge affordance is shown.
+- The tolerance split (how much of the row is merge zone vs. reorder zone) is a UI tuning parameter, not a design constant. The essential contract: the user's spatial intent — "place between" vs. "place onto" — determines whether the operation is reorder or merge.
 
 **Split** — the user takes a pending task that has multiple trigger entries and breaks it into individual tasks, one per trigger. The original task keeps its first trigger entry and queue position; new tasks are created for each remaining trigger and appended to the end of the pending queue.
 
@@ -215,7 +221,7 @@ External MCP servers extend the tool surface available to agents beyond the plat
 
 The product presents six views and a persistent chat surface:
 
-- **Dispatch** — the operational center. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Drag-to-reorder pending tasks to control execution priority. Merge and split controls for manual queue composition — merge combines selected same-job pending tasks into one; split breaks a multi-trigger pending task into individual tasks. Selecting a task shows its streamed output.
+- **Dispatch** — the operational center. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Dragging pending tasks serves dual purpose — reorder or merge — distinguished by drop position tolerance. When the user drags a task mostly between two other tasks (near the gap), the system shows a reorder indicator and inserts the task at that position. When the user drags a task directly onto another task (within the task's central zone), the system shows a merge indicator and combines the two tasks. Merge is only available when both tasks belong to the same job — dragging onto a task from a different job shows no merge affordance and falls back to reorder behavior. Split breaks a multi-trigger pending task into individual tasks. Selecting a task shows its streamed output.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.
 - **Jobs** — the primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
@@ -268,7 +274,7 @@ Required tooltip surfaces:
 - **Merge preserves trigger history**: merging pending tasks concatenates their trigger arrays. No trigger entry is lost or rewritten. The surviving task's triggers are the union of all source tasks' triggers, ordered by original creation time.
 - **Split produces valid tasks**: each task created by split carries exactly one trigger entry from the original. The original task retains its first trigger and identity; new tasks get fresh IDs and are appended to the pending queue.
 - **Composition operates on pending tasks only**: merge and split apply exclusively to pending tasks that have not started execution. Active, completed, and pending-approval tasks are ineligible. This preserves lifecycle monotonicity — once a task starts, its trigger set is fixed.
-- **Same-job constraint on merge**: only tasks belonging to the same job can be merged. A task's identity is bound to one job; cross-job merging would violate prompt assembly, tool configuration, and commit authorship invariants.
+- **Same-job constraint on merge**: only tasks belonging to the same job can be merged. A task's identity is bound to one job; cross-job merging would violate prompt assembly, tool configuration, and commit authorship invariants. The UI enforces this structurally — the merge affordance does not appear when tasks belong to different jobs, so the invalid operation is never offered.
 
 ### Accountability
 
