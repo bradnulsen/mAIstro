@@ -187,13 +187,11 @@ export default function Settings() {
             <HelpTip text={TIPS.mcpServers} />
           </div>
           {mcpServers.length === 0 && (
-            <div className="muted-text" style={{ marginBottom: 8 }}>
-              No MCP servers configured
-            </div>
+            <div className="muted-text">No MCP servers configured</div>
           )}
           {mcpServers.map(s => (
-            <div key={s.name} className="mcp-server-item" style={{ opacity: s.enabled ? 1 : 0.5 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+            <div key={s.name} className={`mcp-server-item${s.enabled ? '' : ' disabled'}`}>
+              <div>
                 <input
                   type="checkbox"
                   checked={!!s.enabled}
@@ -212,21 +210,21 @@ export default function Settings() {
             </div>
           ))}
           <div className="mcp-add-form">
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ flex: 1 }}>
+            <div className="mcp-add-form-row">
+              <div>
                 <label>Name</label>
                 <input value={mcpName} onChange={e => setMcpName(e.target.value)} placeholder="server-name" />
               </div>
-              <div style={{ flex: 2 }}>
+              <div>
                 <label>Command</label>
                 <input value={mcpCommand} onChange={e => setMcpCommand(e.target.value)} placeholder="npx or python3" />
               </div>
             </div>
-            <div style={{ marginTop: 6 }}>
+            <div className="mcp-add-form-args">
               <label>Arguments (space-separated)</label>
               <input value={mcpArgs} onChange={e => setMcpArgs(e.target.value)} placeholder="-m my_server --port 3000" />
             </div>
-            {mcpError && <div className="error-text" style={{ marginTop: 4 }}>{mcpError}</div>}
+            {mcpError && <div className="error-text">{mcpError}</div>}
             <button onClick={handleAddMcp}>Add Server</button>
           </div>
         </div>

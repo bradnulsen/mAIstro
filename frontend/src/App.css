@@ -673,6 +673,11 @@ label.muted-text {
   color: var(--text);
 }
 
+.checkbox-label.readonly {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .mode-toggle {
   display: flex;
   gap: 0;
@@ -1364,9 +1369,14 @@ label.muted-text {
   margin-bottom: 6px;
 }
 
+.mcp-server-item.disabled { opacity: 0.5; }
+
 .mcp-server-item > :first-child {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .mcp-server-name {
@@ -1388,6 +1398,22 @@ label.muted-text {
 
 .mcp-add-form > button {
   margin-top: 8px;
+}
+
+.mcp-add-form-row {
+  display: flex;
+  gap: 8px;
+}
+
+.mcp-add-form-row > div:first-child { flex: 1; }
+.mcp-add-form-row > div:last-child { flex: 2; }
+
+.mcp-add-form-args {
+  margin-top: 6px;
+}
+
+.mcp-add-form .error-text {
+  margin-top: 4px;
 }
 
 /* Settings field with inline save button */

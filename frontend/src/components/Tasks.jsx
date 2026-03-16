@@ -525,7 +525,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                   const checked = allowed.includes(tool)
                   const allEmpty = allowed.length === 0
                   return (
-                    <label key={tool} className="checkbox-label" style={{ fontSize: 12 }}>
+                    <label key={tool} className="checkbox-label">
                       <input
                         type="checkbox"
                         checked={allEmpty || checked}
@@ -546,19 +546,19 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                 })}
               </div>
             ) : (
-              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading tools...</span>
+              <span className="muted-text">Loading tools...</span>
             )}
             {(getVal('allowed_tools') || []).length === 0 && toolInventory.cli_native.length > 0 && (
-              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>All tools enabled (default)</span>
+              <span className="muted-text">All tools enabled (default)</span>
             )}
           </div>
 
           {toolInventory.internal_mcp.length > 0 && (
             <div className="field-group">
-              <label>Internal Platform Tools <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>(always available)</span></label>
+              <label>Internal Platform Tools <span className="muted-text">(always available)</span></label>
               <div className="checkbox-list">
                 {toolInventory.internal_mcp.map(tool => (
-                  <label key={tool} className="checkbox-label" style={{ fontSize: 12, opacity: 0.6 }}>
+                  <label key={tool} className="checkbox-label readonly">
                     <input type="checkbox" checked disabled />
                     {tool}
                   </label>
@@ -580,7 +580,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                     const selected = getVal('mcp_servers') || []
                     const checked = selected.includes(s.name)
                     return (
-                      <label key={s.name} className="checkbox-label" style={{ fontSize: 12 }}>
+                      <label key={s.name} className="checkbox-label">
                         <input
                           type="checkbox"
                           checked={checked}
@@ -597,7 +597,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               </div>
             ) : (
               <div className="field-group">
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                <span className="muted-text">
                   No enabled MCP servers. Register and enable servers in Settings.
                 </span>
               </div>
