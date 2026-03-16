@@ -21,7 +21,7 @@ The user points mAistro at a project directory. From that point, the platform ow
 
 - A task is a named, configurable unit of work. It has a short description, detailed instructions (the prompt body), a model, and behavioral properties.
 - Task identity is derived from the name (slugified). The name is the human-facing label; the slug is the system-facing key. Once created, the slug is immutable — renaming a task does not change its identity.
-- Tasks are ordered. The user controls sort order explicitly.
+- Tasks are ordered. The user controls sort order by dragging tasks into position.
 - Task deletion cascades: removing a task removes its properties, dispatch history, and chat sessions.
 
 ### Task Properties
@@ -132,9 +132,9 @@ The platform hosts an internal MCP server that dispatched agents connect to. Thi
 
 The product presents six views and a persistent chat surface:
 
-- **Queue** — the operational center. Shows pending, active, and completed dispatches. Provides controls for processing, cancelling, approving/rejecting, resuming, and retrying. Selecting a dispatch shows its streamed output.
+- **Queue** — the operational center. Shows pending, active, and completed dispatches. Provides controls for cancelling, approving/rejecting, resuming, and retrying. In manual queue mode, provides processing controls to advance the queue. Selecting a dispatch shows its streamed output.
 - **Feed** — git history enriched with dispatch metadata. Shows what changed and which dispatches produced those changes.
-- **Tasks** — task configuration: create, edit, reorder, delete. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution.
+- **Tasks** — the primary dispatch surface. Task configuration: create, edit, delete. Drag-to-reorder sets execution priority. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
 - **Settings** — platform configuration: queue processing mode, default model, default timeout, MCP server management.
 - **Chat** — a persistent, resizable tray providing interactive conversation with the LLM in the project context.
