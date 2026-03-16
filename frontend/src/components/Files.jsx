@@ -1,9 +1,66 @@
 import { useState, useEffect, useCallback } from 'react'
 import Markdown from 'react-markdown'
+import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
+import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
+import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
+import ruby from 'react-syntax-highlighter/dist/esm/languages/prism/ruby'
+import go from 'react-syntax-highlighter/dist/esm/languages/prism/go'
+import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
+import java from 'react-syntax-highlighter/dist/esm/languages/prism/java'
+import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
+import cpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
+import csharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp'
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
+import toml from 'react-syntax-highlighter/dist/esm/languages/prism/toml'
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
+import xml from 'react-syntax-highlighter/dist/esm/languages/prism/xml-doc'
+import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
+import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
+import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
+import graphql from 'react-syntax-highlighter/dist/esm/languages/prism/graphql'
+import docker from 'react-syntax-highlighter/dist/esm/languages/prism/docker'
 import { searchFiles, readFile } from '../api'
+
+SyntaxHighlighter.registerLanguage('javascript', javascript)
+SyntaxHighlighter.registerLanguage('jsx', jsx)
+SyntaxHighlighter.registerLanguage('typescript', typescript)
+SyntaxHighlighter.registerLanguage('tsx', tsx)
+SyntaxHighlighter.registerLanguage('python', python)
+SyntaxHighlighter.registerLanguage('ruby', ruby)
+SyntaxHighlighter.registerLanguage('go', go)
+SyntaxHighlighter.registerLanguage('rust', rust)
+SyntaxHighlighter.registerLanguage('java', java)
+SyntaxHighlighter.registerLanguage('c', c)
+SyntaxHighlighter.registerLanguage('cpp', cpp)
+SyntaxHighlighter.registerLanguage('csharp', csharp)
+SyntaxHighlighter.registerLanguage('bash', bash)
+SyntaxHighlighter.registerLanguage('yaml', yaml)
+SyntaxHighlighter.registerLanguage('toml', toml)
+SyntaxHighlighter.registerLanguage('json', json)
+SyntaxHighlighter.registerLanguage('xml', xml)
+SyntaxHighlighter.registerLanguage('css', css)
+SyntaxHighlighter.registerLanguage('scss', scss)
+SyntaxHighlighter.registerLanguage('sql', sql)
+SyntaxHighlighter.registerLanguage('graphql', graphql)
+SyntaxHighlighter.registerLanguage('dockerfile', docker)
+
 
 const MD_EXTENSIONS = new Set(['md', 'mdx', 'markdown'])
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'])
+
+const EXT_TO_LANG = {
+  js: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx',
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
+  c: 'c', cpp: 'cpp', cs: 'csharp',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  yaml: 'yaml', yml: 'yaml', toml: 'toml', json: 'json', xml: 'xml',
+  html: 'xml', css: 'css', scss: 'scss', sql: 'sql', graphql: 'graphql',
+}
 
 function fileExtension(path) {
   const dot = path.lastIndexOf('.')
@@ -16,6 +73,12 @@ function isMarkdown(path) {
 
 function isImage(path) {
   return IMAGE_EXTENSIONS.has(fileExtension(path))
+}
+
+function detectLanguage(path) {
+  const filename = path.split('/').pop().toLowerCase()
+  if (filename === 'dockerfile') return 'dockerfile'
+  return EXT_TO_LANG[fileExtension(path)] || null
 }
 
 export default function Files() {
@@ -139,11 +202,25 @@ export default function Files() {
           </div>
         )}
 
-        {selected && content !== null && !isMarkdown(selected.path) && (
-          <div className="files-content-body">
-            <pre className="files-code">{content}</pre>
-          </div>
-        )}
+        {selected && content !== null && !isMarkdown(selected.path) && (() => {
+          const lang = detectLanguage(selected.path)
+          return lang ? (
+            <div className="files-content-body files-content-body--code">
+              <SyntaxHighlighter
+                language={lang}
+                style={oneDark}
+                customStyle={{ margin: 0, fontSize: 11, borderRadius: 0, background: 'var(--code-bg)' }}
+                codeTagProps={{ style: { fontFamily: 'var(--font)' } }}
+              >
+                {content}
+              </SyntaxHighlighter>
+            </div>
+          ) : (
+            <div className="files-content-body">
+              <pre className="files-code">{content}</pre>
+            </div>
+          )
+        })()}
       </div>
     </div>
   )

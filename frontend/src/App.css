@@ -1390,6 +1390,11 @@ label {
   padding: 16px;
 }
 
+.files-content-body--code {
+  padding: 0;
+  background: var(--code-bg);
+}
+
 .files-code {
   font-size: 11px;
   font-family: var(--font);
