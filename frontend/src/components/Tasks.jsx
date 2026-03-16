@@ -119,7 +119,7 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
                   <button className="small primary" onClick={handleCreate}>+</button>
                   <button className="small" onClick={() => { setCreating(false); setCreateError('') }}>✕</button>
                 </div>
-                {createError && <span style={{ fontSize: 11, color: 'var(--danger)' }}>{createError}</span>}
+                {createError && <span className="error-text">{createError}</span>}
               </div>
             ) : (
               <button className="small" style={{ width: '100%' }} onClick={() => setCreating(true)}>
@@ -234,7 +234,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
       {isDirty && (
         <div className="task-save-bar">
           <span className="task-save-bar-label">Unsaved changes</span>
-          {saveError && <span style={{ fontSize: 11, color: 'var(--danger)', flex: 1 }}>{saveError}</span>}
+          {saveError && <span className="error-text" style={{ flex: 1 }}>{saveError}</span>}
           <button onClick={() => { setEditing({}); setSaveError('') }}>Discard</button>
           <button className="primary" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
@@ -293,7 +293,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
         </div>
       )}
       {dispatchError && (
-        <div style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 8 }}>{dispatchError}</div>
+        <div className="error-text" style={{ marginBottom: 8 }}>{dispatchError}</div>
       )}
 
       {/* Tabbed sections */}
@@ -364,7 +364,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                     onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
                     min={0}
                     step={60}
-                    style={{ width: 100, fontFamily: 'monospace' }}
+                    style={{ width: 100, fontFamily: 'var(--font)' }}
                   />
                   <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                     {(() => {
@@ -469,7 +469,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                 value={getVal('schedule') || ''}
                 onChange={e => edit('schedule', e.target.value)}
                 placeholder="e.g. */30 * * * *  or  0 9 * * 1-5"
-                style={{ flex: 1, fontFamily: 'monospace' }}
+                style={{ flex: 1, fontFamily: 'var(--font)' }}
               />
               {getVal('schedule') && (
                 <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
@@ -530,7 +530,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
         ) : (
           <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Task</button>
         )}
-        {deleteError && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{deleteError}</div>}
+        {deleteError && <div className="error-text" style={{ marginTop: 6 }}>{deleteError}</div>}
       </div>
     </div>
   )

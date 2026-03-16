@@ -11,6 +11,7 @@
   --accent-hover: #444;
   --rail-bg: #fafaf5;
   --hover-bg: #eee;
+  --bg-active: rgba(0, 0, 0, 0.06);
   --danger: #c44;
   --success: #4a4;
   --running: #e90;
@@ -1099,6 +1100,42 @@ label {
 }
 
 /* ── Utilities ── */
+
+.error-text {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.muted-text {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-divider {
+  border-left: 1px solid var(--border-light);
+  height: 16px;
+  margin: 0 4px;
+}
+
+.trigger-chip {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  opacity: 0.6;
+  transition: opacity 0.1s;
+}
+
+.trigger-chip.active {
+  background: var(--bg-active);
+  opacity: 1;
+}
 
 .empty-state {
   display: flex;

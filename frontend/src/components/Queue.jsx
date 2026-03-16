@@ -317,7 +317,7 @@ export default function Queue() {
         <button className="small" onClick={handleRefresh} disabled={refreshing}>
           {refreshing ? <span className="tool-spinner" /> : '↻'}
         </button>
-        <div style={{ borderLeft: '1px solid var(--border-light)', height: 16, margin: '0 4px' }} />
+        <div className="toolbar-divider" />
         <label className="checkbox-label" style={{ fontSize: 11, marginBottom: 0, width: 'auto' }}>
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
           Auto
@@ -391,13 +391,13 @@ export default function Queue() {
             {isUpcoming(selected) && (
               <div className="detail-actions">
                 {confirmCancel === selected.id ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div className="action-row">
                     <span style={{ fontSize: 12 }}>Cancel this dispatch?</span>
                     <button className="danger small" onClick={() => handleCancel(selected.id)}>Confirm</button>
                     <button className="small" onClick={() => setConfirmCancel(null)}>No</button>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div className="action-row">
                     {getStatus(selected) === 'pending_approval' && (
                       <>
                         <button
@@ -428,7 +428,7 @@ export default function Queue() {
                       Cancel
                     </button>
                     {actionError && (
-                      <span style={{ fontSize: 11, color: 'var(--danger)' }}>{actionError}</span>
+                      <span className="error-text">{actionError}</span>
                     )}
                   </div>
                 )}
@@ -438,9 +438,9 @@ export default function Queue() {
               <div className="detail-actions">
                 {retryContext !== null ? (
                   <>
-                    <label style={{ fontSize: 11 }}>Edit context before retrying</label>
+                    <label className="muted-text" style={{ textTransform: 'none', letterSpacing: 'normal' }}>Edit context before retrying</label>
                     <ContextEditor value={retryContext} onChange={e => setRetryContext(e.target.value)} autoFocus />
-                    <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center' }}>
+                    <div className="action-row" style={{ marginTop: 4, gap: 4 }}>
                       <button className="small primary" onClick={() => handleRetry(selected.id, retryContext)}>
                         ↺ Retry
                       </button>
@@ -448,7 +448,7 @@ export default function Queue() {
                     </div>
                   </>
                 ) : (
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div className="action-row">
                     {selected.error && selected.error !== 'cancelled' && (
                       <button
                         className="small primary"
@@ -468,7 +468,7 @@ export default function Queue() {
                   </div>
                 )}
                 {actionError && (
-                  <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{actionError}</div>
+                  <div className="error-text" style={{ marginTop: 6 }}>{actionError}</div>
                 )}
               </div>
             )}
@@ -563,18 +563,12 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
       <div className="detail-section">
         <label>Triggers</label>
-        <div style={{ fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {triggers.map((entry, i) => (
             <span
               key={i}
               onClick={() => setSelectedTrigger(i)}
-              style={{
-                cursor: 'pointer',
-                padding: '2px 6px',
-                borderRadius: 4,
-                background: i === selectedTrigger ? 'var(--bg-active, rgba(255,255,255,0.1))' : 'transparent',
-                opacity: i === selectedTrigger ? 1 : 0.6,
-              }}
+              className={`trigger-chip ${i === selectedTrigger ? 'active' : ''}`}
             >
               {TRIGGER_ICONS[entry.trigger] || ''} {triggerLabel(entry)}
             </span>
@@ -587,10 +581,10 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         {isPending && editingContext !== null ? (
           <>
             <ContextEditor value={editingContext} onChange={e => setEditingContext(e.target.value)} autoFocus />
-            <div style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center' }}>
+            <div className="action-row" style={{ marginTop: 4, gap: 4 }}>
               <button className="small primary" onClick={handleSaveContext}>Save</button>
               <button className="small" onClick={() => { setEditingContext(null); setSaveError('') }}>Cancel</button>
-              {saveError && <span style={{ fontSize: 11, color: 'var(--danger)' }}>{saveError}</span>}
+              {saveError && <span className="error-text">{saveError}</span>}
             </div>
           </>
         ) : isPending ? (
