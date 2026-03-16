@@ -11,7 +11,7 @@ The user points mAistro at a project directory. From that point, the platform ow
 Two concepts, precisely defined:
 
 - **Job** — a named, persistent configuration of autonomous work. The user creates, edits, and deletes jobs. Jobs define *what* work exists: instructions, model, subscriptions, dependencies, schedule. Jobs are the nouns of the system.
-- **Task** — a scoped, contextualized execution of a job. When a job is dispatched (by any trigger), it produces a task in the dispatch queue. Tasks have lifecycle (pending, active, completed, failed), trigger context, and linked output. Tasks are the verbs of the system.
+- **Task** — a scoped, contextualized execution of a job. When a job is dispatched (by any trigger), it produces a task in the dispatch queue. Tasks have lifecycle (pending, queued, active, completed, failed), trigger context, and linked output. Tasks are the verbs of the system.
 
 A job is a template. A task is an instance. One job produces many tasks over time.
 
@@ -42,17 +42,22 @@ A job is a template. A task is an instance. One job produces many tasks over tim
 ### Dispatch
 
 - Every dispatch — regardless of trigger — creates a task in the dispatch queue before execution. The queue is the single entry point to the execution engine.
-- The background worker pulls from the queue and processes tasks sequentially (one at a time).
-- The queue operates in two modes: **auto-processing** (worker continuously pulls and executes pending tasks in order) and **paused** (tasks accumulate as pending; the user reorders them, then toggles auto-processing when ready). A global setting controls which mode is active.
-- Each task records its full lifecycle: `created_at`, `started_at`, `completed_at`, `error`. A task that has started but not completed is "active." A task with an error is "failed."
+- The background worker pulls from the queue and processes tasks sequentially (one at a time). The worker only pulls tasks in the **queued** state — pending tasks are invisible to the worker.
+- **Two-stage queue**: tasks progress through two pre-execution states before the worker picks them up:
+  - **Pending** — the staging area. Newly created tasks land here by default. The user reviews, reorders, coalesces, and curates pending tasks before promoting them to queued. Pending tasks are *not* eligible for execution.
+  - **Queued** — the execution runway. Tasks here are committed to run. The worker pulls the highest-priority queued task when ready. The user can still reorder queued tasks to control execution sequence.
+- **Auto-queueing** — a global setting that controls the routing of newly created tasks. When enabled, new tasks skip pending and go directly to the queued state. When disabled, new tasks always enter pending. This replaces the former auto-dispatch concept. The distinction: auto-queueing controls *where tasks land on creation*, not whether the worker runs. The worker always runs — it simply has nothing to do when no queued tasks exist.
+- The user can override auto-queueing for any individual task by dragging it back from queued to pending. The routing decision happens only at initial trigger time — once a task exists, the user has full manual control over its state.
+- Each task records its full lifecycle: `created_at`, `queued_at`, `started_at`, `completed_at`, `error`. A task that has started but not completed is "active." A task with an error is "failed."
 - On startup, the worker sweeps any tasks that were active when the process died and marks them as interrupted.
 
 ### Task Ordering in the Queue
 
-- Pending tasks in the dispatch queue have an explicit execution order. In auto-processing mode, the worker pulls the highest-priority pending task (lowest order position).
-- The user controls task execution order by dragging pending tasks into position within the Dispatch view. This determines which task runs next when the current one completes.
-- Reordering applies only to pending tasks. Active and completed tasks are not reorderable.
-- Newly enqueued tasks are appended to the end of the pending queue by default.
+- Both pending and queued columns maintain independent sort orders. Each column has its own ordering — moving a task between columns does not affect ordering within the other column.
+- The worker pulls the highest-priority queued task (lowest order position in the queued column). The user controls execution order by reordering queued tasks.
+- The user controls task positioning by dragging tasks within either column in the Dispatch view.
+- Reordering applies only to pending and queued tasks. Active and completed tasks are not reorderable.
+- Newly created tasks are appended to the end of their target column (pending by default, or queued if auto-queueing is enabled).
 
 ### Triggers
 
@@ -70,37 +75,43 @@ Two continuation triggers operate on existing tasks:
 
 ### Coalescing
 
-Coalescing prevents redundant pending tasks. Two mechanisms exist: **automatic coalescing** (at enqueue time, driven by trigger rules) and **manual coalescing** (user-initiated, from the queue).
+Coalescing prevents redundant pre-execution tasks. Two mechanisms exist: **automatic coalescing** (at enqueue time, driven by trigger rules) and **manual coalescing** (user-initiated, from the queue).
 
 #### Automatic Coalescing
 
-- When a new trigger would create a task but a compatible pending task already exists, the trigger is appended to the existing task's trigger list instead of creating a new record.
-- `commit` and `dependency` triggers coalesce with other pending tasks of the same trigger type for the same job.
-- `schedule` triggers coalesce globally (any pending task for the same job absorbs the new trigger).
-- The `coalesce_dispatches` job property enables global coalescing for all trigger types — the job will never have more than one pending task.
+- When a new trigger would create a task but a compatible pre-execution task (pending or queued) already exists, the trigger is appended to the existing task's trigger list instead of creating a new record. Coalescing checks both columns — a new trigger coalesces into whichever matching task exists, regardless of whether it is pending or queued.
+- `commit` and `dependency` triggers coalesce with other pre-execution tasks of the same trigger type for the same job.
+- `schedule` triggers coalesce globally (any pre-execution task for the same job absorbs the new trigger).
+- The `coalesce_dispatches` job property enables global coalescing for all trigger types — the job will never have more than one pre-execution task.
 - `manual`, `resume`, and `retry` never coalesce — each represents distinct explicit intent.
 
 #### Manual Queue Composition
 
-The user can merge and split pending tasks directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly.
+The user can merge and split tasks within the same column directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly.
 
-**Merge** — the user drags a pending task directly onto another pending task for the same job. The two tasks combine into a single task. All trigger entries from both tasks are collected into the surviving task's `triggers` array. The older task (by `created_at`) survives; the dragged task is removed from the queue. The surviving task retains its queue position.
+**Merge** — the user drags a task directly onto another task in the same column for the same job. The two tasks combine into a single task. All trigger entries from both tasks are collected into the surviving task's `triggers` array. The older task (by `created_at`) survives; the dragged task is removed from the queue. The surviving task retains its queue position.
 
-- Only pending tasks can be merged (not started, not completed, not pending-approval).
+- Only pending or queued tasks can be merged (not started, not completed, not pending-approval).
+- Merge requires same-state: both tasks must be in the same column (both pending or both queued). Cross-state merge is not permitted — dragging between columns is always a transfer operation.
 - Only tasks belonging to the same job can be merged. Merging across jobs would produce a task with ambiguous identity — one task cannot represent two jobs. The UI enforces this by suppressing the merge affordance when the dragged task and the drop target belong to different jobs.
 - The merge operation is the manual equivalent of what automatic coalescing does at enqueue time: multiple reasons to run become one run that addresses all of them.
 - Trigger context is preserved verbatim. Each trigger entry retains the context string it was created with — merge does not rewrite history.
 
-**Drag Interaction Model** — reorder and merge share a single drag gesture, disambiguated by drop position:
+**Drag Interaction Model** — three drag operations share a single drag gesture, disambiguated by drop target:
 
-- **Reorder zone** — the upper and lower edges of each task row (the gaps between tasks). Dropping here inserts the dragged task at that position. Visual feedback: an insertion line between tasks.
-- **Merge zone** — the central area of a task row. Dropping here merges the dragged task into the drop target. Visual feedback: the target task highlights with a merge indicator. The merge zone activates only when the drop target is a pending task belonging to the same job as the dragged task. When the same-job condition is not met, the central zone behaves as a reorder zone — no merge affordance is shown.
-- The tolerance split (how much of the row is merge zone vs. reorder zone) is a UI tuning parameter, not a design constant. The essential contract: the user's spatial intent — "place between" vs. "place onto" — determines whether the operation is reorder or merge.
+- **Reorder** (within same column) — drop between tasks in the same column. Visual feedback: an insertion line between tasks. The dragged task moves to that position.
+- **Merge** (within same column) — drop onto a task's central zone in the same column. Visual feedback: the target task highlights with a merge indicator. The merge zone activates only when the drop target belongs to the same job as the dragged task and both are in the same state. When these conditions are not met, the central zone falls back to reorder behavior.
+- **Transfer** (between columns) — drop into the other column. Moves the task from pending to queued or from queued to pending. The transferred task is appended to the end of the target column. Visual feedback: the target column highlights as a drop zone.
 
-**Split** — the user takes a pending task that has multiple trigger entries and breaks it into individual tasks, one per trigger. The original task keeps its first trigger entry and queue position; new tasks are created for each remaining trigger and appended to the end of the pending queue.
+The tolerance split between reorder and merge zones is a UI tuning parameter, not a design constant. The essential contract: the user's spatial intent — "place between" vs. "place onto" vs. "move across" — determines which operation occurs.
 
-- Only pending tasks with more than one trigger entry can be split.
+**Ordering and coalescing are same-state operations.** Reordering and merging only apply within a single column — both pending or both queued. Cross-column drag is exclusively a transfer: it changes state but does not reorder within the target or merge with existing tasks. The transferred task receives a deterministic default position (appended to end of target column), after which the user can reorder or merge it using the within-column drag operations.
+
+**Split** — the user takes a pre-execution task (pending or queued) that has multiple trigger entries and breaks it into individual tasks, one per trigger. The original task keeps its first trigger entry and queue position; new tasks are created for each remaining trigger and appended to the end of the same column.
+
+- Only pending or queued tasks with more than one trigger entry can be split.
 - Each resulting task is an independent queue entry with its own lifecycle.
+- Split tasks remain in the same state as the original — splitting a queued task produces queued tasks, splitting a pending task produces pending tasks.
 - Split reverses a previous merge or automatic coalescing. The user can inspect the accumulated triggers on a task and decide they should run separately.
 - New tasks created by split inherit the job's current approval gate setting. If `require_approval` is enabled, split-off tasks enter pending-approval state.
 
@@ -221,12 +232,12 @@ External MCP servers extend the tool surface available to agents beyond the plat
 
 The product presents seven views and a persistent chat surface:
 
-- **Dispatch** — the operational center. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Dragging pending tasks serves dual purpose — reorder or merge — distinguished by drop position tolerance. When the user drags a task mostly between two other tasks (near the gap), the system shows a reorder indicator and inserts the task at that position. When the user drags a task directly onto another task (within the task's central zone), the system shows a merge indicator and combines the two tasks. Merge is only available when both tasks belong to the same job — dragging onto a task from a different job shows no merge affordance and falls back to reorder behavior. Split breaks a multi-trigger pending task into individual tasks. Selecting a task shows its streamed output.
+- **Dispatch** — the operational center. Two-column kanban layout: **Pending** (left) and **Queued** (right). Pending is the staging area where new tasks land for review and curation. Queued is the execution runway — the worker pulls from here. Active and completed tasks appear below the queued column with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Three drag interactions: **reorder** within a column (drop between tasks), **merge** within a column (drop onto a same-job task's center), and **transfer** between columns (drop into the other column to promote or demote). Merge is only available when both tasks belong to the same job and are in the same column. Split breaks a multi-trigger pre-execution task into individual tasks. Selecting a task shows its streamed output.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.
 - **Jobs** — the primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
 - **MCP Servers** — tool server management as a dedicated surface. See MCP Servers View below.
-- **Settings** — platform configuration: queue processing mode, default model, default timeout.
+- **Settings** — platform configuration: auto-queueing toggle, default model, default timeout.
 - **Chat** — a persistent, resizable tray providing interactive conversation with the LLM in the project context.
 
 A status bar surfaces running task indicators, providing ambient awareness of system activity without requiring the user to be on the Dispatch view.
@@ -247,7 +258,7 @@ Required tooltip surfaces:
 - **Coalesce Dispatches** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
 - **Dependencies** — the job auto-dispatches when *any* selected upstream job completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled tasks do not trigger dependents.
 - **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.
-- **Auto-dispatch (Settings)** — when enabled, the background worker automatically pulls and executes pending tasks in order. When disabled (paused), tasks accumulate as pending. The user reorders them via drag-and-drop in the Dispatch view, then toggles auto-processing when ready.
+- **Auto-queueing (Settings)** — when enabled, newly created tasks skip the pending column and go directly to queued, where the worker will pick them up. When disabled, all new tasks enter the pending column and must be manually transferred to queued before they can execute. The worker always runs — auto-queueing only controls the initial routing of new tasks. The user can override any individual task by dragging it between columns after creation.
 - **Model** — the LLM model for this job. Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.
 
 ### MCP Servers View
@@ -282,7 +293,8 @@ MCP server configuration is a first-class surface with its own rail item. It is 
 
 ### Operational Integrity
 
-- **Queue-first invariant**: every dispatch passes through the queue as a task before execution. All code paths — manual, watch, schedule, dependency — enqueue first, then execute.
+- **Queue-first invariant**: every dispatch passes through the queue as a task before execution. All code paths — manual, watch, schedule, dependency — enqueue first, then execute. Tasks enter as either pending or queued (determined by auto-queueing setting) but always exist as queue records before execution.
+- **Two-stage progression**: tasks must be in the queued state before the worker will pick them up. Pending tasks are invisible to the worker. This ensures the user always has an opportunity to review and curate work before it executes (unless auto-queueing is deliberately enabled).
 - **Sequential execution**: exactly one task runs at a time. The worker holds a lock during processing.
 - **Project isolation**: each project has its own SQLite database. The app-level database holds only the recent-projects list.
 - **Git is content source-of-truth**: all project content lives in git. The SQLite database holds only operational state (job configs, task records, chat sessions).
@@ -291,15 +303,16 @@ MCP server configuration is a first-class surface with its own rail item. It is 
 ### Data Integrity
 
 - **Job identity is immutable**: a job's slug ID, once derived from its initial name, stays constant. All references (tasks, properties, dependencies) use the slug. Renaming changes only the display label.
-- **Task lifecycle is monotonic**: a task progresses from created → started → completed. Retry creates a new cycle by resetting lifecycle fields on the same record, preserving task identity.
+- **Task lifecycle is monotonic**: a task progresses from created → queued → started → completed. A task may skip pending (via auto-queueing) or move back from queued to pending (via manual transfer), but once started, progression is forward-only. Retry creates a new cycle by resetting lifecycle fields on the same record, preserving task identity.
 - **Trigger context is immutable at enqueue time**: each trigger entry's context string is built when the trigger fires. This preserves the causal record — the prompt reflects what was true when the trigger occurred.
 - **Job deletion cascades**: removing a job removes all associated data (properties, tasks, sessions). This prevents orphaned records.
-- **Running state is derived**: whether a task is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL), not persisted as a separate status field.
+- **Running state is derived**: whether a task is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL). Whether a task is queued is computed from `queued_at` (queued_at IS NOT NULL AND started_at IS NULL). Whether a task is pending is the absence of both. State is not persisted as a separate status field — it is derived from the presence of lifecycle timestamps.
 - **Outcome summaries are derived from git**: the summary is computed from commits between `start_commit` and `result_commit`. It reflects what the repository records, not what the agent claims. A task that produces no commits has no summary.
 - **Ratings are optional and user-initiated**: a task's rating defaults to null (unrated). The user explicitly sets it. Ratings are never inferred or auto-assigned.
 - **Merge preserves trigger history**: merging pending tasks concatenates their trigger arrays. No trigger entry is lost or rewritten. The surviving task's triggers are the union of all source tasks' triggers, ordered by original creation time.
 - **Split produces valid tasks**: each task created by split carries exactly one trigger entry from the original. The original task retains its first trigger and identity; new tasks get fresh IDs and are appended to the pending queue.
-- **Composition operates on pending tasks only**: merge and split apply exclusively to pending tasks that have not started execution. Active, completed, and pending-approval tasks are ineligible. This preserves lifecycle monotonicity — once a task starts, its trigger set is fixed.
+- **Composition operates on pre-execution tasks only**: merge and split apply exclusively to pending or queued tasks that have not started execution. Active, completed, and pending-approval tasks are ineligible. This preserves lifecycle monotonicity — once a task starts, its trigger set is fixed.
+- **Composition is same-state**: merge and reorder operate within a single column (both tasks pending or both queued). Cross-column drag is always a transfer — it changes state without merging or reordering within the target column. This prevents ambiguity: moving between columns and merging are distinct user intentions that must not be conflated in a single gesture.
 - **Same-job constraint on merge**: only tasks belonging to the same job can be merged. A task's identity is bound to one job; cross-job merging would violate prompt assembly, tool configuration, and commit authorship invariants. The UI enforces this structurally — the merge affordance does not appear when tasks belong to different jobs, so the invalid operation is never offered.
 
 ### Accountability
