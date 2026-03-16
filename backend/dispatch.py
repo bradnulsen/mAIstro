@@ -98,7 +98,7 @@ You are running in HEADLESS DISPATCH mode in {project_dir}. There is no human in
 
 ## Output Standards
 - Commit your changes with descriptive messages explaining what changed and why.
-- Use the task name as a commit tag prefix: [{task_name}] description
+- Use the job name as a commit tag prefix: [{task_name}] description
 - Stage and commit related changes together as logical units.
 - Documentation files should be first-principle, as-is representations of current state — not task lists or work-in-progress notes. Reasoning and work context belong in commit messages."""
 
@@ -121,7 +121,7 @@ def build_user_prompt(task: dict, project_dir: str,
     description = props.get("description") or ""
     instructions = props.get("instructions") or ""
 
-    identity_parts = [f"# Task: {name}"]
+    identity_parts = [f"# Job: {name}"]
     if description:
         identity_parts.append(description)
     if dispatch_meta:
@@ -134,7 +134,7 @@ def build_user_prompt(task: dict, project_dir: str,
         sections.append(f"## Instructions\n{instructions}")
 
     if manifest and manifest.strip():
-        sections.append(f"## Task Registry\n{manifest}")
+        sections.append(f"## Job Registry\n{manifest}")
 
     # Subscription file list — agent reads contents via tools as needed
     sub_globs = props.get("subscriptions")
@@ -161,14 +161,14 @@ def _build_closing_directive() -> str:
     )
 
 
-# ── Task manifest ─────────────────────────────────────────
+# ── Job manifest ──────────────────────────────────────────
 
 async def build_task_manifest() -> str:
-    """Build the task registry — all tasks with descriptions and subscriptions."""
+    """Build the job registry — all jobs with descriptions and subscriptions."""
     tasks = await db.list_tasks()
     if not tasks:
         return ""
-    lines = ["Tasks in this project:"]
+    lines = ["Jobs in this project:"]
     for t in tasks:
         desc = t["properties"].get("description") or ""
         subs = t["properties"].get("subscriptions") or []

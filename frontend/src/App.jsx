@@ -79,7 +79,7 @@ export default function App() {
         <button
           className={`rail-icon ${view === VIEWS.queue ? 'active' : ''}`}
           onClick={() => setView(VIEWS.queue)}
-          title="Queue"
+          title="Dispatch"
         >▶</button>
         <button
           className={`rail-icon ${view === VIEWS.feed ? 'active' : ''}`}
@@ -89,7 +89,7 @@ export default function App() {
         <button
           className={`rail-icon ${view === VIEWS.tasks ? 'active' : ''}`}
           onClick={() => setView(VIEWS.tasks)}
-          title="Tasks"
+          title="Jobs"
         >◉</button>
         <button
           className={`rail-icon ${view === VIEWS.files ? 'active' : ''}`}
@@ -111,7 +111,7 @@ export default function App() {
               key={t.id}
               className="status-chip running"
               onClick={() => setView(VIEWS.queue)}
-              title="View in Queue"
+              title="View in Dispatch"
               style={{ cursor: 'pointer' }}
             >
               <span className="status-dot running" />
@@ -120,7 +120,7 @@ export default function App() {
           ) : (
             <span key={t.id} className="status-idle-task">{t.name}</span>
           ))}
-          {tasks.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No tasks configured</span>}
+          {tasks.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No jobs configured</span>}
         </div>
 
         {view === VIEWS.feed && <Feed />}
