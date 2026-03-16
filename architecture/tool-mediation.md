@@ -98,7 +98,17 @@ External MCP servers extend the tool surface beyond built-in CLI and internal pl
 
 **Registration** — external servers are registered at the platform level (Settings). Each registration specifies: server name (primary key), command to launch, command arguments, and environment variables. A registered server can be enabled or disabled globally — disabled servers are unavailable to any job regardless of per-job configuration.
 
-**Connection and Discovery** — when a registered server is enabled, the platform can connect to it and discover its tool inventory via the MCP protocol. Discovered tools are what the user sees when configuring per-job server assignments. If a server cannot be reached or fails to report its tools, the platform surfaces this state so the user knows which servers are healthy.
+**Connection and Discovery** — the platform discovers external server capabilities through ephemeral probes. A probe spawns the server process, performs the MCP initialize/tools/list handshake over stdio, extracts the tool names, and terminates the process. This is a short-lived, stateless interaction — no persistent connection is maintained outside of dispatch.
+
+**Module**: `backend/mcp_probe.py`
+
+Probing serves two purposes:
+- **Inventory enrichment** — the tool inventory endpoint probes all enabled servers in parallel and includes their discovered tools alongside CLI native and internal MCP tools. This gives the configuration surface a complete picture of what tools exist across all sources.
+- **Health checking** — each probe returns a status (`ok`, `error`, or `disabled`) and, on failure, an error message. The frontend surfaces server health so the user knows which servers are reachable before assigning them to jobs.
+
+Probes are on-demand — triggered by the inventory endpoint or by a dedicated per-server probe endpoint (`GET /api/mcp/servers/{name}/tools`). There is no background polling or persistent health monitoring. The probe timeout (10 seconds) bounds how long a misbehaving server can block the response.
+
+If a server cannot be reached or fails the handshake, the platform reports the failure state. Discovered tools from healthy servers become visible in the per-job configuration surface alongside built-in tools.
 
 **Per-Job Assignment** — a job's `mcp_servers` property controls which registered external servers connect during dispatch. The configuration surface presents registered servers as selectable options (not free-text). Only servers that are both registered and globally enabled appear as options.
 
