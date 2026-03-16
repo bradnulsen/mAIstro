@@ -16,11 +16,11 @@ claude -p --output-format stream-json --model <model> --max-turns 50 --verbose -
 
 Optional flags:
 - `--resume <session_id>` for resume tasks
-- `--allowedTools <tools...>` from job's `allowed_tools` / `base_tools` property — sets which tools are auto-approved (permission scoping)
-- `--disallowedTools <tools...>` from job's `disallowed_tools` property — **hides** tools from the agent entirely. This is the enforcement mechanism that actually restricts tool access, especially critical with `--dangerously-skip-permissions` where `--allowedTools` alone does not restrict visibility
+- `--allowedTools <tools...>` from job's `allowed_tools` property — sets which tools are auto-approved (permission scoping)
+- `--disallowedTools <tools...>` **computed by the platform** — the complement of `allowed_tools`. Hides excluded tools from the agent entirely. This is the enforcement mechanism that actually restricts tool access, critical with `--dangerously-skip-permissions` where `--allowedTools` alone does not restrict visibility
 - `--mcp-config <path>` for MCP server connections (internal platform server and any external servers enabled for the job)
 
-The two tool flags are complementary inverses: `allowedTools + disallowedTools = all tools`. When a job specifies which tools it can use, the platform computes the complement and passes both flags.
+The user configures only `allowed_tools`. The platform computes the complement and passes `--disallowedTools` to hide everything else. The agent's environment contains exactly the tools it can use — no more.
 
 ### Stdin Piping
 

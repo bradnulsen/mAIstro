@@ -23,8 +23,7 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `timeout` | integer | `900` | Maximum execution time in seconds |
 | `require_approval` | boolean | `false` | Whether automated triggers require human approval |
 | `coalesce_dispatches` | boolean | `false` | Global coalescing — never more than one pending task |
-| `base_tools` | json | `[]` | Allowed tools — CLI tools the agent can use without permission prompting |
-| `disallowed_tools` | json | `[]` | Disallowed tools — CLI tools hidden from the agent entirely (inverse of allowed) |
+| `allowed_tools` | json | `[]` | CLI tools the agent can use. When set, the platform computes the complement and hides all other tools from the agent |
 | `mcp_servers` | json | `[]` | External MCP servers to enable |
 | `sort_order` | integer | `0` | Explicit ordering in the job list |
 

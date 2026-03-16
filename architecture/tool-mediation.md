@@ -4,7 +4,7 @@ The platform hosts an internal MCP server that dispatched agents connect to. Thi
 
 ## Purpose
 
-Without mediation, agents interact with the project through unstructured shell commands (via the CLI's Bash tool). The internal MCP server provides structured alternatives with enforced conventions, audit trails, and per-job access control. Agents retain access to native CLI tools (subject to tool scoping via `--allowedTools` and `--disallowedTools` flags) alongside MCP tools — mediated tools are preferred alternatives, not an exclusive replacement.
+Without mediation, agents interact with the project through unstructured shell commands (via the CLI's Bash tool). The internal MCP server provides structured alternatives with enforced conventions, audit trails, and per-job access control. Agents retain access to native CLI tools (subject to tool scoping — see below) alongside MCP tools — mediated tools are preferred alternatives, not an exclusive replacement.
 
 ## Architecture
 
@@ -14,23 +14,20 @@ The internal server runs as part of the backend process and is connected to the 
 
 The server reads the dispatching job's configuration (properties, subscriptions) and presents only relevant tools. Different jobs get different tool surfaces based on:
 
-- **Job properties**: `allowed_tools`, `disallowed_tools`, and `mcp_servers` shape the available tool set
+- **Job properties**: `allowed_tools` and `mcp_servers` shape the available tool set
 - **Subscriptions**: glob patterns scope which files and paths are relevant to the job
 
 This means two jobs dispatched in sequence may see entirely different tool inventories from the same internal server.
 
-### Dual-Flag Tool Scoping
+### Opt-In Tool Scoping
 
-The Claude CLI provides two complementary flags for tool access control:
+Tool configuration is opt-in only. The user defines what a job *can* do via `allowed_tools` — one concept, one property. There is no complementary "disallowed" property.
 
-- **`--allowedTools`** — tools the agent can use without permission prompting. This is a *permission* flag, not a visibility flag.
-- **`--disallowedTools`** — tools that are **hidden** from the agent entirely. The agent cannot see, invoke, or reason about disallowed tools. This is the enforcement mechanism for invisible restrictions.
+The platform computes the inverse internally: tools not in the allowed set are passed to the CLI via `--disallowedTools`, which removes them from the agent's environment entirely. The agent never sees excluded tools, never reasons about them, never attempts to work around restrictions.
 
-These flags are inverses: `allowed + disallowed = all tools`. When the platform sets `allowed_tools` on a job, it computes the complement and passes `--disallowedTools` to the CLI to hide excluded tools.
+This matters because the platform runs with `--dangerously-skip-permissions`. In this mode, `--allowedTools` alone does not restrict tool access — all permission checks are bypassed. `--disallowedTools` is the only mechanism that actually removes tools from the agent's view, regardless of permission mode.
 
-This distinction matters because the platform runs with `--dangerously-skip-permissions`. In this mode, `--allowedTools` alone does not restrict tool access — all permission checks are bypassed. **`--disallowedTools` is the only mechanism that actually removes tools from the agent's view**, regardless of permission mode.
-
-The user-facing model remains whitelist-only: the user defines what a job *can* do via `allowed_tools` (and `disallowed_tools` as its explicit complement). The agent sees only tools in its allowed set — restrictions are invisible. No prompt instructions mention excluded tools, and the agent has no awareness they exist.
+This is not a stylistic choice — it follows from headless execution. A headless agent cannot ask for permissions, cannot negotiate tool access, cannot meaningfully be told what it cannot do. The only coherent model is to present exactly the tools the agent can use and nothing else. The platform owns the restriction surface; the agent owns only its allowed capabilities.
 
 ## Tool Categories
 
