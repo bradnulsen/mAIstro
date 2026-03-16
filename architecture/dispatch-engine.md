@@ -27,6 +27,8 @@ Each `dispatch_queue` row tracks:
 | `completed_at` | When execution finished (success, failure, or cancellation) |
 | `result_commit` | HEAD hash after execution completed |
 | `error` | Error message if failed, timed out, cancelled, interrupted, or rejected |
+| `rating` | User-assigned binary rating (positive/negative), null by default |
+| `coalesced_id` | Links subordinate tasks to a root task for merge; NULL = standalone/root |
 
 ## Worker
 
@@ -67,7 +69,7 @@ On startup (once per project open), the worker marks any tasks that are `started
 
 ### Dependent Job Propagation
 
-After successful completion (no error, no timeout), the worker scans all jobs for those declaring the completed job in their `depends_on` list. For each match, it enqueues a new task with `dependency` trigger, including context about the upstream job and its commit range. A dependent job fires when *any* of its upstream jobs completes — it does not wait for all upstreams.
+After successful completion (no error, no timeout), the worker scans all jobs for those declaring the completed job in their `depends_on` list. For each match, it enqueues a new task with `dependency` trigger, including context about the upstream job, its commit range, and outcome summary. A dependent job fires when *any* of its upstream jobs completes — it does not wait for all upstreams.
 
 Circular dependency chains are safe: coalescing absorbs redundant triggers, and sequential execution ensures no concurrent amplification. A cycle produces at most one pending task per job at any time.
 
@@ -95,6 +97,76 @@ The worker captures `start_commit` (HEAD at task start) and `result_commit` (HEA
 - **Observable failure**: when `start_commit == result_commit` but the agent was supposed to produce changes, the task output and audit trail reveal what happened. This is more useful than silently committing unknown changes.
 
 The commit range (`start_commit..result_commit`) feeds into dependency trigger context — downstream jobs see exactly which commits their upstream produced.
+
+## Dispatch Outcomes
+
+When a task completes, the platform derives an outcome summary and supports user rating. These serve both the operator (scan completed work at a glance) and downstream agents (understand what upstream actually produced).
+
+### Outcome Summary
+
+The summary is computed from git artifacts — the commits between `start_commit` and `result_commit`. It captures commit messages and change statistics. This is a derived value, not an authored one: the platform reads what the repository records, not what the agent claims.
+
+- If `start_commit == result_commit`, the task produced no commits and has no summary
+- The summary is computed at completion time and stored (or derived on read) for display in the Dispatch view
+- When this task triggers downstream dependents, the outcome summary is included in the trigger context — downstream agents receive concrete information about what their upstream produced
+
+### Task Rating
+
+The user can rate a completed task with a binary signal (positive or negative). Ratings are stored on the task record (`rating` column on `dispatch_queue`). The default is null (unrated). Ratings are never inferred or auto-assigned — they require explicit user action.
+
+The rating dataset can later be correlated with job instructions, model choices, and trigger patterns. The platform stores the signal; analysis is a future concern.
+
+## Manual Queue Composition
+
+The user can merge and split pending tasks directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly.
+
+### Implementation: Coalesced ID
+
+Rather than destructively removing task records during merge (losing individual trigger provenance), the system uses a **`coalesced_id` column** on `dispatch_queue`. This preserves every task as an atomic record while linking them for unified execution.
+
+| `coalesced_id` value | Meaning |
+|----------------------|---------|
+| `NULL` | Standalone task — visible in queue, dispatched independently |
+| `<dispatch_id>` | Subordinate task — linked to the root task identified by this ID |
+
+**Queue rendering**: the queue shows all tasks where `coalesced_id IS NULL`. These are either standalone tasks or root tasks that have subordinates linked to them.
+
+**Dispatch collection**: when the worker pulls a task for execution, it collects all tasks whose `coalesced_id` equals the dispatched task's ID. The trigger entries from all collected tasks are unified into the prompt context. Each subordinate task's triggers are preserved verbatim — merge does not rewrite trigger history.
+
+**Route behavior**: API routes that act on a specific dispatch ID automatically consider all tasks with `coalesced_id` equal to that ID. This means cancellation, approval, and other lifecycle operations propagate to the full group.
+
+### Merge
+
+Combines two or more pending tasks for the same job into a single logical unit.
+
+1. The oldest task (by `created_at`) becomes the root — its `coalesced_id` remains NULL
+2. All other selected tasks get `coalesced_id` set to the root task's dispatch ID
+3. The root task retains its queue position; subordinate tasks become invisible in the queue view
+
+**Constraints**:
+- Only pending tasks (not started, not completed, not pending-approval)
+- Same job only — a task's identity is bound to one job; cross-job merge would break prompt assembly, tool configuration, and commit authorship
+
+### Split
+
+Reverses a merge or automatic coalescing. Takes a root task that has subordinate tasks and makes them independent again.
+
+1. All tasks with `coalesced_id` equal to the root task's ID get `coalesced_id` set back to NULL
+2. Split-off tasks are appended to the end of the pending queue
+3. New independent tasks inherit the job's current `require_approval` setting
+
+**Constraints**:
+- Only root tasks that have at least one subordinate can be split
+- Only pending tasks
+
+### Why Coalesced ID Over Record Deletion
+
+The coalesced_id approach has structural advantages:
+
+- **Atomic provenance**: every trigger that created a task retains its own record. Audit trails remain complete without relying on JSON array archaeology
+- **Reversibility**: split is a column update, not record reconstruction. No information is lost during merge that must be recreated during split
+- **Route simplicity**: "act on all tasks with this coalesced_id" is a single WHERE clause, uniformly applied across all endpoints
+- **Automatic coalescing alignment**: the same mechanism can back automatic coalescing — instead of appending to a JSON array, create a new record with `coalesced_id` pointing to the existing pending task
 
 ## Retry and Resume
 

@@ -83,6 +83,30 @@ Coalescing prevents redundant pending tasks. The mechanism is unified in `enqueu
 
 The `triggers` column accumulates all trigger entries that contributed to a task. Each entry has `trigger` (type), `detail` (reference), and `context` (pre-formatted string built at the enqueue site). Context is immutable once written — it captures the state at trigger time, not execution time.
 
+### Coalesced ID Mechanism
+
+Automatic coalescing can use the same `coalesced_id` mechanism as manual merge (see [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition)). Instead of appending a trigger entry to an existing task's JSON array, the system creates a new atomic task record with `coalesced_id` pointing to the existing pending task. Both approaches achieve the same result — one execution that addresses multiple triggers — but the coalesced_id approach preserves each trigger as a first-class record.
+
+The queue-level view filters on `coalesced_id IS NULL`, so subordinate tasks are invisible in the queue. At dispatch time, the worker collects all tasks linked to the root and unifies their trigger context.
+
+## Manual Queue Composition
+
+Two user-initiated operations complement automatic coalescing — merge and split. These operate on pending tasks from the Dispatch view.
+
+### Merge
+
+Combines two or more pending tasks for the same job. The oldest task becomes the root; all others get `coalesced_id` set to the root's dispatch ID. Trigger history is preserved — no entries are lost or rewritten.
+
+Constraints: pending tasks only, same job only. Cross-job merge would violate the one-task-one-job invariant.
+
+### Split
+
+Reverses a merge. All tasks subordinate to a root (those with `coalesced_id` pointing to it) get `coalesced_id` cleared back to NULL, becoming independent queue entries appended to the end of the pending queue. Split-off tasks inherit the job's current `require_approval` setting.
+
+Constraints: only root tasks with subordinates, pending only.
+
+See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition) for implementation details.
+
 ## Subscriptions as Dual-Purpose
 
 Subscription glob patterns define a job's relevant files and serve two functions:

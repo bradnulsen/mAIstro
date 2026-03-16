@@ -44,11 +44,19 @@ On read, `get_task()` loads all defs, applies defaults, then overlays job-specif
 
 This design means adding a new property requires only a seed SQL insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
+### Dispatch Queue Extensions
+
+Two columns extend the `dispatch_queue` table beyond the core lifecycle:
+
+- **`rating`** — nullable binary signal (positive/negative) set by the user on completed tasks. Defaults to null (unrated). Stored directly on the task record for efficient query and display.
+- **`coalesced_id`** — nullable foreign key referencing another `dispatch_queue` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a dispatch ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
+
 ### Key Invariants
 
 - The `dispatch_queue.triggers` column stores a JSON array of trigger entries, parsed on every read via `_parse_dispatch_row()`
 - Foreign keys with `ON DELETE CASCADE` handle `task_properties` cleanup; `chat_sessions` and `dispatch_queue` are explicitly deleted in `delete_task()` because they reference `tasks` but need cleanup before the cascade fires
 - The `running` status is derived at query time from `dispatch_queue` (started but not completed), never stored as a property
+- Tasks with non-null `coalesced_id` are invisible in queue listings but included when their root task is dispatched or acted upon
 
 ## Application Database
 
