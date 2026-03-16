@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   getProject, getConfig, setConfig, getQueueSettings, setQueueSettings,
-  listMcpServers, createMcpServer, deleteMcpServer,
+  listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer,
 } from '../api'
 import HelpTip from './HelpTip'
 
@@ -84,6 +84,13 @@ export default function Settings() {
     const servers = await listMcpServers()
     setMcpServers(servers)
     flash('Server added')
+  }
+
+  const handleToggleMcp = async (name, enabled) => {
+    await updateMcpServer(name, { enabled })
+    const servers = await listMcpServers()
+    setMcpServers(servers)
+    flash(enabled ? 'Server enabled' : 'Server disabled')
   }
 
   const handleDeleteMcp = async (name) => {
@@ -185,11 +192,20 @@ export default function Settings() {
             </div>
           )}
           {mcpServers.map(s => (
-            <div key={s.name} className="mcp-server-item">
-              <div>
-                <div className="mcp-server-name">{s.name}</div>
-                <div className="mcp-server-cmd">
-                  {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
+            <div key={s.name} className="mcp-server-item" style={{ opacity: s.enabled ? 1 : 0.5 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                <input
+                  type="checkbox"
+                  checked={!!s.enabled}
+                  onChange={e => handleToggleMcp(s.name, e.target.checked)}
+                  title={s.enabled ? 'Enabled — available to jobs' : 'Disabled — unavailable to any job'}
+                  style={{ width: 'auto' }}
+                />
+                <div>
+                  <div className="mcp-server-name">{s.name}</div>
+                  <div className="mcp-server-cmd">
+                    {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
+                  </div>
                 </div>
               </div>
               <button className="small danger" onClick={() => handleDeleteMcp(s.name)}>Remove</button>

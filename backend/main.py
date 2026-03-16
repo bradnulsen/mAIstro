@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from backend import appstate, database as db, git, scheduler, worker
 from backend.chat import router as chat_router
+from backend.cli import CLI_NATIVE_TOOLS
 from backend.queue_routes import router as queue_router
 from backend.task_routes import router as task_router
 from backend.dispatch import check_watch_triggers
@@ -74,6 +75,9 @@ class CreateMcpServerRequest(BaseModel):
     command: str
     args: list | None = None
     env: dict | None = None
+
+class UpdateMcpServerRequest(BaseModel):
+    enabled: bool | None = None
 
 class ConfigRequest(BaseModel):
     value: str
@@ -299,6 +303,24 @@ async def post_commit_hook(req: PostCommitRequest):
     return {"status": "ok", "triggered": dispatched}
 
 
+# ── Tool Inventory Route ───────────────────────────────────
+# Exposes the platform's discovered tool inventory so configuration
+# surfaces can present selectable options rather than free-text input.
+
+INTERNAL_MCP_TOOLS = [
+    "git_status", "git_log", "git_diff", "git_commit",
+    "list_files", "read_file", "list_tasks",
+]
+
+@app.get("/api/tools/inventory")
+async def get_tool_inventory():
+    """Return the full tool inventory: CLI native tools and internal MCP tools."""
+    return {
+        "cli_native": sorted(CLI_NATIVE_TOOLS),
+        "internal_mcp": INTERNAL_MCP_TOOLS,
+    }
+
+
 # ── MCP Server Routes ──────────────────────────────────────
 
 @app.get("/api/mcp/servers")
@@ -317,6 +339,14 @@ async def create_mcp_server(req: CreateMcpServerRequest):
         env=req.env,
     )
     return {"status": "created"}
+
+
+@app.patch("/api/mcp/servers/{name}")
+async def update_mcp_server(name: str, req: UpdateMcpServerRequest):
+    require_project()
+    if req.enabled is not None:
+        await db.update_mcp_server_enabled(name, req.enabled)
+    return {"status": "updated"}
 
 
 @app.delete("/api/mcp/servers/{name}")

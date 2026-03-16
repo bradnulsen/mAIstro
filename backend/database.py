@@ -619,6 +619,15 @@ async def create_mcp_server(name: str, command: str, args: list | None = None, e
     await db.commit()
 
 
+async def update_mcp_server_enabled(name: str, enabled: bool):
+    db = await get_db()
+    await db.execute(
+        "UPDATE mcp_servers SET enabled = ? WHERE name = ?",
+        (1 if enabled else 0, name),
+    )
+    await db.commit()
+
+
 async def delete_mcp_server(name: str):
     db = await get_db()
     await db.execute("DELETE FROM mcp_servers WHERE name = ?", (name,))

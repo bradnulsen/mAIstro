@@ -2,14 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from 'react-markdown'
 import {
   createTask, updateTask, deleteTask, getTaskSubscriptions,
-  dispatchTask, listMcpServers,
+  dispatchTask, listMcpServers, getToolInventory,
 } from '../api'
 import HelpTip from './HelpTip'
 
 const TIPS = {
   subscriptions: 'Glob patterns, one per line. * matches files in one directory; ** matches across directories recursively. Patterns serve two purposes: they determine which commits trigger this task (watch), and they inject matching files as context into every dispatch prompt.',
   schedule: 'Five-field cron: minute hour day-of-month month day-of-week. Supports ranges (1-5), lists (0,15,30), steps (*/10), and wildcards (*). Examples: */30 * * * * (every 30 min), 0 9 * * 1-5 (weekdays at 9am). The first evaluation after setting a schedule establishes a baseline — it does not fire immediately.',
-  allowedTools: 'Comma-separated tool names the agent can use (e.g. Read, Edit, Bash, Write). When set, the platform computes the complement and hides all other tools from the agent. Leave empty to use the default tool set.',
+  allowedTools: 'CLI tools the agent can use, selected from the platform\'s discovered tool inventory. When a subset is selected, the platform computes the complement and hides all other tools from the agent. All checked = default (no restrictions).',
   requireApproval: 'When enabled, automated triggers (commit-watch, schedule, dependency) produce dispatches that wait for manual approval before executing. Manual dispatches bypass this gate.',
   coalesceDispatches: 'When enabled, the task will never have more than one pending dispatch. Any new trigger merges into the existing pending dispatch instead of creating a new queue entry. Useful for tasks that should catch up in one run rather than queuing redundant work.',
   dependencies: 'This task auto-dispatches when all selected upstream tasks complete successfully. Timed-out, failed, or cancelled dispatches do not trigger dependents.',
@@ -157,6 +157,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   const [deleteError, setDeleteError] = useState('')
   const [activeTab, setActiveTab] = useState('definition')
   const [availableMcpServers, setAvailableMcpServers] = useState([])
+  const [toolInventory, setToolInventory] = useState({ cli_native: [], internal_mcp: [] })
   const props = task.properties || {}
 
   const refreshSubs = useCallback(() => {
@@ -167,6 +168,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
 
   useEffect(() => {
     listMcpServers().then(setAvailableMcpServers).catch(() => setAvailableMcpServers([]))
+    getToolInventory().then(setToolInventory).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -513,49 +515,94 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
         <div className="task-tab-panel">
           <div className="field-group">
             <div className="label-row">
-              <label>Allowed Tools</label>
+              <label>Allowed CLI Tools</label>
               <HelpTip text={TIPS.allowedTools} />
             </div>
-            <input
-              type="text"
-              value={(getVal('allowed_tools') || []).join(', ')}
-              onChange={e => edit('allowed_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-              placeholder="Comma-separated tool names..."
-            />
-          </div>
-
-          {availableMcpServers.length > 0 && (
-            <div className="field-group">
-              <div className="label-row">
-                <label>MCP Servers</label>
-                <HelpTip text={TIPS.mcpServers} />
-              </div>
+            {toolInventory.cli_native.length > 0 ? (
               <div className="checkbox-list">
-                {availableMcpServers.map(s => {
-                  const enabled = getVal('mcp_servers') || []
-                  const checked = enabled.includes(s.name)
+                {toolInventory.cli_native.map(tool => {
+                  const allowed = getVal('allowed_tools') || []
+                  const checked = allowed.includes(tool)
+                  const allEmpty = allowed.length === 0
                   return (
-                    <label key={s.name} className="checkbox-label" style={{ fontSize: 12 }}>
+                    <label key={tool} className="checkbox-label" style={{ fontSize: 12 }}>
                       <input
                         type="checkbox"
-                        checked={checked}
+                        checked={allEmpty || checked}
                         onChange={() => {
-                          const next = checked ? enabled.filter(n => n !== s.name) : [...enabled, s.name]
-                          edit('mcp_servers', next)
+                          if (allEmpty) {
+                            // Switching from "all" to explicit selection — select all except this one
+                            edit('allowed_tools', toolInventory.cli_native.filter(t => t !== tool))
+                          } else {
+                            const next = checked ? allowed.filter(t => t !== tool) : [...allowed, tool]
+                            // If all tools are now selected, clear back to empty (= default "all")
+                            edit('allowed_tools', next.length === toolInventory.cli_native.length ? [] : next)
+                          }
                         }}
                       />
-                      {s.name}
+                      {tool}
                     </label>
                   )
                 })}
               </div>
+            ) : (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Loading tools...</span>
+            )}
+            {(getVal('allowed_tools') || []).length === 0 && toolInventory.cli_native.length > 0 && (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>All tools enabled (default)</span>
+            )}
+          </div>
+
+          {toolInventory.internal_mcp.length > 0 && (
+            <div className="field-group">
+              <label>Internal Platform Tools <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>(always available)</span></label>
+              <div className="checkbox-list">
+                {toolInventory.internal_mcp.map(tool => (
+                  <label key={tool} className="checkbox-label" style={{ fontSize: 12, opacity: 0.6 }}>
+                    <input type="checkbox" checked disabled />
+                    {tool}
+                  </label>
+                ))}
+              </div>
             </div>
           )}
-          {availableMcpServers.length === 0 && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              No MCP servers registered. Add servers in Settings.
-            </span>
-          )}
+
+          {(() => {
+            const enabledServers = availableMcpServers.filter(s => s.enabled)
+            return enabledServers.length > 0 ? (
+              <div className="field-group">
+                <div className="label-row">
+                  <label>External MCP Servers</label>
+                  <HelpTip text={TIPS.mcpServers} />
+                </div>
+                <div className="checkbox-list">
+                  {enabledServers.map(s => {
+                    const selected = getVal('mcp_servers') || []
+                    const checked = selected.includes(s.name)
+                    return (
+                      <label key={s.name} className="checkbox-label" style={{ fontSize: 12 }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            const next = checked ? selected.filter(n => n !== s.name) : [...selected, s.name]
+                            edit('mcp_servers', next)
+                          }}
+                        />
+                        {s.name}
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="field-group">
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  No enabled MCP servers. Register and enable servers in Settings.
+                </span>
+              </div>
+            )
+          })()}
         </div>
       )}
 
