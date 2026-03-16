@@ -151,9 +151,31 @@ Tool configuration is **opt-in only**. The user defines what a job *can* do — 
 
 This is not a stylistic choice — it follows from headless execution. A headless agent cannot ask for permissions, cannot negotiate tool access, cannot be told "you're not allowed to use X" in a meaningful way. The only coherent model is to present exactly the tools the agent can use and nothing else. The restriction surface is the platform's responsibility, not the agent's.
 
+### Tool Discoverability
+
+The platform must make the available tool inventory visible and selectable. A user configuring a job's tools should never need to guess names, remember spelling, or consult external documentation.
+
+Three tool sources exist, each requiring discovery:
+
+- **Built-in CLI tools** — the default tools provided by the Claude CLI (e.g. `Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Agent`, `NotebookEdit`). The platform queries the CLI for its available tool list and presents them. These are the tools that `allowed_tools` selects from.
+- **Internal MCP tools** — the tools hosted by the platform's own MCP server (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_tasks`). The platform knows these directly — it defines them. They are always available and not subject to per-job selection (the internal server is always connected).
+- **External MCP server tools** — tools provided by registered external servers. When a server is registered and enabled, the platform connects to it and discovers its tool list. These tools become visible in the per-job configuration surface alongside built-in tools.
+
+The configuration surface for `allowed_tools` presents the full inventory of available tools as a selectable list — checkboxes, multi-select, or equivalent. The user picks from what exists rather than typing names into a text field. The same applies to per-job MCP server selection: registered servers appear as selectable options, not free-text entries.
+
+This is a discoverability requirement, not a UI prescription. The essential behavior: the user sees what is available, selects what they want, and cannot select something that does not exist.
+
 ### External MCP Servers
 
-- External tool servers are registered globally (name, command, args, env) and can be enabled/disabled at the platform level. Per-job enablement is controlled by the job's `mcp_servers` property — a job only connects to servers it explicitly lists.
+External MCP servers extend the tool surface available to agents beyond the platform's built-in and internal tools. The platform manages their full lifecycle: registration, connection, discovery, per-job assignment.
+
+**Registration** — external servers are registered at the platform level (Settings). Each registration specifies a server name, the command to launch it, command arguments, and environment variables. A registered server can be enabled or disabled globally — disabled servers are not available to any job regardless of per-job configuration.
+
+**Connection and Discovery** — when an external server is registered and enabled, the platform can connect to it and discover its tool inventory. The discovered tools are what the user sees when configuring per-job server assignments. If a server cannot be reached or fails to report its tools, the platform surfaces this state clearly — the user knows which servers are healthy and which are not.
+
+**Per-Job Assignment** — a job's `mcp_servers` property controls which registered external servers are connected during that job's task execution. The configuration surface presents registered servers as selectable options (not free-text). Only servers that are both registered and globally enabled appear as options. The platform's internal MCP server is always connected and is not subject to per-job selection.
+
+**Tool Surface Composition** — during dispatch, the agent's available tools are the union of: (1) CLI tools selected via `allowed_tools` (or the full default set if empty), (2) internal MCP server tools (always present), and (3) tools from external MCP servers enabled for the job. The user can see this composed tool surface when configuring a job — what the agent will actually have access to.
 
 ### User Interface
 
@@ -178,7 +200,7 @@ Required tooltip surfaces:
 
 - **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the job *and* which files are included as context in the task prompt.
 - **Schedule (cron expression)** — five-field format: `minute hour day-of-month month day-of-week`. Ranges (`1-5`), lists (`0,15,30`), steps (`*/10`), and wildcards (`*`). Examples: `*/30 * * * *` (every 30 min), `0 9 * * 1-5` (weekdays at 9am). First evaluation after setting a schedule establishes a baseline — does not fire immediately.
-- **Allowed Tools** — comma-separated CLI tool names the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent sees only these tools plus tools from connected MCP servers. When empty, the agent gets the full default tool set. Tools not listed are removed from the agent's environment entirely — the agent has no awareness they exist.
+- **Allowed Tools** — select which CLI tools the agent can use. The platform presents the full inventory of available tools; the user selects from this list. When any tools are selected, the agent sees only those tools plus tools from connected MCP servers. When none are selected, the agent gets the full default tool set. Tools not selected are removed from the agent's environment entirely — the agent has no awareness they exist.
 - **MCP Servers (per-job)** — select which registered external MCP servers this job's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Register servers in Settings first, then enable them here per-job.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce tasks that wait for manual approval before executing. Manual dispatches bypass this gate.
 - **Coalesce Dispatches** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
@@ -213,6 +235,7 @@ Required tooltip surfaces:
 - **Tool mediation is observable**: every tool call that flows through the internal MCP server is logged as a structured event. The platform can reconstruct exactly what an agent did, not just what it produced.
 - **Context-aware tool surfaces**: the set of tools available to an agent is determined by the job's configuration, not by the agent's own choices. The platform controls what actions are possible.
 - **Tool restrictions are invisible to agents**: an agent only sees tools it is allowed to use. Tools outside the allowed set are removed from the agent's environment — not mentioned, not instructed against, not present. A headless agent has no mechanism to negotiate access; presenting tools it cannot use would only produce failed attempts or prompt-level workarounds. The platform owns the restriction surface; the agent owns only its allowed capabilities.
+- **Tool inventory is discoverable**: the platform presents the complete set of available tools — built-in CLI tools, internal MCP tools, and external MCP server tools — so the user configures from known options rather than guessing. Tool configuration surfaces select from what exists; they do not accept arbitrary text that may not correspond to real tools.
 
 ### Safety
 
