@@ -403,8 +403,8 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
 
       {activeTab === 'triggers' && (
         <div className="task-tab-panel">
-          <div className="field-group" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <div className="field-group trigger-options">
+            <div className="label-row">
               <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
                 <input
                   type="checkbox"
@@ -415,7 +415,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               </label>
               <HelpTip text={TIPS.requireApproval} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div className="label-row">
               <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
                 <input
                   type="checkbox"
@@ -433,7 +433,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               <label>Dependencies (runs after these tasks complete)</label>
               <HelpTip text={TIPS.dependencies} />
             </div>
-            <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '4px 16px' }}>
+            <div className="checkbox-list">
               {allTasks.filter(t => t.id !== task.id).map(t => {
                 const deps = getVal('depends_on') || []
                 const checked = deps.includes(t.id)
@@ -505,7 +505,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               {subsOpen && (
                 <div className="resolved-files-list">
                   {subs.subscriptions.map(f => (
-                    <div key={f.path} style={{ fontSize: 11, padding: '2px 0', display: 'flex', justifyContent: 'space-between' }}>
+                    <div key={f.path} className="resolved-file-item">
                       <span>{f.path}</span>
                       <span style={{ color: 'var(--text-muted)' }}>{formatSize(f.size)}</span>
                     </div>
@@ -518,7 +518,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
       )}
 
       {/* Danger zone */}
-      <div className="task-section" style={{ marginTop: 24, borderTop: '1px solid var(--border-light)', paddingTop: 16 }}>
+      <div className="task-section danger">
         <h3>Danger Zone</h3>
         {confirmDelete ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -107,6 +107,8 @@ body {
 }
 
 .header-bar .spacer { flex: 1; }
+.header-bar label { margin-bottom: 0; }
+.header-bar .checkbox-label { font-size: 11px; }
 
 /* ── Status Chips ── */
 
@@ -239,6 +241,11 @@ label {
   color: var(--text-muted);
   display: block;
   margin-bottom: 2px;
+}
+
+label.muted-text {
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* ── Feed ── */
@@ -523,8 +530,21 @@ label {
   padding: 4px 0;
 }
 
+.resolved-file-item {
+  font-size: 11px;
+  padding: 2px 0;
+  display: flex;
+  justify-content: space-between;
+}
+
 .task-section {
   margin-bottom: 16px;
+}
+
+.task-section.danger {
+  margin-top: 24px;
+  border-top: 1px solid var(--border-light);
+  padding-top: 16px;
 }
 
 .task-section h3 {
@@ -574,6 +594,19 @@ label {
 .task-def-columns {
   display: flex;
   gap: 16px;
+}
+
+.trigger-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.checkbox-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
 }
 .task-def-left {
   flex: 0 0 clamp(260px, 45%, 480px);
@@ -1144,6 +1177,11 @@ label {
   gap: 8px;
 }
 
+.action-row.compact {
+  margin-top: 4px;
+  gap: 4px;
+}
+
 .toolbar-divider {
   border-left: 1px solid var(--border-light);
   height: 16px;
@@ -1531,6 +1569,10 @@ label {
   border-top: 1px solid var(--border-light);
   padding-top: 12px;
   flex-shrink: 0;
+}
+
+.detail-meta {
+  font-size: 11px;
 }
 
 .detail-scroll {

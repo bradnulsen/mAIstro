@@ -311,7 +311,7 @@ export default function Queue() {
           {refreshing ? <span className="tool-spinner" /> : '↻'}
         </button>
         <div className="toolbar-divider" />
-        <label className="checkbox-label" style={{ fontSize: 11, marginBottom: 0, width: 'auto' }}>
+        <label className="checkbox-label">
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
           Auto
         </label>
@@ -425,9 +425,9 @@ export default function Queue() {
               <div className="detail-actions">
                 {retryContext !== null ? (
                   <>
-                    <label className="muted-text" style={{ textTransform: 'none', letterSpacing: 'normal' }}>Edit context before retrying</label>
+                    <label className="muted-text">Edit context before retrying</label>
                     <ContextEditor value={retryContext} onChange={e => setRetryContext(e.target.value)} autoFocus />
-                    <div className="action-row" style={{ marginTop: 4, gap: 4 }}>
+                    <div className="action-row compact">
                       <button className="small primary" onClick={() => handleRetry(selected.id, retryContext)}>
                         ↺ Retry
                       </button>
@@ -568,7 +568,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         {isPending && editingContext !== null ? (
           <>
             <ContextEditor value={editingContext} onChange={e => setEditingContext(e.target.value)} autoFocus />
-            <div className="action-row" style={{ marginTop: 4, gap: 4 }}>
+            <div className="action-row compact">
               <button className="small primary" onClick={handleSaveContext}>Save</button>
               <button className="small" onClick={() => { setEditingContext(null); setSaveError('') }}>Cancel</button>
               {saveError && <span className="error-text">{saveError}</span>}
@@ -600,7 +600,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
 
       <div className="detail-section">
         <label>Timeline</label>
-        <div style={{ fontSize: 11 }}>
+        <div className="detail-meta">
           <div>Created: {formatDate(item.created_at, true)}</div>
           {item.started_at && <div>Started: {formatDate(item.started_at, true)}</div>}
           {item.completed_at && <div>Completed: {formatDate(item.completed_at, true)}</div>}
@@ -620,7 +620,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       {item.result_commit && (
         <div className="detail-section">
           <label>Commits</label>
-          <div style={{ fontSize: 11 }}>
+          <div className="detail-meta">
             {item.start_commit
               ? `${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`
               : item.result_commit.slice(0, 8)}
@@ -631,7 +631,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       {item.error && status !== 'cancelled' && (
         <div className="detail-section">
           <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
-          <div style={{ fontSize: 11, color: status === 'timed_out' ? 'var(--warning)' : 'var(--danger)' }}>
+          <div className="detail-meta" style={{ color: status === 'timed_out' ? 'var(--warning)' : 'var(--danger)' }}>
             {status === 'timed_out' ? 'Dispatch exceeded timeout limit' : item.error}
           </div>
         </div>
