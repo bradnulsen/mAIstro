@@ -79,8 +79,7 @@ export default function Queue() {
   const detailScrollRef = useRef(null)
   const [dragIdx, setDragIdx] = useState(null)
   const [dragOverIdx, setDragOverIdx] = useState(null)
-  const [mergeMode, setMergeMode] = useState(false)
-  const [mergeSelected, setMergeSelected] = useState(new Set())
+  const [dropZone, setDropZone] = useState(null) // 'reorder-before' | 'reorder-after' | 'merge'
 
   const refresh = useCallback(async () => {
     try {
@@ -248,13 +247,10 @@ export default function Queue() {
     }
   }
 
-  const handleMerge = async () => {
-    if (mergeSelected.size < 2) return
+  const handleMergePair = async (draggedId, targetId) => {
     setActionError('')
     try {
-      await mergeDispatches([...mergeSelected])
-      setMergeMode(false)
-      setMergeSelected(new Set())
+      await mergeDispatches([draggedId, targetId])
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -279,15 +275,6 @@ export default function Queue() {
     } catch (e) {
       setActionError(e.message)
     }
-  }
-
-  const toggleMergeSelect = (id) => {
-    setMergeSelected(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
   }
 
   const [retryContext, setRetryContext] = useState(null) // null = not editing
@@ -321,26 +308,62 @@ export default function Queue() {
   useEffect(() => {
     const handleKey = (e) => {
       if (e.key !== 'Escape') return
-      if (mergeMode) { setMergeMode(false); setMergeSelected(new Set()); return }
       if (confirmCancel !== null) { setConfirmCancel(null); return }
       if (retryContext !== null) { setRetryContext(null); return }
       if (selected) setSelected(null)
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [selected, confirmCancel, retryContext, mergeMode])
+  }, [selected, confirmCancel, retryContext])
+
+  // Compute drop zone from cursor position within a row element
+  const MERGE_ZONE_RATIO = 0.5 // central 50% is merge zone, top/bottom 25% each is reorder
+  const computeDropZone = (e, rowEl, draggedItem, targetItem) => {
+    const rect = rowEl.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    const ratio = y / rect.height
+    const edgeSize = (1 - MERGE_ZONE_RATIO) / 2
+    // Merge zone only activates for same-job pending targets
+    const canMerge = targetItem && draggedItem &&
+      getStatus(targetItem) === 'pending' && getStatus(draggedItem) === 'pending' &&
+      targetItem.task_id === draggedItem.task_id
+    if (ratio < edgeSize) return 'reorder-before'
+    if (ratio > 1 - edgeSize) return 'reorder-after'
+    return canMerge ? 'merge' : (ratio < 0.5 ? 'reorder-before' : 'reorder-after')
+  }
+
+  const handleDragOver = (e, idx) => {
+    e.preventDefault()
+    if (dragIdx === null || dragIdx === idx) { setDragOverIdx(null); setDropZone(null); return }
+    const draggedItem = filtered[dragIdx]
+    const targetItem = filtered[idx]
+    const zone = computeDropZone(e, e.currentTarget, draggedItem, targetItem)
+    setDragOverIdx(idx)
+    setDropZone(zone)
+  }
 
   const handleDragEnd = async () => {
     if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
-      // Reorder within the full filtered list, then extract pending IDs in new order
-      const reordered = [...filtered]
-      const [moved] = reordered.splice(dragIdx, 1)
-      reordered.splice(dragOverIdx, 0, moved)
-      const pendingIds = reordered.filter(i => getStatus(i) !== 'running').map(i => i.id)
-      try { await reorderDispatches(pendingIds); await refresh() } catch {}
+      if (dropZone === 'merge') {
+        // Merge dragged task into drop target
+        const draggedItem = filtered[dragIdx]
+        const targetItem = filtered[dragOverIdx]
+        await handleMergePair(draggedItem.id, targetItem.id)
+      } else {
+        // Reorder: insert at the target position
+        const reordered = [...filtered]
+        const [moved] = reordered.splice(dragIdx, 1)
+        const insertIdx = dropZone === 'reorder-before'
+          ? (dragOverIdx > dragIdx ? dragOverIdx - 1 : dragOverIdx)
+          : (dragOverIdx < dragIdx ? dragOverIdx + 1 : dragOverIdx)
+        reordered.splice(insertIdx, 0, moved)
+        const pendingIds = reordered.filter(i => getStatus(i) !== 'running').map(i => i.id)
+        try { await reorderDispatches(pendingIds); await refresh() } catch {}
+      }
     }
     setDragIdx(null)
     setDragOverIdx(null)
+    setDropZone(null)
   }
 
   const anyRunning = items.some(i => getStatus(i) === 'running')
@@ -385,23 +408,7 @@ export default function Queue() {
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
           Auto
         </label>
-        {filter === 'upcoming' && !mergeMode && filtered.filter(i => getStatus(i) === 'pending').length >= 2 && (
-          <button className="small" onClick={() => { setMergeMode(true); setMergeSelected(new Set()); setSelected(null) }}>
-            Merge
-          </button>
-        )}
       </div>
-      {mergeMode && (
-        <div className="merge-toolbar">
-          <span className="muted-text">Select pending tasks to merge ({mergeSelected.size} selected)</span>
-          <div className="spacer" />
-          <button className="small primary" onClick={handleMerge} disabled={mergeSelected.size < 2}>
-            Merge {mergeSelected.size > 1 ? `(${mergeSelected.size})` : ''}
-          </button>
-          <button className="small" onClick={() => { setMergeMode(false); setMergeSelected(new Set()) }}>Cancel</button>
-          {actionError && <span className="error-text">{actionError}</span>}
-        </div>
-      )}
 
       <div className="split-body">
         {/* Queue list */}
@@ -419,25 +426,24 @@ export default function Queue() {
             // First context that has content, for preview
             const previewCtx = triggers.find(t => t.context)?.context
             const triggerCount = triggers.length > 1 ? ` (${triggers.length})` : ''
-            const draggable = filter === 'upcoming' && status !== 'running' && !mergeMode
-            const isMergeCandidate = mergeMode && status === 'pending'
+            const draggable = filter === 'upcoming' && status !== 'running'
+            const isDropTarget = dragOverIdx === i && dragIdx !== null && dragIdx !== i
+            const dropClass = isDropTarget
+              ? (dropZone === 'merge' ? ' drop-merge' : dropZone === 'reorder-before' ? ' drop-before' : ' drop-after')
+              : ''
             return (
               <div
                 key={item.id}
-                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}${dragIdx === i ? ' dragging' : ''}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}${mergeSelected.has(item.id) ? ' merge-selected' : ''}`}
-                onClick={() => mergeMode ? (isMergeCandidate && toggleMergeSelect(item.id)) : setSelected(item)}
+                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}${dragIdx === i ? ' dragging' : ''}${dropClass}`}
+                onClick={() => setSelected(item)}
                 draggable={draggable}
                 onDragStart={draggable ? (e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }) : undefined}
-                onDragOver={draggable ? (e => { e.preventDefault(); setDragOverIdx(i) }) : undefined}
-                onDragLeave={draggable ? (() => setDragOverIdx(null)) : undefined}
+                onDragOver={draggable ? (e => handleDragOver(e, i)) : undefined}
+                onDragLeave={draggable ? (() => { setDragOverIdx(null); setDropZone(null) }) : undefined}
                 onDragEnd={draggable ? handleDragEnd : undefined}
               >
                 <div className="feed-avatar">
-                  {isMergeCandidate ? (
-                    <input type="checkbox" checked={mergeSelected.has(item.id)} readOnly />
-                  ) : (
-                    (item.task_name || '?')[0].toUpperCase()
-                  )}
+                  {(item.task_name || '?')[0].toUpperCase()}
                 </div>
                 <div className="feed-body">
                   <div className="feed-meta">

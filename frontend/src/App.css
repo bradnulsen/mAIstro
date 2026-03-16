@@ -289,7 +289,9 @@ label.muted-text {
 .feed-item[draggable="true"] { cursor: grab; }
 .feed-item[draggable="true"]:active { cursor: grabbing; }
 .feed-item.dragging { opacity: 0.4; }
-.feed-item.drag-over { box-shadow: 0 -2px 0 0 var(--accent); }
+.feed-item.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
+.feed-item.drop-after { box-shadow: 0 2px 0 0 var(--accent); }
+.feed-item.drop-merge { background: var(--bg-active); outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .feed-avatar {
   width: 28px;
@@ -385,22 +387,6 @@ label.muted-text {
 .queue-status.pending_approval { color: var(--warning); }
 .queue-status.rejected { color: var(--text-muted); text-decoration: line-through; }
 
-/* ── Merge Toolbar ── */
-
-.merge-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  background: var(--bg-active);
-  border-bottom: 1px solid var(--border-light);
-  font-size: 11px;
-}
-
-.feed-item.merge-selected {
-  background: var(--bg-active);
-  border-left: 3px solid var(--accent);
-}
 
 /* ── Rating Controls ── */
 
