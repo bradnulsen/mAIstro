@@ -313,7 +313,10 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
     """Enqueue tasks that declare a dependency on the completed task."""
     all_tasks = await db.list_tasks()
 
-    # Fetch upstream dispatch once to get commit info
+    # Fetch upstream task and dispatch once — reused for every dependent
+    upstream_task = await db.get_task(completed_task_id)
+    upstream_name = upstream_task["name"] if upstream_task else completed_task_id
+
     upstream_dispatch = await db.get_dispatch(dispatch_id)
     result_commit = upstream_dispatch.get("result_commit") if upstream_dispatch else None
     start_commit = upstream_dispatch.get("start_commit") if upstream_dispatch else None
@@ -321,8 +324,6 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
     for task in all_tasks:
         deps = task["properties"].get("depends_on") or []
         if completed_task_id in deps:
-            upstream_task = await db.get_task(completed_task_id)
-            upstream_name = upstream_task["name"] if upstream_task else completed_task_id
 
             # Build context with commit info when available
             context = f"**Dependency** — triggered by completion of {upstream_name} (dispatch #{dispatch_id})"

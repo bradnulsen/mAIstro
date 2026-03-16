@@ -8,6 +8,7 @@ import uuid
 
 DB_PATH: str | None = None
 _conn: aiosqlite.Connection | None = None
+_property_defs_cache: list | None = None
 
 
 def get_db_path(project_dir: str) -> str:
@@ -25,17 +26,20 @@ async def get_db() -> aiosqlite.Connection:
         _conn._conn.text_factory = lambda b: b.decode("utf-8", errors="replace")
         _conn.row_factory = aiosqlite.Row
         await _conn.execute("PRAGMA journal_mode=WAL")
+        await _conn.execute("PRAGMA synchronous=NORMAL")
+        await _conn.execute("PRAGMA cache_size=-8000")
         await _conn.execute("PRAGMA foreign_keys=ON")
     return _conn
 
 
 async def close_db():
     """Close the persistent connection and reset state. Call from lifespan teardown."""
-    global _conn, DB_PATH
+    global _conn, DB_PATH, _property_defs_cache
     if _conn is not None:
         await _conn.close()
         _conn = None
     DB_PATH = None
+    _property_defs_cache = None
 
 
 async def init_db(project_dir: str):
@@ -123,6 +127,28 @@ CREATE TABLE IF NOT EXISTS config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Indices for hot query paths
+CREATE INDEX IF NOT EXISTS idx_dispatch_queue_pending
+    ON dispatch_queue (started_at, error, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_dispatch_queue_task_coalesce
+    ON dispatch_queue (task_id, started_at, error);
+
+CREATE INDEX IF NOT EXISTS idx_dispatch_queue_running
+    ON dispatch_queue (started_at, completed_at);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session
+    ON chat_messages (session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_chat_events_session
+    ON chat_events (session_id);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_cli_session
+    ON chat_sessions (cli_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_dispatch
+    ON chat_sessions (dispatch_id);
 """
 
 SEED_SQL = """
@@ -167,6 +193,21 @@ async def create_task(name: str, properties: dict | None = None) -> dict:
     return await get_task(task_id)
 
 
+async def _get_property_defs() -> list:
+    """Return task_property_defs rows, using a module-level cache.
+
+    Property defs are seeded once and never mutated at runtime, so caching
+    them avoids one redundant SELECT per get_task() call — most visible in
+    list_tasks() which calls get_task() N times.
+    """
+    global _property_defs_cache
+    if _property_defs_cache is None:
+        conn = await get_db()
+        rows = await conn.execute_fetchall("SELECT key, default_value, type FROM task_property_defs")
+        _property_defs_cache = [dict(r) for r in rows]
+    return _property_defs_cache
+
+
 async def get_task(task_id: str, running_ids: set | None = None) -> dict | None:
     db = await get_db()
     row = await db.execute_fetchall(
@@ -177,8 +218,8 @@ async def get_task(task_id: str, running_ids: set | None = None) -> dict | None:
     task = dict(row[0])
 
     # Get all property defs with defaults, override with task-specific values
+    defs = await _get_property_defs()
     props = {}
-    defs = await db.execute_fetchall("SELECT key, default_value, type FROM task_property_defs")
     for d in defs:
         props[d["key"]] = _cast_property(d["default_value"], d["type"])
 
@@ -375,15 +416,17 @@ async def update_dispatch(dispatch_id: int, **kwargs):
 async def sweep_stale_dispatches(now: str):
     """Mark any in-flight dispatches as interrupted (e.g. after restart)."""
     db = await get_db()
+    # Fetch IDs first so we can return them, then update in one statement
     rows = await db.execute_fetchall(
         "SELECT id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
     )
-    for row in rows:
+    if rows:
         await db.execute(
-            "UPDATE dispatch_queue SET completed_at = ?, error = ? WHERE id = ?",
-            (now, "interrupted", row["id"])
+            "UPDATE dispatch_queue SET completed_at = ?, error = 'interrupted'"
+            " WHERE started_at IS NOT NULL AND completed_at IS NULL",
+            (now,)
         )
-    await db.commit()
+        await db.commit()
     return [row["id"] for row in rows]
 
 
