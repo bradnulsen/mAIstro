@@ -93,15 +93,6 @@ def cancel(dispatch_id: int) -> bool:
     return False
 
 
-async def process_next() -> dict | None:
-    """Manually process the next pending dispatch, ignoring auto_dispatch setting."""
-    async with _lock:
-        dispatch = await db.get_oldest_pending_dispatch()
-        if dispatch:
-            await _process_dispatch(dispatch)
-        return dispatch
-
-
 async def process_one(dispatch_id: int) -> dict | None:
     """Manually process a specific pending dispatch by ID."""
     async with _lock:
@@ -117,18 +108,6 @@ async def process_one(dispatch_id: int) -> dict | None:
         await _process_dispatch(dispatch)
         return dispatch
 
-
-async def process_all() -> list[int]:
-    """Manually process all pending dispatches sequentially."""
-    processed = []
-    async with _lock:
-        while True:
-            dispatch = await db.get_oldest_pending_dispatch()
-            if not dispatch:
-                break
-            await _process_dispatch(dispatch)
-            processed.append(dispatch["id"])
-    return processed
 
 
 # ── Internal ────────────────────────────────────────────────

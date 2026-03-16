@@ -299,13 +299,3 @@ async def queue_process_one(dispatch_id: int):
     return {"processed": [dispatch["id"]]}
 
 
-@router.post("/api/queue/process")
-async def queue_process(all: bool = False):    # noqa: A002 — matches frontend query param
-    """Manually crank the queue — process next or all pending dispatches."""
-    require_project()
-    if all:
-        processed = await worker.process_all()
-        return {"processed": processed}
-    else:
-        dispatch = await worker.process_next()
-        return {"processed": [dispatch["id"]] if dispatch else []}

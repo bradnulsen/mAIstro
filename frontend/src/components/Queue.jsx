@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react
 import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
-  getDispatchDiff, getQueueSettings, setQueueSettings, processQueue, processOne,
+  getDispatchDiff, getQueueSettings, setQueueSettings, processOne,
   streamDispatch, resumeDispatch, retryDispatch, approveDispatch, rejectDispatch,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
@@ -193,11 +193,6 @@ export default function Queue() {
     setAutoDispatch(val)
   }
 
-  const handleProcess = async (all) => {
-    await processQueue(all)
-    await refresh()
-  }
-
   const handleProcessOne = async (id) => {
     try {
       await processOne(id)
@@ -320,12 +315,6 @@ export default function Queue() {
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
           Auto
         </label>
-        {!autoDispatch && (
-          <>
-            <button className="small primary" onClick={() => handleProcess(false)}>▶ Next</button>
-            <button className="small" onClick={() => handleProcess(true)}>▶▶ All</button>
-          </>
-        )}
       </div>
 
       <div className="split-body">

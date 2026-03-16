@@ -84,9 +84,6 @@ export const getQueueSettings = () => fetchJSON('/api/queue/settings')
 export const setQueueSettings = (settings) =>
   fetchJSON('/api/queue/settings', { method: 'POST', body: JSON.stringify(settings) })
 
-export const processQueue = (all = false) =>
-  fetchJSON(`/api/queue/process?all=${all}`, { method: 'POST' })
-
 export const processOne = (dispatchId) =>
   fetchJSON(`/api/queue/process/${dispatchId}`, { method: 'POST' })
 

@@ -6,7 +6,7 @@ import {
 import HelpTip from './HelpTip'
 
 const TIPS = {
-  autoDispatch: 'When enabled, the background worker automatically pulls and executes pending dispatches. When disabled, dispatches remain pending until you manually trigger processing from the Queue view.',
+  autoDispatch: 'When enabled, the background worker automatically pulls and executes pending tasks in order. When disabled (paused), tasks accumulate as pending. Reorder them via drag-and-drop in the Dispatch view, then toggle auto-processing when ready.',
   mcpServers: 'External tool servers that extend agent capabilities. Registered servers are available to dispatched agents alongside the platform\'s built-in tools. Command and args specify how to launch the server process.',
   model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
   timeout: 'Maximum execution time in seconds applied to tasks that have no task-level override. Set to 0 or leave blank for no limit.',
