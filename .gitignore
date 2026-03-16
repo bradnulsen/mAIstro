@@ -1,5 +1,6 @@
 
 .maistro/
 app.db
+node_modules/
 
 .claude/

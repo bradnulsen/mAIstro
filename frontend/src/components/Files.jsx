@@ -82,8 +82,8 @@ function detectLanguage(path) {
 }
 
 export default function Files() {
-  const [pattern, setPattern] = useState('**/*')
-  const [inputPattern, setInputPattern] = useState('**/*')
+  const [pattern, setPattern] = useState('*.md')
+  const [inputPattern, setInputPattern] = useState('*.md')
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
