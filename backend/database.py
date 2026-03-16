@@ -50,7 +50,20 @@ async def init_db(project_dir: str):
     db = await get_db()
     await db.executescript(SCHEMA_SQL)
     await db.executescript(SEED_SQL)
+    # Lightweight migrations for columns added after initial schema
+    await _migrate(db)
     await db.commit()
+
+
+async def _migrate(db):
+    """Add columns that CREATE TABLE IF NOT EXISTS won't retroactively add."""
+    cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
+    if "sort_order" not in cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN sort_order INTEGER")
+    if "rating" not in cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN rating TEXT")
+    if "coalesced_id" not in cols:
+        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN coalesced_id INTEGER REFERENCES dispatch_queue(id)")
 
 
 SCHEMA_SQL = """
@@ -87,7 +100,10 @@ CREATE TABLE IF NOT EXISTS dispatch_queue (
     started_at DATETIME,
     completed_at DATETIME,
     result_commit TEXT,
-    error TEXT
+    error TEXT,
+    sort_order INTEGER,
+    rating TEXT,
+    coalesced_id INTEGER REFERENCES dispatch_queue(id)
 );
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -130,7 +146,7 @@ CREATE TABLE IF NOT EXISTS config (
 
 -- Indices for hot query paths
 CREATE INDEX IF NOT EXISTS idx_dispatch_queue_pending
-    ON dispatch_queue (started_at, error, created_at);
+    ON dispatch_queue (started_at, error, sort_order, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_dispatch_queue_task_coalesce
     ON dispatch_queue (task_id, started_at, error);
@@ -155,6 +171,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_task_id
 
 CREATE INDEX IF NOT EXISTS idx_task_properties_key
     ON task_properties (key);
+
+CREATE INDEX IF NOT EXISTS idx_dispatch_queue_coalesced
+    ON dispatch_queue (coalesced_id);
 """
 
 SEED_SQL = """
@@ -472,8 +491,11 @@ async def get_dispatch(dispatch_id: int) -> dict | None:
 async def get_dispatch_queue(limit: int = 50) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
-        """SELECT dq.*, t.name as task_name FROM dispatch_queue dq
+        """SELECT dq.*, t.name as task_name,
+                  (SELECT COUNT(*) FROM dispatch_queue sub WHERE sub.coalesced_id = dq.id) as subordinate_count
+           FROM dispatch_queue dq
            JOIN tasks t ON t.id = dq.task_id
+           WHERE dq.coalesced_id IS NULL
            ORDER BY dq.created_at DESC LIMIT ?""",
         (limit,)
     )
@@ -481,14 +503,19 @@ async def get_dispatch_queue(limit: int = 50) -> list[dict]:
 
 
 async def get_oldest_pending_dispatch() -> dict | None:
-    """Get the oldest dispatch that hasn't started yet (skips approval-pending)."""
+    """Get the highest-priority pending dispatch (skips approval-pending and subordinates).
+
+    Priority: explicit sort_order first (NULL last), then created_at ASC.
+    """
     db = await get_db()
     rows = await db.execute_fetchall(
         """SELECT dq.*, t.name as task_name FROM dispatch_queue dq
            JOIN tasks t ON t.id = dq.task_id
            WHERE dq.started_at IS NULL AND dq.error IS NULL
              AND (dq.approval IS NULL OR dq.approval = 'approved')
-           ORDER BY dq.created_at ASC LIMIT 1"""
+             AND dq.coalesced_id IS NULL
+           ORDER BY dq.sort_order IS NULL, dq.sort_order ASC, dq.created_at ASC
+           LIMIT 1"""
     )
     return _parse_dispatch_row(rows[0]) if rows else None
 
@@ -499,6 +526,138 @@ async def update_dispatch(dispatch_id: int, **kwargs):
     vals = list(kwargs.values()) + [dispatch_id]
     await db.execute(f"UPDATE dispatch_queue SET {sets} WHERE id = ?", vals)
     await db.commit()
+
+
+async def reorder_dispatches(dispatch_ids: list[int]):
+    """Set explicit sort_order on pending dispatches to control execution priority."""
+    db = await get_db()
+    for i, did in enumerate(dispatch_ids):
+        await db.execute(
+            "UPDATE dispatch_queue SET sort_order = ? WHERE id = ? AND started_at IS NULL AND error IS NULL",
+            (i, did),
+        )
+    await db.commit()
+
+
+async def get_subordinate_dispatches(root_id: int) -> list[dict]:
+    """Return all dispatches with coalesced_id pointing to root_id."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        """SELECT dq.*, t.name as task_name FROM dispatch_queue dq
+           JOIN tasks t ON t.id = dq.task_id
+           WHERE dq.coalesced_id = ?""",
+        (root_id,)
+    )
+    return [_parse_dispatch_row(r) for r in rows]
+
+
+async def merge_dispatches(dispatch_ids: list[int]) -> int:
+    """Merge pending same-job dispatches. Returns root dispatch ID.
+
+    The oldest task becomes the root; others become subordinates via coalesced_id.
+    """
+    if len(dispatch_ids) < 2:
+        raise ValueError("Need at least 2 dispatches to merge")
+
+    db = await get_db()
+    placeholders = ",".join("?" * len(dispatch_ids))
+    rows = await db.execute_fetchall(
+        f"""SELECT id, task_id, started_at, error, approval, coalesced_id, created_at
+            FROM dispatch_queue WHERE id IN ({placeholders})
+            ORDER BY created_at ASC""",
+        dispatch_ids,
+    )
+
+    if len(rows) != len(dispatch_ids):
+        raise ValueError("Some dispatch IDs not found")
+
+    # Validate: all pending, same job, no subordinates
+    task_ids = set()
+    for r in rows:
+        if r["started_at"] is not None:
+            raise ValueError(f"Dispatch #{r['id']} has already started")
+        if r["error"] is not None:
+            raise ValueError(f"Dispatch #{r['id']} has an error")
+        if r["approval"] == "pending":
+            raise ValueError(f"Dispatch #{r['id']} is pending approval")
+        if r["coalesced_id"] is not None:
+            raise ValueError(f"Dispatch #{r['id']} is already a subordinate")
+        task_ids.add(r["task_id"])
+
+    if len(task_ids) > 1:
+        raise ValueError("Cannot merge dispatches from different jobs")
+
+    root_id = rows[0]["id"]
+    sub_ids = [r["id"] for r in rows[1:]]
+    sub_placeholders = ",".join("?" * len(sub_ids))
+    await db.execute(
+        f"UPDATE dispatch_queue SET coalesced_id = ? WHERE id IN ({sub_placeholders})",
+        [root_id] + sub_ids,
+    )
+    await db.commit()
+    return root_id
+
+
+async def split_dispatch(root_id: int) -> list[int]:
+    """Split a root dispatch — make all subordinates independent again.
+
+    Returns list of newly independent dispatch IDs.
+    """
+    db = await get_db()
+
+    # Validate root is pending
+    root_rows = await db.execute_fetchall(
+        "SELECT id, task_id, started_at, error FROM dispatch_queue WHERE id = ?",
+        (root_id,)
+    )
+    if not root_rows:
+        raise ValueError("Dispatch not found")
+    root = root_rows[0]
+    if root["started_at"] is not None or root["error"] is not None:
+        raise ValueError("Can only split pending dispatches")
+
+    # Find subordinates
+    sub_rows = await db.execute_fetchall(
+        "SELECT id FROM dispatch_queue WHERE coalesced_id = ?", (root_id,)
+    )
+    if not sub_rows:
+        raise ValueError("No subordinate dispatches to split")
+
+    sub_ids = [r["id"] for r in sub_rows]
+
+    # Look up the job's current require_approval setting
+    prop_rows = await db.execute_fetchall(
+        "SELECT value FROM task_properties WHERE task_id = ? AND key = 'require_approval'",
+        (root["task_id"],)
+    )
+    require_approval = prop_rows[0]["value"] == "true" if prop_rows else False
+    approval_val = "pending" if require_approval else None
+
+    # Clear coalesced_id, append to end of queue, apply approval setting
+    from backend.state import utcnow
+    now = utcnow()
+    placeholders = ",".join("?" * len(sub_ids))
+    await db.execute(
+        f"""UPDATE dispatch_queue
+            SET coalesced_id = NULL, sort_order = NULL, created_at = ?, approval = ?
+            WHERE id IN ({placeholders})""",
+        [now, approval_val] + sub_ids,
+    )
+    await db.commit()
+    return sub_ids
+
+
+async def rate_dispatch(dispatch_id: int, rating: str | None) -> bool:
+    """Set or clear a rating on a completed dispatch. Rating: 'positive', 'negative', or None."""
+    if rating is not None and rating not in ("positive", "negative"):
+        raise ValueError("Rating must be 'positive', 'negative', or null")
+    db = await get_db()
+    cursor = await db.execute(
+        "UPDATE dispatch_queue SET rating = ? WHERE id = ? AND completed_at IS NOT NULL",
+        (rating, dispatch_id),
+    )
+    await db.commit()
+    return cursor.rowcount > 0
 
 
 async def sweep_stale_dispatches(now: str):
@@ -519,10 +678,15 @@ async def sweep_stale_dispatches(now: str):
 
 
 async def approve_dispatch(dispatch_id: int) -> bool:
-    """Approve a pending-approval dispatch. Returns True if updated."""
+    """Approve a pending-approval dispatch (and its subordinates). Returns True if updated."""
     db = await get_db()
     cursor = await db.execute(
         "UPDATE dispatch_queue SET approval = 'approved' WHERE id = ? AND approval = 'pending'",
+        (dispatch_id,)
+    )
+    # Propagate to subordinates
+    await db.execute(
+        "UPDATE dispatch_queue SET approval = 'approved' WHERE coalesced_id = ? AND approval = 'pending'",
         (dispatch_id,)
     )
     await db.commit()
@@ -530,12 +694,18 @@ async def approve_dispatch(dispatch_id: int) -> bool:
 
 
 async def reject_dispatch(dispatch_id: int) -> bool:
-    """Reject a pending-approval dispatch. Marks it as skipped."""
+    """Reject a pending-approval dispatch (and its subordinates). Marks as skipped."""
     db = await get_db()
     from backend.state import utcnow
+    now = utcnow()
     cursor = await db.execute(
         "UPDATE dispatch_queue SET approval = 'rejected', completed_at = ?, error = 'rejected' WHERE id = ? AND approval = 'pending'",
-        (utcnow(), dispatch_id)
+        (now, dispatch_id)
+    )
+    # Propagate to subordinates
+    await db.execute(
+        "UPDATE dispatch_queue SET approval = 'rejected', completed_at = ?, error = 'rejected' WHERE coalesced_id = ? AND approval = 'pending'",
+        (now, dispatch_id)
     )
     await db.commit()
     return cursor.rowcount > 0

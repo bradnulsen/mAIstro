@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react
 import Markdown from 'react-markdown'
 import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
-  getDispatchDiff, getQueueSettings, setQueueSettings, processOne,
+  getDispatchDiff, getDispatchOutcome, getQueueSettings, setQueueSettings, processOne,
   streamDispatch, resumeDispatch, retryDispatch, approveDispatch, rejectDispatch,
-  reorderDispatches,
+  reorderDispatches, mergeDispatches, splitDispatch, rateDispatch,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
@@ -79,6 +79,8 @@ export default function Queue() {
   const detailScrollRef = useRef(null)
   const [dragIdx, setDragIdx] = useState(null)
   const [dragOverIdx, setDragOverIdx] = useState(null)
+  const [mergeMode, setMergeMode] = useState(false)
+  const [mergeSelected, setMergeSelected] = useState(new Set())
 
   const refresh = useCallback(async () => {
     try {
@@ -246,6 +248,48 @@ export default function Queue() {
     }
   }
 
+  const handleMerge = async () => {
+    if (mergeSelected.size < 2) return
+    setActionError('')
+    try {
+      await mergeDispatches([...mergeSelected])
+      setMergeMode(false)
+      setMergeSelected(new Set())
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
+  const handleSplit = async (id) => {
+    setActionError('')
+    try {
+      await splitDispatch(id)
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
+  const handleRate = async (id, rating) => {
+    setActionError('')
+    try {
+      await rateDispatch(id, rating)
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
+  const toggleMergeSelect = (id) => {
+    setMergeSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
   const [retryContext, setRetryContext] = useState(null) // null = not editing
 
   const handleRetry = async (id, context) => {
@@ -277,13 +321,14 @@ export default function Queue() {
   useEffect(() => {
     const handleKey = (e) => {
       if (e.key !== 'Escape') return
+      if (mergeMode) { setMergeMode(false); setMergeSelected(new Set()); return }
       if (confirmCancel !== null) { setConfirmCancel(null); return }
       if (retryContext !== null) { setRetryContext(null); return }
       if (selected) setSelected(null)
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [selected, confirmCancel, retryContext])
+  }, [selected, confirmCancel, retryContext, mergeMode])
 
   const handleDragEnd = async () => {
     if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
@@ -340,7 +385,23 @@ export default function Queue() {
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
           Auto
         </label>
+        {filter === 'upcoming' && !mergeMode && filtered.filter(i => getStatus(i) === 'pending').length >= 2 && (
+          <button className="small" onClick={() => { setMergeMode(true); setMergeSelected(new Set()); setSelected(null) }}>
+            Merge
+          </button>
+        )}
       </div>
+      {mergeMode && (
+        <div className="merge-toolbar">
+          <span className="muted-text">Select pending tasks to merge ({mergeSelected.size} selected)</span>
+          <div className="spacer" />
+          <button className="small primary" onClick={handleMerge} disabled={mergeSelected.size < 2}>
+            Merge {mergeSelected.size > 1 ? `(${mergeSelected.size})` : ''}
+          </button>
+          <button className="small" onClick={() => { setMergeMode(false); setMergeSelected(new Set()) }}>Cancel</button>
+          {actionError && <span className="error-text">{actionError}</span>}
+        </div>
+      )}
 
       <div className="split-body">
         {/* Queue list */}
@@ -358,12 +419,13 @@ export default function Queue() {
             // First context that has content, for preview
             const previewCtx = triggers.find(t => t.context)?.context
             const triggerCount = triggers.length > 1 ? ` (${triggers.length})` : ''
-            const draggable = filter === 'upcoming' && status !== 'running'
+            const draggable = filter === 'upcoming' && status !== 'running' && !mergeMode
+            const isMergeCandidate = mergeMode && status === 'pending'
             return (
               <div
                 key={item.id}
-                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}${dragIdx === i ? ' dragging' : ''}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}`}
-                onClick={() => setSelected(item)}
+                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}${dragIdx === i ? ' dragging' : ''}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}${mergeSelected.has(item.id) ? ' merge-selected' : ''}`}
+                onClick={() => mergeMode ? (isMergeCandidate && toggleMergeSelect(item.id)) : setSelected(item)}
                 draggable={draggable}
                 onDragStart={draggable ? (e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }) : undefined}
                 onDragOver={draggable ? (e => { e.preventDefault(); setDragOverIdx(i) }) : undefined}
@@ -371,7 +433,11 @@ export default function Queue() {
                 onDragEnd={draggable ? handleDragEnd : undefined}
               >
                 <div className="feed-avatar">
-                  {(item.task_name || '?')[0].toUpperCase()}
+                  {isMergeCandidate ? (
+                    <input type="checkbox" checked={mergeSelected.has(item.id)} readOnly />
+                  ) : (
+                    (item.task_name || '?')[0].toUpperCase()
+                  )}
                 </div>
                 <div className="feed-body">
                   <div className="feed-meta">
@@ -403,7 +469,8 @@ export default function Queue() {
 
             <div ref={detailScrollRef} className="detail-scroll">
               <DispatchDetail item={selected} output={output} onUpdate={refresh}
-                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming} />
+                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming}
+                onSplit={handleSplit} onRate={handleRate} />
             </div>
 
             {isUpcoming(selected) && (
@@ -433,14 +500,25 @@ export default function Queue() {
                       </>
                     )}
                     {getStatus(selected) === 'pending' && (
-                      <button
-                        className="small primary"
-                        onClick={() => handleProcessOne(selected.id)}
-                        disabled={anyRunning}
-                        title={anyRunning ? 'Another dispatch is running' : 'Run this dispatch now'}
-                      >
-                        ▶ Run Now
-                      </button>
+                      <>
+                        <button
+                          className="small primary"
+                          onClick={() => handleProcessOne(selected.id)}
+                          disabled={anyRunning}
+                          title={anyRunning ? 'Another dispatch is running' : 'Run this dispatch now'}
+                        >
+                          ▶ Run Now
+                        </button>
+                        {selected.subordinate_count > 0 && (
+                          <button
+                            className="small"
+                            onClick={() => handleSplit(selected.id)}
+                            title="Split merged tasks into individual dispatches"
+                          >
+                            Split ({selected.subordinate_count})
+                          </button>
+                        )}
+                      </>
                     )}
                     <button className="danger small" onClick={() => setConfirmCancel(selected.id)}>
                       Cancel
@@ -516,7 +594,7 @@ function ContextEditor({ value, onChange, autoFocus = false }) {
   )
 }
 
-function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }) {
+function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, onSplit, onRate }) {
   const status = getStatus(item)
   const triggers = getTriggers(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
@@ -535,8 +613,21 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
   const [diffOpen, setDiffOpen] = useState(false)
   const [diffLoading, setDiffLoading] = useState(false)
 
+  // Outcome summary
+  const [outcomeSummary, setOutcomeSummary] = useState(null)
+
   // Reset editing state when item changes
-  useEffect(() => { setSelectedTrigger(triggers.length - 1); setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false) }, [item.id])
+  useEffect(() => { setSelectedTrigger(triggers.length - 1); setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false); setOutcomeSummary(null) }, [item.id])
+
+  // Load outcome summary for completed dispatches with commit range
+  useEffect(() => {
+    if (!item.completed_at || !item.start_commit || !item.result_commit || item.start_commit === item.result_commit) return
+    let cancelled = false
+    getDispatchOutcome(item.id).then(data => {
+      if (!cancelled) setOutcomeSummary(data.summary)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [item.id, item.completed_at, item.start_commit, item.result_commit])
 
   // Load diff when opened (lazy)
   useEffect(() => {
@@ -653,6 +744,31 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
           <label>Commits</label>
           <div className="detail-meta">
             {`${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`}
+          </div>
+        </div>
+      )}
+
+      {outcomeSummary && (
+        <div className="detail-section">
+          <label>Outcome</label>
+          <pre className="context-display">{outcomeSummary}</pre>
+        </div>
+      )}
+
+      {item.completed_at && !item.error && (
+        <div className="detail-section">
+          <label>Rating</label>
+          <div className="rating-controls">
+            <button
+              className={`rating-btn ${item.rating === 'positive' ? 'active positive' : ''}`}
+              onClick={() => onRate(item.id, item.rating === 'positive' ? null : 'positive')}
+              title="Good result"
+            >+</button>
+            <button
+              className={`rating-btn ${item.rating === 'negative' ? 'active negative' : ''}`}
+              onClick={() => onRate(item.id, item.rating === 'negative' ? null : 'negative')}
+              title="Poor result"
+            >−</button>
           </div>
         </div>
       )}

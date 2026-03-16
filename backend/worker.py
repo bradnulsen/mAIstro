@@ -174,6 +174,14 @@ async def _process_dispatch(dispatch: dict):
         await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=f"task '{task_id}' not found")
         return
 
+    # Collect subordinate tasks (merged dispatches) and unify triggers
+    subordinates = await db.get_subordinate_dispatches(dispatch_id)
+    if subordinates:
+        all_triggers = list(dispatch.get("triggers") or [])
+        for sub in subordinates:
+            all_triggers.extend(sub.get("triggers") or [])
+        dispatch["triggers"] = all_triggers
+
     # For resume dispatches, reuse the original chat session; otherwise create a new one
     resume_session_id = dispatch.get("resume_session_id")
     if resume_session_id:
@@ -267,12 +275,19 @@ async def _process_dispatch(dispatch: dict):
             # Timed-out dispatches do NOT trigger dependents — timeout means the
             # task didn't complete successfully, so downstream tasks shouldn't run
             head = git.head_hash(state.PROJECT_DIR)
-            await db.update_dispatch(dispatch_id, completed_at=utcnow(),
+            now = utcnow()
+            await db.update_dispatch(dispatch_id, completed_at=now,
                                      result_commit=head, error="timed out")
+            for sub in subordinates:
+                await db.update_dispatch(sub["id"], completed_at=now,
+                                         result_commit=head, error="timed out")
             log.info("[worker] Dispatch #%d timed out (partial commit=%s, dependents skipped)", dispatch_id, head[:8])
         else:
             head = git.head_hash(state.PROJECT_DIR)
-            await db.update_dispatch(dispatch_id, completed_at=utcnow(), result_commit=head)
+            now = utcnow()
+            await db.update_dispatch(dispatch_id, completed_at=now, result_commit=head)
+            for sub in subordinates:
+                await db.update_dispatch(sub["id"], completed_at=now, result_commit=head)
             log.info("[worker] Dispatch #%d completed (commit=%s)", dispatch_id, head[:8])
 
             # Trigger dependent tasks
@@ -292,7 +307,10 @@ async def _process_dispatch(dispatch: dict):
         if response_text:
             await db.add_chat_message(session_id, "assistant", response_text)
         await db.add_chat_message(session_id, "system", f"Error: {e}")
-        await db.update_dispatch(dispatch_id, completed_at=utcnow(), error=str(e))
+        now = utcnow()
+        await db.update_dispatch(dispatch_id, completed_at=now, error=str(e))
+        for sub in subordinates:
+            await db.update_dispatch(sub["id"], completed_at=now, error=str(e))
     finally:
         # Cancel the watchdog if still waiting
         if watchdog and not watchdog.done():
@@ -315,13 +333,17 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int,
 
     upstream_name = task_name or completed_task_id
 
-    # Resolve commit summary once — shared across all dependents
+    # Resolve commit summary and outcome once — shared across all dependents
     commit_context = ""
     if result_commit and state.PROJECT_DIR:
         summary = git.commit_oneline(state.PROJECT_DIR, result_commit) or result_commit[:8]
         commit_context = f"\n  Upstream result commit `{result_commit[:8]}`: {summary}"
         if start_commit and start_commit != result_commit:
             commit_context += f"\n  Upstream commit range: `{start_commit[:8]}..{result_commit[:8]}`"
+            # Include outcome summary for downstream agents
+            outcome = git.outcome_summary(state.PROJECT_DIR, start_commit, result_commit)
+            if outcome:
+                commit_context += f"\n  Outcome:\n{outcome}"
 
     for task in dependent_tasks:
         context = f"**Dependency** — triggered by completion of {upstream_name} (dispatch #{dispatch_id}){commit_context}"

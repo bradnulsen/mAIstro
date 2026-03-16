@@ -385,6 +385,60 @@ label.muted-text {
 .queue-status.pending_approval { color: var(--warning); }
 .queue-status.rejected { color: var(--text-muted); text-decoration: line-through; }
 
+/* ── Merge Toolbar ── */
+
+.merge-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--bg-active);
+  border-bottom: 1px solid var(--border-light);
+  font-size: 11px;
+}
+
+.feed-item.merge-selected {
+  background: var(--bg-active);
+  border-left: 3px solid var(--accent);
+}
+
+/* ── Rating Controls ── */
+
+.rating-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.rating-btn {
+  width: 28px;
+  height: 28px;
+  border: 1.5px solid var(--border-light);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font);
+}
+
+.rating-btn:hover {
+  background: var(--hover-bg);
+}
+
+.rating-btn.active.positive {
+  background: var(--success);
+  color: white;
+  border-color: var(--success);
+}
+
+.rating-btn.active.negative {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+
 /* ── Task List + Detail ── */
 
 .tasks-layout {

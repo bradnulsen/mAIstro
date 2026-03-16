@@ -65,6 +65,8 @@ export const updateDispatch = (id, updates) =>
 
 export const getDispatchDiff = (id) => fetchJSON(`/api/dispatch/${id}/diff`)
 
+export const getDispatchOutcome = (id) => fetchJSON(`/api/dispatch/${id}/outcome`)
+
 export const cancelDispatch = (id) =>
   fetchJSON(`/api/dispatch/cancel/${id}`, { method: 'POST' })
 
@@ -98,6 +100,15 @@ export const approveDispatch = (id) =>
 
 export const rejectDispatch = (id) =>
   fetchJSON(`/api/dispatch/${id}/reject`, { method: 'POST' })
+
+export const mergeDispatches = (dispatchIds) =>
+  fetchJSON('/api/dispatch/merge', { method: 'POST', body: JSON.stringify({ dispatch_ids: dispatchIds }) })
+
+export const splitDispatch = (id) =>
+  fetchJSON(`/api/dispatch/${id}/split`, { method: 'POST' })
+
+export const rateDispatch = (id, rating) =>
+  fetchJSON(`/api/dispatch/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
 
 // ── Feed ──
 

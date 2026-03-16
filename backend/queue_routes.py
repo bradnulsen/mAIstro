@@ -30,6 +30,15 @@ class UpdateDispatchRequest(BaseModel):
 class RetryRequest(BaseModel):
     context: str | None = None
 
+class ReorderDispatchesRequest(BaseModel):
+    dispatch_ids: list[int]
+
+class MergeRequest(BaseModel):
+    dispatch_ids: list[int]
+
+class RateRequest(BaseModel):
+    rating: str | None = None
+
 class QueueSettingsRequest(BaseModel):
     auto_dispatch: bool = False
 
@@ -126,6 +135,21 @@ async def get_dispatch_output(dispatch_id: int):
     return {"messages": messages, "status": status, "dispatch": dispatch}
 
 
+@router.get("/api/dispatch/{dispatch_id}/outcome")
+async def get_dispatch_outcome(dispatch_id: int):
+    """Get the outcome summary for a completed dispatch (derived from git)."""
+    require_project()
+    dispatch = await db.get_dispatch(dispatch_id)
+    if not dispatch:
+        raise HTTPException(404, "Dispatch not found")
+    start = dispatch.get("start_commit")
+    end = dispatch.get("result_commit")
+    if not start or not end or start == end:
+        return {"summary": None}
+    summary = git.outcome_summary(state.PROJECT_DIR, start, end)
+    return {"summary": summary}
+
+
 @router.get("/api/dispatch/{dispatch_id}/diff")
 async def get_dispatch_diff(dispatch_id: int):
     """Get the git diff for a completed dispatch (start_commit..result_commit)."""
@@ -166,8 +190,14 @@ async def cancel_dispatch(dispatch_id: int):
     require_project()
     # Kill the running process if this dispatch is active
     was_running = worker.cancel(dispatch_id)
+    now = utcnow()
     # Mark as cancelled in DB (worker will also mark it, but this covers pending dispatches)
-    await db.update_dispatch(dispatch_id, completed_at=utcnow(), error="cancelled")
+    await db.update_dispatch(dispatch_id, completed_at=now, error="cancelled")
+    # Propagate to subordinates
+    subs = await db.get_subordinate_dispatches(dispatch_id)
+    for sub in subs:
+        if not sub.get("completed_at"):
+            await db.update_dispatch(sub["id"], completed_at=now, error="cancelled")
     return {"status": "cancelled", "was_running": was_running}
 
 
@@ -250,6 +280,41 @@ async def retry_dispatch(dispatch_id: int, req: RetryRequest | None = None):
     return {"dispatch_id": dispatch_id}
 
 
+@router.post("/api/dispatch/merge")
+async def merge_dispatches_route(req: MergeRequest):
+    """Merge pending same-job dispatches into one logical unit."""
+    require_project()
+    try:
+        root_id = await db.merge_dispatches(req.dispatch_ids)
+        return {"root_id": root_id}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/api/dispatch/{dispatch_id}/split")
+async def split_dispatch_route(dispatch_id: int):
+    """Split a merged dispatch — make subordinates independent again."""
+    require_project()
+    try:
+        split_ids = await db.split_dispatch(dispatch_id)
+        return {"split_ids": split_ids}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/api/dispatch/{dispatch_id}/rate")
+async def rate_dispatch_route(dispatch_id: int, req: RateRequest):
+    """Rate a completed dispatch (positive/negative/null)."""
+    require_project()
+    try:
+        ok = await db.rate_dispatch(dispatch_id, req.rating)
+        if not ok:
+            raise HTTPException(404, "Dispatch not found or not completed")
+        return {"status": "ok"}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ── Queue Control ──────────────────────────────────────────
 
 @router.get("/api/queue/settings")
@@ -287,6 +352,14 @@ async def reject_dispatch_route(dispatch_id: int):
     if not ok:
         raise HTTPException(404, "Dispatch not found or not pending approval")
     return {"status": "rejected"}
+
+
+@router.post("/api/queue/reorder")
+async def reorder_dispatches(req: ReorderDispatchesRequest):
+    """Reorder pending dispatches to control execution priority."""
+    require_project()
+    await db.reorder_dispatches(req.dispatch_ids)
+    return {"status": "ok"}
 
 
 @router.post("/api/queue/process/{dispatch_id}")

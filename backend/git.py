@@ -220,6 +220,25 @@ def commit_oneline(cwd: str, commit_hash: str) -> str | None:
     return subject
 
 
+def outcome_summary(cwd: str, from_hash: str, to_hash: str) -> str | None:
+    """Compute an outcome summary from the commit range — messages and change stats."""
+    if from_hash == to_hash:
+        return None
+    result = run_git("log", "--format=%s", f"{from_hash}..{to_hash}", cwd=cwd)
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    messages = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+    # Get overall stat line
+    stat_result = run_git("diff", "--shortstat", f"{from_hash}..{to_hash}", cwd=cwd)
+    stat_line = stat_result.stdout.strip() if stat_result.returncode == 0 else ""
+    parts = []
+    for msg in messages:
+        parts.append(f"- {msg}")
+    if stat_line:
+        parts.append(f"({stat_line})")
+    return "\n".join(parts)
+
+
 def head_hash(cwd: str) -> str | None:
     """Get current HEAD commit hash."""
     result = run_git("rev-parse", "HEAD", cwd=cwd)
