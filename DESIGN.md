@@ -70,11 +70,35 @@ Two continuation triggers operate on existing tasks:
 
 ### Coalescing
 
-- Coalescing prevents redundant pending tasks. When a new trigger would create a task but a compatible pending task already exists, the trigger is appended to the existing task's trigger list instead of creating a new record.
+Coalescing prevents redundant pending tasks. Two mechanisms exist: **automatic coalescing** (at enqueue time, driven by trigger rules) and **manual coalescing** (user-initiated, from the queue).
+
+#### Automatic Coalescing
+
+- When a new trigger would create a task but a compatible pending task already exists, the trigger is appended to the existing task's trigger list instead of creating a new record.
 - `commit` and `dependency` triggers coalesce with other pending tasks of the same trigger type for the same job.
 - `schedule` triggers coalesce globally (any pending task for the same job absorbs the new trigger).
 - The `coalesce_dispatches` job property enables global coalescing for all trigger types — the job will never have more than one pending task.
 - `manual`, `resume`, and `retry` never coalesce — each represents distinct explicit intent.
+
+#### Manual Queue Composition
+
+The user can merge and split pending tasks directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly.
+
+**Merge** — the user selects two or more pending tasks for the same job and combines them into a single task. All trigger entries from the source tasks are collected into the surviving task's `triggers` array. The oldest task (by `created_at`) survives; the others are removed from the queue. The surviving task retains its queue position.
+
+- Only pending tasks can be merged (not started, not completed, not pending-approval).
+- Only tasks belonging to the same job can be merged. Merging across jobs would produce a task with ambiguous identity — one task cannot represent two jobs.
+- The merge operation is the manual equivalent of what automatic coalescing does at enqueue time: multiple reasons to run become one run that addresses all of them.
+- Trigger context is preserved verbatim. Each trigger entry retains the context string it was created with — merge does not rewrite history.
+
+**Split** — the user takes a pending task that has multiple trigger entries and breaks it into individual tasks, one per trigger. The original task keeps its first trigger entry and queue position; new tasks are created for each remaining trigger and appended to the end of the pending queue.
+
+- Only pending tasks with more than one trigger entry can be split.
+- Each resulting task is an independent queue entry with its own lifecycle.
+- Split reverses a previous merge or automatic coalescing. The user can inspect the accumulated triggers on a task and decide they should run separately.
+- New tasks created by split inherit the job's current approval gate setting. If `require_approval` is enabled, split-off tasks enter pending-approval state.
+
+**Why same-job only**: a task's identity is bound to exactly one job. The task record carries a `task_id` (the job slug), and prompt assembly, subscriptions, tool configuration, and commit authorship all derive from that single job. Merging tasks across jobs would require either a compound identity (one task, two jobs — breaks prompt assembly, tool surfaces, authorship) or a synthetic super-job (implicit, unmanageable). Neither is coherent. The constraint preserves the foundational invariant: one task, one job, one execution context.
 
 ### Subscriptions
 
@@ -191,7 +215,7 @@ External MCP servers extend the tool surface available to agents beyond the plat
 
 The product presents six views and a persistent chat surface:
 
-- **Dispatch** — the operational center. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Drag-to-reorder pending tasks to control execution priority. Selecting a task shows its streamed output.
+- **Dispatch** — the operational center. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Drag-to-reorder pending tasks to control execution priority. Merge and split controls for manual queue composition — merge combines selected same-job pending tasks into one; split breaks a multi-trigger pending task into individual tasks. Selecting a task shows its streamed output.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.
 - **Jobs** — the primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
@@ -241,6 +265,10 @@ Required tooltip surfaces:
 - **Running state is derived**: whether a task is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL), not persisted as a separate status field.
 - **Outcome summaries are derived from git**: the summary is computed from commits between `start_commit` and `result_commit`. It reflects what the repository records, not what the agent claims. A task that produces no commits has no summary.
 - **Ratings are optional and user-initiated**: a task's rating defaults to null (unrated). The user explicitly sets it. Ratings are never inferred or auto-assigned.
+- **Merge preserves trigger history**: merging pending tasks concatenates their trigger arrays. No trigger entry is lost or rewritten. The surviving task's triggers are the union of all source tasks' triggers, ordered by original creation time.
+- **Split produces valid tasks**: each task created by split carries exactly one trigger entry from the original. The original task retains its first trigger and identity; new tasks get fresh IDs and are appended to the pending queue.
+- **Composition operates on pending tasks only**: merge and split apply exclusively to pending tasks that have not started execution. Active, completed, and pending-approval tasks are ineligible. This preserves lifecycle monotonicity — once a task starts, its trigger set is fixed.
+- **Same-job constraint on merge**: only tasks belonging to the same job can be merged. A task's identity is bound to one job; cross-job merging would violate prompt assembly, tool configuration, and commit authorship invariants.
 
 ### Accountability
 
