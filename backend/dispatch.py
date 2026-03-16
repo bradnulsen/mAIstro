@@ -147,32 +147,13 @@ def build_user_prompt(task: dict, project_dir: str,
     if queue_context:
         sections.append(queue_context)
 
-    sections.append("## Your Turn\n" + _build_closing_directive(dispatch_meta))
+    sections.append("## Your Turn\n" + _build_closing_directive())
 
     return "\n\n".join(sections)
 
 
-def _build_closing_directive(dispatch_meta: dict | None) -> str:
-    """Build a trigger-appropriate closing directive for the agent."""
-    trigger = (dispatch_meta or {}).get("trigger", "manual")
-    if trigger == "commit":
-        return (
-            "Changes in your subscribed files triggered this dispatch. "
-            "Review the triggering commits above and respond according to your instructions. "
-            "If nothing needs updating, say so briefly."
-        )
-    if trigger == "dependency":
-        return (
-            "An upstream task has completed. Review what changed above "
-            "and respond according to your instructions. "
-            "If nothing needs updating, say so briefly."
-        )
-    if trigger == "schedule":
-        return (
-            "Review the project state — your instructions, subscriptions, and context above. "
-            "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
-        )
-    # manual, resume, retry — direct action
+def _build_closing_directive() -> str:
+    """Generic closing directive — trigger-specific framing lives in queue context strings."""
     return (
         "Review the project state — your instructions, subscriptions, and context above. "
         "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
