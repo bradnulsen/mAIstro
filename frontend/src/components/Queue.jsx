@@ -21,7 +21,6 @@ const STATUS_LABELS = {
 const TRIGGER_LABELS = {
   manual: 'User',
   commit: 'Commit',
-  task_queue: 'Task',
   resume: 'Resume',
   retry: 'Retry',
   dependency: 'Dependency',
@@ -53,7 +52,6 @@ function getTriggers(item) {
 function triggerLabel(entry) {
   const base = TRIGGER_LABELS[entry.trigger] || entry.trigger
   if (entry.trigger === 'commit' && entry.detail) return `${base} (${entry.detail.slice(0, 8)})`
-  if (entry.trigger === 'task_queue' && entry.detail) return `${base} (${entry.detail})`
   if (entry.trigger === 'dependency' && entry.detail) return `${base} (${entry.detail})`
   if (entry.trigger === 'manual' && entry.detail) return `${base} @ ${entry.detail.slice(0, 8)}`
   if (entry.trigger === 'schedule' && entry.detail) return `${base} (${entry.detail})`

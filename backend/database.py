@@ -337,7 +337,7 @@ async def enqueue_dispatch(task_id: str, trigger: str,
       while a dependent is pending = one run covering all of them
     - coalesce_dispatches=true coalesces globally — never more than one pending dispatch
       regardless of trigger type (useful for tasks that just need "run when things change")
-    - All other triggers (manual, task_queue, resume, retry) never coalesce — each
+    - All other triggers (manual, resume, retry) never coalesce — each
       represents a distinct explicit intent
     """
     new_entry = {"trigger": trigger, "detail": trigger_detail, "context": context}
