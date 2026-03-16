@@ -684,12 +684,12 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         <div className="detail-section">
           <label
             onClick={() => setDiffOpen(o => !o)}
-            style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
+            className="collapsible-label"
           >
-            <span style={{ fontSize: 10, display: 'inline-block', transform: diffOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+            <span className={`collapse-arrow ${diffOpen ? 'open' : ''}`}>▸</span>
             Code Changes
             {diffData && diffData.files.length > 0 && (
-              <span style={{ fontWeight: 'normal', fontSize: 11, color: 'var(--text-muted)' }}>
+              <span className="muted-text" style={{ fontWeight: 'normal' }}>
                 {diffData.files.length} {diffData.files.length === 1 ? 'file' : 'files'}
                 {diffData.insertions > 0 && <span className="feed-stat-add" style={{ marginLeft: 4 }}>+{diffData.insertions}</span>}
                 {diffData.deletions > 0 && <span className="feed-stat-del" style={{ marginLeft: 2 }}>-{diffData.deletions}</span>}
