@@ -287,10 +287,11 @@ export default function Queue() {
 
   const handleDragEnd = async () => {
     if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
-      // Only reorder the pending items (not running)
-      const pendingIds = filtered.filter(i => getStatus(i) !== 'running').map(i => i.id)
-      const [moved] = pendingIds.splice(dragIdx, 1)
-      pendingIds.splice(dragOverIdx, 0, moved)
+      // Reorder within the full filtered list, then extract pending IDs in new order
+      const reordered = [...filtered]
+      const [moved] = reordered.splice(dragIdx, 1)
+      reordered.splice(dragOverIdx, 0, moved)
+      const pendingIds = reordered.filter(i => getStatus(i) !== 'running').map(i => i.id)
       try { await reorderDispatches(pendingIds); await refresh() } catch {}
     }
     setDragIdx(null)
@@ -366,6 +367,7 @@ export default function Queue() {
                 draggable={draggable}
                 onDragStart={draggable ? (e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }) : undefined}
                 onDragOver={draggable ? (e => { e.preventDefault(); setDragOverIdx(i) }) : undefined}
+                onDragLeave={draggable ? (() => setDragOverIdx(null)) : undefined}
                 onDragEnd={draggable ? handleDragEnd : undefined}
               >
                 <div className="feed-avatar">

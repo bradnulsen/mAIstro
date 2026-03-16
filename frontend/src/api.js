@@ -44,6 +44,9 @@ export const deleteTask = (id) =>
 
 export const getTaskSubscriptions = (id) => fetchJSON(`/api/tasks/${id}/subscriptions`)
 
+export const reorderTasks = (taskIds) =>
+  fetchJSON('/api/tasks/reorder', { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) })
+
 // ── Dispatch ──
 
 export const dispatchTask = (taskId, context) =>
@@ -86,6 +89,9 @@ export const setQueueSettings = (settings) =>
 
 export const processOne = (dispatchId) =>
   fetchJSON(`/api/queue/process/${dispatchId}`, { method: 'POST' })
+
+export const reorderDispatches = (dispatchIds) =>
+  fetchJSON('/api/queue/reorder', { method: 'POST', body: JSON.stringify({ dispatch_ids: dispatchIds }) })
 
 export const approveDispatch = (id) =>
   fetchJSON(`/api/dispatch/${id}/approve`, { method: 'POST' })

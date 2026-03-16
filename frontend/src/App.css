@@ -286,8 +286,10 @@ label.muted-text {
   border-left: 2px solid var(--warning);
 }
 
+.feed-item[draggable="true"] { cursor: grab; }
+.feed-item[draggable="true"]:active { cursor: grabbing; }
 .feed-item.dragging { opacity: 0.4; }
-.feed-item.drag-over { border-top: 2px solid var(--accent); }
+.feed-item.drag-over { box-shadow: 0 -2px 0 0 var(--accent); }
 
 .feed-avatar {
   width: 28px;
