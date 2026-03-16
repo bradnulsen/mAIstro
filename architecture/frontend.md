@@ -1,6 +1,6 @@
 # Frontend
 
-The frontend is a single-page React application that provides the operator interface for project management, task configuration, dispatch monitoring, and interactive chat.
+The frontend is a single-page React application that provides the operator interface for project management, job configuration, dispatch monitoring, and interactive chat.
 
 **Stack**: React 19, Vite 6, no TypeScript, no state management library.
 
@@ -8,23 +8,23 @@ The frontend is a single-page React application that provides the operator inter
 
 `App.jsx` provides the outer layout:
 
-- **Rail navigation**: vertical icon bar on the left — Queue, Activity (Feed), Tasks, Files, Settings
-- **Status bar**: horizontal strip showing all tasks with running indicators (pulsing dot for active dispatches)
+- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, Settings
+- **Status bar**: horizontal strip showing all jobs with running indicators (pulsing dot for active tasks)
 - **Main area**: renders the active view
 - **Chat tray**: a resizable side panel (drag-to-resize, click-to-toggle) housing the interactive chat
 
-The app polls task status every 5 seconds to keep the status bar current.
+The app polls job status every 5 seconds to keep the status bar current.
 
 ## Views
 
-### Queue (`Queue.jsx`)
-The primary operational view. Shows the dispatch queue with status indicators (pending, running, completed, error). Provides controls for cancelling, approving/rejecting, resuming, and retrying dispatches. In manual queue mode, provides processing controls to advance the queue. Displays dispatch output with streaming text, tool use events, and diff views.
+### Dispatch (`Queue.jsx`)
+The primary operational view. Shows pending, active, and completed tasks. Provides controls for cancelling, approving/rejecting, resuming, and retrying tasks. In manual queue mode, provides processing controls to advance the queue. Drag-to-reorder pending tasks to control execution priority. Displays task output with streaming text, tool use events, and diff views.
 
 ### Activity Feed (`Feed.jsx`)
-Git-centric view showing commit history enriched with dispatch metadata. Each commit shows author, message, file stats, and — if the commit came from a dispatch — the linked task and trigger type.
+Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked job and trigger type.
 
-### Tasks (`Tasks.jsx`)
-The primary dispatch surface. Task configuration: create, edit, delete. Drag-to-reorder sets execution priority. Each task expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Inline dispatch for immediate execution — the most direct way to trigger work.
+### Jobs (`Tasks.jsx`)
+The primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Each job expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Inline dispatch for immediate execution — the most direct way to trigger work.
 
 ### Files
 A project file browser providing read-only access to project content. The user searches for files by glob pattern and views their contents inline. Markdown files render as formatted documents; code files render with syntax highlighting. This view enables direct inspection of project files without leaving the application or switching to an external editor.
@@ -61,11 +61,11 @@ The landing screen when no project is loaded. Provides:
 
 ## State Management
 
-No state library. React `useState` and `useEffect` throughout. The app component holds project state and task list; views manage their own local state. Task list refresh is centralized in the app and passed down.
+No state library. React `useState` and `useEffect` throughout. The app component holds project state and job list; views manage their own local state. Job list refresh is centralized in the app and passed down.
 
 ## Relationship to Other Systems
 
 - Communicates exclusively through the HTTP API and SSE streams defined by the backend routers
 - [Streaming and Sessions](streaming-and-sessions.md) defines the SSE protocol the frontend consumes
 - [Dispatch Engine](dispatch-engine.md) exposes the queue and control endpoints
-- [Task Configuration](task-configuration.md) exposes the CRUD endpoints
+- [Job Configuration](job-configuration.md) exposes the CRUD endpoints

@@ -37,11 +37,11 @@ Git log output uses a structured format (`%H|%an|%ae|%s|%ai`) parsed into dicts 
 ### Diff Operations
 
 - `diff(commit)`: diff of a single commit against its parent
-- `diff_range(from, to)`: diff between two commits — returns structured file stats (via `--numstat`) plus the raw diff text. Used for dispatch before/after comparison.
+- `diff_range(from, to)`: diff between two commits — returns structured file stats (via `--numstat`) plus the raw diff text. Used for task before/after comparison.
 
 ### Other Queries
 
-- `head_hash()`: current HEAD commit — used for dispatch start/result commit tracking
+- `head_hash()`: current HEAD commit — used for task start/result commit tracking
 - `changed_files_in_commit()`: file list from `git diff-tree` — used by watch trigger matching
 - `commit_oneline()`: subject + stat summary — used for trigger context strings
 - `status()`: porcelain format working tree status
@@ -54,11 +54,11 @@ Git log output uses a structured format (`%H|%an|%ae|%s|%ai`) parsed into dicts 
 
 ## Glob Resolution
 
-`resolve_glob_files()` resolves subscription patterns to file metadata. Uses Python's `glob.glob` with `recursive=True` for `**` support. Returns relative paths, sizes, and modification times — this data feeds into the dispatch prompt's subscribed files section.
+`resolve_glob_files()` resolves subscription patterns to file metadata. Uses Python's `glob.glob` with `recursive=True` for `**` support. Returns relative paths, sizes, and modification times — this data feeds into the task prompt's subscribed files section.
 
 ## Relationship to Other Systems
 
 - [Trigger System](trigger-system.md) depends on the post-commit hook for watch triggers and on `changed_files_in_commit()` for pattern matching
-- [Dispatch Engine](dispatch-engine.md) uses `head_hash()` for commit tracking on dispatch start and completion
+- [Dispatch Engine](dispatch-engine.md) uses `head_hash()` for commit tracking on task start and completion
 - [Prompt Assembly](prompt-assembly.md) uses `resolve_glob_files()` to build the subscribed files list
-- The feed view in the [Frontend](frontend.md) consumes structured log entries enriched with dispatch metadata
+- The feed view in the [Frontend](frontend.md) consumes structured log entries enriched with task metadata

@@ -8,14 +8,14 @@ Two SQLite databases serve distinct scopes: one per-project for operational stat
 **Access**: Async via `aiosqlite` — single persistent connection, reused across the process lifetime
 **Module**: `backend/database.py`
 
-The project database holds all operational state for a single project: task definitions, dispatch queue records, chat sessions, chat messages, raw CLI events, MCP server configs, and key-value configuration.
+The project database holds all operational state for a single project: job definitions, task records (dispatch queue), chat sessions, chat messages, raw CLI events, MCP server configs, and key-value configuration.
 
 ### Connection Management
 
 A module-level singleton (`_conn`) is lazily initialized on first access and reused until explicitly closed. `init_db()` closes any prior connection before opening a new one — this is how project switching works without leaking connections.
 
 Pragmas applied on every connection:
-- `journal_mode=WAL` — concurrent reads during writes, critical because the worker writes dispatch records while routes read them
+- `journal_mode=WAL` — concurrent reads during writes, critical because the worker writes task records while routes read them
 - `foreign_keys=ON` — enforces referential integrity (cascading deletes depend on this)
 
 ### Schema
@@ -24,11 +24,11 @@ Seven tables:
 
 | Table | Purpose |
 |-------|---------|
-| `tasks` | Task identity (id, name, created_at) |
+| `tasks` | Job identity (id, name, created_at) |
 | `task_property_defs` | EAV registry — defines property keys, default values, and types |
-| `task_properties` | EAV overrides — per-task property values |
-| `dispatch_queue` | Every dispatch record with full lifecycle columns |
-| `chat_sessions` | Session metadata, links dispatches to their output |
+| `task_properties` | EAV overrides — per-job property values |
+| `dispatch_queue` | Every task record with full lifecycle columns |
+| `chat_sessions` | Session metadata, links tasks to their output |
 | `chat_messages` | Durable chat messages (role + content) |
 | `chat_events` | Raw NDJSON audit trail per session |
 | `mcp_servers` | External tool server registrations |
@@ -38,9 +38,9 @@ Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call —
 
 ### Entity-Attribute-Value Property System
 
-Task properties use EAV rather than columns. `task_property_defs` defines the universe of property keys with a default value and a type (`string`, `json`, `integer`, `boolean`). `task_properties` holds per-task overrides.
+Job properties use EAV rather than columns. `task_property_defs` defines the universe of property keys with a default value and a type (`string`, `json`, `integer`, `boolean`). `task_properties` holds per-job overrides.
 
-On read, `get_task()` loads all defs, applies defaults, then overlays task-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
+On read, `get_task()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
 
 This design means adding a new property requires only a seed SQL insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
@@ -58,7 +58,7 @@ This design means adding a new property requires only a seed SQL insert — no s
 
 The app database holds exactly one table: `recent_projects` (path, name, opened_at). It tracks which project directories the user has opened and when, enabling the recent-projects list on the landing screen.
 
-Sync access is deliberate — this database is only touched during project open/close operations, never during hot paths like dispatch processing.
+Sync access is deliberate — this database is only touched during project open/close operations, never during hot paths like task processing.
 
 ## Relationship Between the Two
 

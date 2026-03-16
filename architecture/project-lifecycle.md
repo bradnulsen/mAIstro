@@ -7,18 +7,18 @@ The project lifecycle system manages opening, closing, and switching between pro
 `POST /api/project/open` triggers a multi-step initialization:
 
 1. **Path validation**: resolves to absolute path, verifies directory exists
-2. **Active dispatch guard**: if switching projects (different path than current), blocks if any dispatch is running — prevents state corruption from changing the working directory mid-execution
+2. **Active task guard**: if switching projects (different path than current), blocks if any task is running — prevents state corruption from changing the working directory mid-execution
 3. **Git initialization**: `ensure_repo()` creates a git repository if none exists
 4. **Project directory registration**: sets the global `PROJECT_DIR` in `backend/state.py`
 5. **Database initialization**: `init_db()` closes any prior connection, opens `<project>/.maistro/maistro.db`, applies schema, seeds defaults
 6. **Post-commit hook installation**: writes the watch trigger hook to `.git/hooks/post-commit`
 7. **Gitignore management**: ensures `.maistro/` and `.claude/` are gitignored
 8. **Recent projects update**: records the path in the app-level database
-9. **Worker notification**: wakes the worker to process any pending dispatches for the newly-opened project
+9. **Worker notification**: wakes the worker to process any pending tasks for the newly-opened project
 
 ## Closing a Project
 
-`POST /api/project/close` with the same active-dispatch guard. Clears `PROJECT_DIR` and closes the database connection.
+`POST /api/project/close` with the same active-task guard. Clears `PROJECT_DIR` and closes the database connection.
 
 ## Shared Mutable State
 
@@ -34,10 +34,10 @@ This module exists to break circular imports — worker, scheduler, dispatch, an
 
 Each project has its own SQLite database in its own `.maistro/` directory. Opening a new project closes the old database connection and opens a new one. There is no cross-project state — the only thing that spans projects is the app-level recent-projects list.
 
-The worker sweeps stale dispatches once per project open, resetting any that were mid-flight when the process last died.
+The worker sweeps stale tasks once per project open, resetting any that were mid-flight when the process last died.
 
 ## Relationship to Other Systems
 
 - [Storage](storage.md) manages the database lifecycle that project open/close drives
 - [Git Integration](git-integration.md) provides the initialization operations (repo, hook, gitignore)
-- [Dispatch Engine](dispatch-engine.md) enforces the active-dispatch guard and receives the wake notification
+- [Dispatch Engine](dispatch-engine.md) enforces the active-task guard and receives the wake notification

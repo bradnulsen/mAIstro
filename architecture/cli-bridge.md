@@ -15,10 +15,10 @@ claude -p --output-format stream-json --model <model> --max-turns 50 --verbose -
 ```
 
 Optional flags:
-- `--resume <session_id>` for resume dispatches
-- `--allowedTools <tools...>` from task's `base_tools` property
-- `--disallowedTools <tools...>` from task's `disallowed_tools` property
-- `--mcp-config <path>` for MCP server connections (internal platform server and any external servers enabled for the task)
+- `--resume <session_id>` for resume tasks
+- `--allowedTools <tools...>` from job's `base_tools` property
+- `--disallowedTools <tools...>` from job's `disallowed_tools` property
+- `--mcp-config <path>` for MCP server connections (internal platform server and any external servers enabled for the job)
 
 ### Stdin Piping
 
