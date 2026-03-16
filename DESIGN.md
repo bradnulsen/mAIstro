@@ -124,6 +124,16 @@ A job can use subscriptions purely for context (by gating automatic triggers wit
 - Task output streams to the frontend via Server-Sent Events (SSE). Event types: `text`, `tool_use`, `result`, `error`, `session_id`.
 - Live subscribers receive events in real time. The stored session provides the same content for later retrieval.
 
+### Dispatch Outcomes
+
+When a task completes, the platform must make the result understandable without requiring the user to read the full streamed output.
+
+- **Outcome summary** — the platform derives a short summary from the commits produced during the task's execution window (between `start_commit` and `result_commit`). The summary captures what the agent actually did — commit messages and change statistics — not a restatement of the instructions. Displayed inline in the Dispatch view so users can scan completed tasks at a glance.
+- **Task rating** — the user can rate a completed task (positive or negative). This is a simple binary signal stored on the task record. Ratings create a feedback dataset that can later be correlated with job instructions, model choices, and trigger patterns. No rating is required — unrated tasks are the default.
+- **Outcome in dependency context** — when a completed task triggers downstream dependents, the outcome summary is included in the trigger context passed to the dependent task's prompt. This gives downstream agents concrete information about what their upstream actually produced, not just that it completed.
+
+The outcome summary is derived, not authored. The platform computes it from git artifacts that already exist. The user does not write summaries; the agent does not produce them explicitly. The platform reads what happened and describes it.
+
 ### Git Integration
 
 - The platform installs a post-commit hook in the project directory to notify the backend of new commits, enabling watch triggers. The hook is asynchronous and fails silently — hook failures do not affect git operations.
@@ -181,7 +191,7 @@ External MCP servers extend the tool surface available to agents beyond the plat
 
 The product presents six views and a persistent chat surface:
 
-- **Dispatch** — the operational center. Shows pending, active, and completed tasks. Provides controls for cancelling, approving/rejecting, resuming, and retrying. Drag-to-reorder pending tasks to control execution priority. Selecting a task shows its streamed output.
+- **Dispatch** — the operational center. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Drag-to-reorder pending tasks to control execution priority. Selecting a task shows its streamed output.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.
 - **Jobs** — the primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
@@ -229,6 +239,8 @@ Required tooltip surfaces:
 - **Trigger context is immutable at enqueue time**: each trigger entry's context string is built when the trigger fires. This preserves the causal record — the prompt reflects what was true when the trigger occurred.
 - **Job deletion cascades**: removing a job removes all associated data (properties, tasks, sessions). This prevents orphaned records.
 - **Running state is derived**: whether a task is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL), not persisted as a separate status field.
+- **Outcome summaries are derived from git**: the summary is computed from commits between `start_commit` and `result_commit`. It reflects what the repository records, not what the agent claims. A task that produces no commits has no summary.
+- **Ratings are optional and user-initiated**: a task's rating defaults to null (unrated). The user explicitly sets it. Ratings are never inferred or auto-assigned.
 
 ### Accountability
 
