@@ -32,7 +32,7 @@ Properties are read with defaults applied — a task with no overrides gets all 
 
 ## Ordering
 
-Tasks have an explicit `sort_order` property. The `reorder` endpoint accepts an ordered list of task IDs and sets `sort_order = index` for each. `list_tasks()` sorts by this value.
+Tasks have an explicit `sort_order` property controlled by drag-to-reorder in the UI. The `reorder` endpoint accepts an ordered list of task IDs and sets `sort_order = index` for each. `list_tasks()` sorts by this value.
 
 ## Dependency Validation
 

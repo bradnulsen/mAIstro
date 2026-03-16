@@ -18,13 +18,13 @@ The app polls task status every 5 seconds to keep the status bar current.
 ## Views
 
 ### Queue (`Queue.jsx`)
-The primary operational view. Shows the dispatch queue with status indicators (pending, running, completed, error). Provides controls for processing, cancelling, approving/rejecting, resuming, and retrying dispatches. Displays dispatch output with streaming text, tool use events, and diff views.
+The primary operational view. Shows the dispatch queue with status indicators (pending, running, completed, error). Provides controls for cancelling, approving/rejecting, resuming, and retrying dispatches. In manual queue mode, provides processing controls to advance the queue. Displays dispatch output with streaming text, tool use events, and diff views.
 
 ### Activity Feed (`Feed.jsx`)
 Git-centric view showing commit history enriched with dispatch metadata. Each commit shows author, message, file stats, and — if the commit came from a dispatch — the linked task and trigger type.
 
 ### Tasks (`Tasks.jsx`)
-Configuration view for task CRUD. Each task expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Supports drag-to-reorder and inline dispatch.
+The primary dispatch surface. Task configuration: create, edit, delete. Drag-to-reorder sets execution priority. Each task expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Inline dispatch for immediate execution — the most direct way to trigger work.
 
 ### Files
 A project file browser providing read-only access to project content. The user searches for files by glob pattern and views their contents inline. Markdown files render as formatted documents; code files render with syntax highlighting. This view enables direct inspection of project files without leaving the application or switching to an external editor.
