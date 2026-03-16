@@ -219,7 +219,8 @@ async def _process_task(task: dict):
         task_with_session = {**task, "session_id": session_id}
         async for event in run_task(task_id, job, state.PROJECT_DIR,
                                     cancel_event=_cancel_event,
-                                    task=task_with_session):
+                                    task=task_with_session,
+                                    subordinates=subordinates):
             etype = event.get("type")
 
             if etype == "_raw":

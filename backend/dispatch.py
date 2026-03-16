@@ -19,6 +19,7 @@ async def run_task(
     project_dir: str,
     cancel_event=None,
     task: dict | None = None,
+    subordinates: list[dict] | None = None,
 ) -> AsyncIterator[dict]:
     """Build prompts, invoke Claude CLI, yield events.
 
@@ -27,13 +28,14 @@ async def run_task(
 
     ``task`` may be supplied by the worker (already loaded) to avoid a
     redundant DB round-trip.  Falls back to fetching from DB when absent.
+    ``subordinates`` are coalesced tasks whose context is unified into the prompt.
     """
     props = job["properties"]
 
     log.info("[task:%d] Starting job=%s", task_id, job["id"])
 
     task_record = task if task is not None else await db.get_task(task_id)
-    queue_context = _build_queue_context(task_record)
+    queue_context = _build_queue_context(task_record, subordinates)
     manifest = await build_job_manifest()
     resume_session_id = task_record.get("resume_session_id") if task_record else None
 
