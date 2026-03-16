@@ -617,13 +617,11 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         </div>
       </div>
 
-      {item.result_commit && (
+      {item.start_commit && item.result_commit && item.start_commit !== item.result_commit && (
         <div className="detail-section">
           <label>Commits</label>
           <div className="detail-meta">
-            {item.start_commit
-              ? `${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`
-              : item.result_commit.slice(0, 8)}
+            {`${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`}
           </div>
         </div>
       )}
