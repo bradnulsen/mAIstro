@@ -142,14 +142,14 @@ The platform hosts an internal MCP server that dispatched agents connect to. Thi
 
 ### Tool Configuration
 
-Each job configures what tools its agent can access. Two properties control this:
+Each job configures what tools its agent can access:
 
-- **Allowed Tools** (`allowed_tools`) — a whitelist of CLI tool names the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent is restricted to exactly these tools plus any tools from connected MCP servers. When empty, the agent gets the default tool set. This is the primary tool-scoping mechanism.
+- **Allowed Tools** (`allowed_tools`) — the CLI tool names the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent is restricted to exactly these tools plus any tools from connected MCP servers. When empty, the agent gets the default tool set.
 - **MCP Servers** (`mcp_servers`) — selects which registered external MCP servers are available to this job's agent. Only servers listed here (and enabled globally) are connected during dispatch. The platform's internal MCP server is always connected.
 
-Tool configuration follows the **whitelist-only** model. The user defines what a job *can* do, not what it *cannot* do. There is no blacklist property. An agent that cannot use a tool simply never sees that tool — the restriction is invisible to the agent. This keeps job prompts clean (no "you are not allowed to..." instructions) and prevents agents from reasoning about or attempting to work around restrictions they are aware of.
+Tool configuration is **opt-in only**. The user defines what a job *can* do — one concept, one property. There is no complementary "disallowed" property. The platform computes the inverse internally: tools not in the allowed set are removed from the agent's environment entirely. The agent never sees them, never reasons about them, never attempts to work around restrictions.
 
-Both properties are configured on the job's configuration surface alongside other behavioral properties. MCP servers are registered globally in Settings, then selectively enabled per-job.
+This is not a stylistic choice — it follows from headless execution. A headless agent cannot ask for permissions, cannot negotiate tool access, cannot be told "you're not allowed to use X" in a meaningful way. The only coherent model is to present exactly the tools the agent can use and nothing else. The restriction surface is the platform's responsibility, not the agent's.
 
 ### External MCP Servers
 
@@ -178,7 +178,7 @@ Required tooltip surfaces:
 
 - **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the job *and* which files are included as context in the task prompt.
 - **Schedule (cron expression)** — five-field format: `minute hour day-of-month month day-of-week`. Ranges (`1-5`), lists (`0,15,30`), steps (`*/10`), and wildcards (`*`). Examples: `*/30 * * * *` (every 30 min), `0 9 * * 1-5` (weekdays at 9am). First evaluation after setting a schedule establishes a baseline — does not fire immediately.
-- **Allowed Tools** — comma-separated CLI tool names the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent sees only these tools plus tools from connected MCP servers. When empty, the agent gets the full default tool set. The agent is unaware of tools not listed — restrictions are invisible, not enforced by instruction.
+- **Allowed Tools** — comma-separated CLI tool names the agent can use (e.g. `Read`, `Edit`, `Bash`, `Write`). When set, the agent sees only these tools plus tools from connected MCP servers. When empty, the agent gets the full default tool set. Tools not listed are removed from the agent's environment entirely — the agent has no awareness they exist.
 - **MCP Servers (per-job)** — select which registered external MCP servers this job's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Register servers in Settings first, then enable them here per-job.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce tasks that wait for manual approval before executing. Manual dispatches bypass this gate.
 - **Coalesce Dispatches** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
@@ -212,7 +212,7 @@ Required tooltip surfaces:
 
 - **Tool mediation is observable**: every tool call that flows through the internal MCP server is logged as a structured event. The platform can reconstruct exactly what an agent did, not just what it produced.
 - **Context-aware tool surfaces**: the set of tools available to an agent is determined by the job's configuration, not by the agent's own choices. The platform controls what actions are possible.
-- **Tool restrictions are invisible to agents**: an agent only sees tools it is allowed to use. There is no blacklist, no "disallowed" list, no prompt instruction telling the agent what it cannot do. If a tool is not in the agent's allowed set, the agent has no awareness it exists. This prevents agents from reasoning about or attempting to circumvent restrictions.
+- **Tool restrictions are invisible to agents**: an agent only sees tools it is allowed to use. Tools outside the allowed set are removed from the agent's environment — not mentioned, not instructed against, not present. A headless agent has no mechanism to negotiate access; presenting tools it cannot use would only produce failed attempts or prompt-level workarounds. The platform owns the restriction surface; the agent owns only its allowed capabilities.
 
 ### Safety
 
