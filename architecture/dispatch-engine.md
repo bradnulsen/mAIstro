@@ -137,15 +137,15 @@ Rather than destructively removing task records during merge (losing individual 
 
 ### Merge
 
-Combines two or more pending tasks for the same job into a single logical unit.
+Combines two pending tasks for the same job into a single logical unit. Triggered by dragging one pending task onto another in the Dispatch view (see [Frontend — Drag Interaction Model](frontend.md)).
 
-1. The oldest task (by `created_at`) becomes the root — its `coalesced_id` remains NULL
-2. All other selected tasks get `coalesced_id` set to the root task's dispatch ID
-3. The root task retains its queue position; subordinate tasks become invisible in the queue view
+1. The older task (by `created_at`) becomes the root — its `coalesced_id` remains NULL
+2. The dragged task gets `coalesced_id` set to the root task's dispatch ID
+3. The root task retains its queue position; the subordinate task becomes invisible in the queue view
 
 **Constraints**:
 - Only pending tasks (not started, not completed, not pending-approval)
-- Same job only — a task's identity is bound to one job; cross-job merge would break prompt assembly, tool configuration, and commit authorship
+- Same job only — a task's identity is bound to one job; cross-job merge would break prompt assembly, tool configuration, and commit authorship. The UI enforces this structurally by suppressing the merge affordance when tasks belong to different jobs
 
 ### Split
 

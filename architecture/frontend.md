@@ -18,7 +18,13 @@ The app polls job status every 5 seconds to keep the status bar current.
 ## Views
 
 ### Dispatch (`Queue.jsx`)
-The primary operational view. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Drag-to-reorder pending tasks to control execution priority. Merge and split controls for manual queue composition — merge combines selected same-job pending tasks into one; split breaks a multi-trigger pending task into individual tasks. Displays task output with streaming text, tool use events, and diff views.
+The primary operational view. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Dragging pending tasks serves dual purpose — reorder or merge — distinguished by drop position. Split breaks a multi-trigger pending task into individual tasks. Displays task output with streaming text, tool use events, and diff views.
+
+**Drag Interaction Model** — reorder and merge share a single drag gesture, disambiguated by where the task is dropped:
+
+- **Reorder zone**: the upper and lower edges of each task row (the gaps between tasks). Dropping here inserts the dragged task at that position. Visual feedback: an insertion line between tasks.
+- **Merge zone**: the central area of a task row. Dropping here merges the dragged task into the drop target. Visual feedback: the target task highlights with a merge indicator. The merge zone activates only when the drop target is a pending task belonging to the same job as the dragged task. When the same-job condition is not met, the central zone falls back to reorder behavior.
+- The tolerance split (how much of the row is merge zone vs. reorder zone) is a UI tuning parameter. The essential contract: the user's spatial intent — "place between" vs. "place onto" — determines whether the operation is reorder or merge.
 
 ### Activity Feed (`Feed.jsx`)
 Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked job and trigger type.
