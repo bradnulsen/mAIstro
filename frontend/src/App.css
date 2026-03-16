@@ -349,6 +349,8 @@ label {
   border-radius: 3px;
 }
 
+.queue-status.large { font-size: 12px; }
+
 .queue-status.pending { color: var(--text-muted); }
 .queue-status.running { color: var(--running); }
 .queue-status.running::before {
@@ -591,6 +593,21 @@ label {
   align-items: flex-start;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.dispatch-queued {
+  font-size: 11px;
+  color: var(--success);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dispatch-queued button {
+  font-size: 10px;
+  color: var(--success);
+  border-color: var(--success);
 }
 
 .task-actions textarea {
@@ -1133,6 +1150,12 @@ label {
   margin: 0 4px;
 }
 
+.trigger-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .trigger-chip {
   cursor: pointer;
   padding: 2px 6px;
@@ -1292,11 +1315,41 @@ label {
   margin-bottom: 6px;
 }
 
+.mcp-server-item > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-server-name {
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.mcp-server-cmd {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .mcp-add-form {
   margin-top: 10px;
   padding: 10px;
   border: 1px dashed var(--border-light);
   border-radius: 4px;
+}
+
+.mcp-add-form > button {
+  margin-top: 8px;
+}
+
+/* Settings field with inline save button */
+.settings-save-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.settings-save-row > :first-child {
+  flex: 1;
 }
 
 /* ── Files View ── */

@@ -121,7 +121,7 @@ export default function Settings() {
         <div className="settings-section">
           <h3>Queue Behavior</h3>
           <div className="settings-field">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div className="label-row">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -139,8 +139,8 @@ export default function Settings() {
         {/* Default Model */}
         <div className="settings-section">
           <h3>Default Model</h3>
-          <div className="settings-field" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}>
+          <div className="settings-field settings-save-row">
+            <div>
               <div className="label-row">
                 <label>Model</label>
                 <HelpTip text={TIPS.model} />
@@ -158,8 +158,8 @@ export default function Settings() {
         {/* Default Timeout */}
         <div className="settings-section">
           <h3>Default Timeout</h3>
-          <div className="settings-field" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}>
+          <div className="settings-field settings-save-row">
+            <div>
               <label>Seconds (blank = no timeout)</label>
               <input
                 type="number"
@@ -180,15 +180,15 @@ export default function Settings() {
             <HelpTip text={TIPS.mcpServers} />
           </div>
           {mcpServers.length === 0 && (
-            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>
+            <div className="muted-text" style={{ marginBottom: 8 }}>
               No MCP servers configured
             </div>
           )}
           {mcpServers.map(s => (
             <div key={s.name} className="mcp-server-item">
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 'bold', fontSize: 12 }}>{s.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              <div>
+                <div className="mcp-server-name">{s.name}</div>
+                <div className="mcp-server-cmd">
                   {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
                 </div>
               </div>
@@ -210,8 +210,8 @@ export default function Settings() {
               <label>Arguments (space-separated)</label>
               <input value={mcpArgs} onChange={e => setMcpArgs(e.target.value)} placeholder="-m my_server --port 3000" />
             </div>
-            {mcpError && <div style={{ color: 'var(--danger)', fontSize: 11, marginTop: 4 }}>{mcpError}</div>}
-            <button style={{ marginTop: 8 }} onClick={handleAddMcp}>Add Server</button>
+            {mcpError && <div className="error-text" style={{ marginTop: 4 }}>{mcpError}</div>}
+            <button onClick={handleAddMcp}>Add Server</button>
           </div>
         </div>
       </div>

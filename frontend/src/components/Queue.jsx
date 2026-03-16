@@ -554,14 +554,14 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
     <>
       <div className="detail-section">
         <label>Status</label>
-        <span className={`queue-status ${status}`} style={{ fontSize: 12 }}>
+        <span className={`queue-status large ${status}`}>
           {STATUS_LABELS[status]}
         </span>
       </div>
 
       <div className="detail-section">
         <label>Triggers</label>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        <div className="trigger-chips">
           {triggers.map((entry, i) => (
             <span
               key={i}

@@ -90,7 +90,7 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
           </div>
           <div className="scroll-area">
             {filteredTasks.length === 0 && search && (
-              <div style={{ padding: '12px', fontSize: 11, color: 'var(--text-muted)' }}>No matches</div>
+              <div className="muted-text" style={{ padding: '12px' }}>No matches</div>
             )}
             {filteredTasks.map(t => (
               <div
@@ -244,7 +244,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: props.description ? 4 : 12 }}>
         <h2 style={{ flex: 1 }}>{task.name}</h2>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>id: {task.id}</span>
+        <span className="muted-text">id: {task.id}</span>
       </div>
       {props.description && (
         <div className="task-description-display md-content">
@@ -284,11 +284,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
       </div>
 
       {lastDispatchId && (
-        <div style={{ fontSize: 11, color: 'var(--success)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="dispatch-queued">
           <span>✓ Queued as dispatch #{lastDispatchId}</span>
           {onNavigate && (
-            <button className="small" style={{ fontSize: 10, color: 'var(--success)', borderColor: 'var(--success)' }}
-              onClick={() => onNavigate('queue')}>View in Queue →</button>
+            <button className="small" onClick={() => onNavigate('queue')}>View in Queue →</button>
           )}
         </div>
       )}
