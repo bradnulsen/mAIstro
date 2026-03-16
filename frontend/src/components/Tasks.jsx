@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from 'react-markdown'
 import {
   createTask, updateTask, deleteTask, getTaskSubscriptions,
-  dispatchTask,
+  dispatchTask, listMcpServers,
 } from '../api'
 import HelpTip from './HelpTip'
 
@@ -15,6 +15,7 @@ const TIPS = {
   dependencies: 'This task auto-dispatches when all selected upstream tasks complete successfully. Timed-out, failed, or cancelled dispatches do not trigger dependents.',
   timeout: 'Maximum execution time in seconds. The platform gracefully terminates the agent when reached, then force-kills if it does not exit. Timed-out dispatches do not trigger downstream dependencies. Set to 0 for no limit.',
   model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
+  mcpServers: 'External MCP servers to connect to this task\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
 }
 
 export default function Tasks({ tasks, onRefresh, onNavigate }) {
@@ -155,6 +156,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const [activeTab, setActiveTab] = useState('definition')
+  const [availableMcpServers, setAvailableMcpServers] = useState([])
   const props = task.properties || {}
 
   const refreshSubs = useCallback(() => {
@@ -162,6 +164,10 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   }, [task.id])
 
   useEffect(() => { refreshSubs() }, [refreshSubs])
+
+  useEffect(() => {
+    listMcpServers().then(setAvailableMcpServers).catch(() => setAvailableMcpServers([]))
+  }, [])
 
   useEffect(() => {
     setEditing({})
@@ -376,6 +382,34 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                   </span>
                 </div>
               </div>
+
+              {availableMcpServers.length > 0 && (
+                <div className="field-group">
+                  <div className="label-row">
+                    <label>MCP Servers</label>
+                    <HelpTip text={TIPS.mcpServers} />
+                  </div>
+                  <div className="checkbox-list">
+                    {availableMcpServers.map(s => {
+                      const enabled = getVal('mcp_servers') || []
+                      const checked = enabled.includes(s.name)
+                      return (
+                        <label key={s.name} className="checkbox-label" style={{ fontSize: 12 }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const next = checked ? enabled.filter(n => n !== s.name) : [...enabled, s.name]
+                              edit('mcp_servers', next)
+                            }}
+                          />
+                          {s.name}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="task-def-right">
