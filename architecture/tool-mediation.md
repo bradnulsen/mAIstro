@@ -4,7 +4,7 @@ The platform hosts an internal MCP server that dispatched agents connect to. Thi
 
 ## Purpose
 
-Without mediation, agents interact with the project through unstructured shell commands (via the CLI's Bash tool). The internal MCP server provides structured alternatives with enforced conventions, audit trails, and per-job access control. Agents retain access to native CLI tools alongside MCP tools — mediated tools are preferred alternatives, not a restriction.
+Without mediation, agents interact with the project through unstructured shell commands (via the CLI's Bash tool). The internal MCP server provides structured alternatives with enforced conventions, audit trails, and per-job access control. Agents retain access to native CLI tools (subject to `allowed_tools` filtering) alongside MCP tools — mediated tools are preferred alternatives, not an exclusive replacement.
 
 ## Architecture
 
@@ -14,10 +14,16 @@ The internal server runs as part of the backend process and is connected to the 
 
 The server reads the dispatching job's configuration (properties, subscriptions) and presents only relevant tools. Different jobs get different tool surfaces based on:
 
-- **Job properties**: `base_tools`, `disallowed_tools`, and `mcp_servers` shape the available tool set
+- **Job properties**: `allowed_tools` and `mcp_servers` shape the available tool set
 - **Subscriptions**: glob patterns scope which files and paths are relevant to the job
 
 This means two jobs dispatched in sequence may see entirely different tool inventories from the same internal server.
+
+### Whitelist-Only Model
+
+Tool configuration follows a whitelist-only approach. The `allowed_tools` property specifies which CLI tools the agent can use. When set, the agent sees only those tools plus tools from connected MCP servers. When empty, the agent gets the full default tool set.
+
+There is no blacklist property. Restrictions are **invisible** to the agent — a tool not in the allowed set simply does not appear. The agent has no awareness that excluded tools exist. This design keeps job prompts clean (no "you are not allowed to..." instructions) and prevents agents from reasoning about or attempting to work around restrictions.
 
 ## Tool Categories
 
@@ -57,10 +63,10 @@ This is richer than parsing tool use from the NDJSON stream — the platform rec
 
 The internal MCP server is distinct from external MCP servers:
 
-- **Internal**: hosted by the platform, context-aware, policy-governed, audit-logged. Provides git operations and project context tools.
-- **External**: user-registered servers (`mcp_servers` table) that extend agent capabilities. These are opaque to the platform — it connects the agent to them but does not mediate their tool calls.
+- **Internal**: hosted by the platform, context-aware, policy-governed, audit-logged. Provides git operations and project context tools. Always connected — not subject to per-job configuration.
+- **External**: registered globally in Settings (`mcp_servers` table), then selectively enabled per-job via the job's `mcp_servers` property. These are opaque to the platform — it connects the agent to them but does not mediate their tool calls. A server must be registered and enabled at the platform level before any job can use it.
 
-Both are connected to the CLI at invocation time. The job's `mcp_servers` property controls which external servers are enabled for that job.
+Both are connected to the CLI at invocation time.
 
 ## Relationship to Other Systems
 
