@@ -9,7 +9,8 @@ import HelpTip from './HelpTip'
 const TIPS = {
   subscriptions: 'Glob patterns, one per line. * matches files in one directory; ** matches across directories recursively. Patterns serve two purposes: they determine which commits trigger this task (watch), and they inject matching files as context into every dispatch prompt.',
   schedule: 'Five-field cron: minute hour day-of-month month day-of-week. Supports ranges (1-5), lists (0,15,30), steps (*/10), and wildcards (*). Examples: */30 * * * * (every 30 min), 0 9 * * 1-5 (weekdays at 9am). The first evaluation after setting a schedule establishes a baseline — it does not fire immediately.',
-  allowedTools: 'Comma-separated tool names the agent can use (e.g. Read, Edit, Bash, Write). When set, the agent is restricted to these tools plus any configured MCP tools. Leave empty to use the default tool set.',
+  allowedTools: 'Comma-separated tool names the agent can use without permission prompting (e.g. Read, Edit, Bash, Write). When set alongside disallowed tools, these flags are complementary inverses. Leave empty to use the default tool set.',
+  disallowedTools: 'Comma-separated tool names hidden from the agent entirely. The agent cannot see, invoke, or reason about disallowed tools. This is the enforcement mechanism that actually restricts tool access — especially critical since the platform runs with --dangerously-skip-permissions.',
   requireApproval: 'When enabled, automated triggers (commit-watch, schedule, dependency) produce dispatches that wait for manual approval before executing. Manual dispatches bypass this gate.',
   coalesceDispatches: 'When enabled, the task will never have more than one pending dispatch. Any new trigger merges into the existing pending dispatch instead of creating a new queue entry. Useful for tasks that should catch up in one run rather than queuing redundant work.',
   dependencies: 'This task auto-dispatches when all selected upstream tasks complete successfully. Timed-out, failed, or cancelled dispatches do not trigger dependents.',
@@ -337,6 +338,19 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                   value={(getVal('base_tools') || []).join(', ')}
                   onChange={e => edit('base_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
                   placeholder="Comma-separated tool names..."
+                />
+              </div>
+
+              <div className="field-group">
+                <div className="label-row">
+                  <label>Disallowed Tools</label>
+                  <HelpTip text={TIPS.disallowedTools} />
+                </div>
+                <input
+                  type="text"
+                  value={(getVal('disallowed_tools') || []).join(', ')}
+                  onChange={e => edit('disallowed_tools', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                  placeholder="Comma-separated tool names to hide..."
                 />
               </div>
 
