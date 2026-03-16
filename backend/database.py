@@ -48,30 +48,9 @@ async def init_db(project_dir: str):
     await close_db()
     DB_PATH = get_db_path(project_dir)
     db = await get_db()
-    # Drop stale tables before running schema (CREATE TABLE IF NOT EXISTS won't add columns)
-    await _migrate(db)
     await db.executescript(SCHEMA_SQL)
     await db.executescript(SEED_SQL)
     await db.commit()
-
-
-async def _migrate(db):
-    """Rebuild dispatch_queue if schema is stale, porting existing data."""
-    cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
-    if not cols:
-        return  # fresh DB — table doesn't exist yet
-    expected = {"sort_order", "rating", "coalesced_id"}
-    if expected.issubset(cols):
-        return  # schema is current
-
-    # Rebuild: backup data, recreate table, port rows back (only shared columns)
-    await db.execute("ALTER TABLE dispatch_queue RENAME TO _dq_old")
-    await db.executescript(SCHEMA_SQL)
-    new_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
-    shared = sorted(cols & new_cols)
-    col_list = ", ".join(shared)
-    await db.execute(f"INSERT INTO dispatch_queue ({col_list}) SELECT {col_list} FROM _dq_old")
-    await db.execute("DROP TABLE _dq_old")
 
 
 SCHEMA_SQL = """
