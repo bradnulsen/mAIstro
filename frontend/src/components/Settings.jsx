@@ -100,7 +100,7 @@ export default function Settings() {
       <div className="header-bar">
         <h1>Settings</h1>
         <div className="spacer" />
-        {saveMsg && <span style={{ fontSize: 11, color: 'var(--success)' }}>{saveMsg}</span>}
+        {saveMsg && <span className="success-text">{saveMsg}</span>}
       </div>
 
       <div className="settings-content">
