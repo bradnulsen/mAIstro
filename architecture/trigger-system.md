@@ -85,12 +85,14 @@ The `triggers` column accumulates all trigger entries that contributed to a disp
 
 ## Subscriptions as Dual-Purpose
 
-Subscription glob patterns define a task's relevant files and serve two functions (see DESIGN.md for full context):
+Subscription glob patterns define a task's relevant files and serve two functions:
 
-- **Watch triggering**: commit-changed files are matched against subscription patterns to determine which tasks to enqueue
-- **Context injection**: subscribed files (matched at dispatch time) are listed in the prompt as "relevant to your task"
+- **Context injection**: every dispatch resolves the task's subscription patterns and lists matching files in the prompt as files relevant to the task. The task's instructions define the relationship — ownership, input, reference, or anything else.
+- **Watch triggering**: when a commit changes files matching a task's subscription patterns, the task is enqueued. The trigger context carries the commit summary; the full set of subscribed files (changed or not) is always present in the prompt, giving the agent enough information to infer what happened.
 
-A task with non-empty subscriptions is watch-active. Tasks can use subscriptions purely for context (with `require_approval` gating auto-triggers) or purely for triggering.
+A task with non-empty subscriptions is watch-active. There is no separate toggle — subscriptions presence = watch enabled.
+
+A task can use subscriptions purely for context (by gating automatic triggers with `require_approval`) or purely for triggering (by not referencing the file list in its instructions).
 
 ## Relationship to Other Systems
 
