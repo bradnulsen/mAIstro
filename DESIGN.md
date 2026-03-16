@@ -43,7 +43,7 @@ A job is a template. A task is an instance. One job produces many tasks over tim
 
 - Every dispatch — regardless of trigger — creates a task in the dispatch queue before execution. The queue is the single entry point to the execution engine.
 - The background worker pulls from the queue and processes tasks sequentially (one at a time).
-- The queue operates in two modes: **auto-processing** (worker continuously pulls and executes) and **manual** (user explicitly triggers processing). A global setting controls which mode is active.
+- The queue operates in two modes: **auto-processing** (worker continuously pulls and executes pending tasks in order) and **paused** (tasks accumulate as pending; the user reorders them, then toggles auto-processing when ready). A global setting controls which mode is active.
 - Each task records its full lifecycle: `created_at`, `started_at`, `completed_at`, `error`. A task that has started but not completed is "active." A task with an error is "failed."
 - On startup, the worker sweeps any tasks that were active when the process died and marks them as interrupted.
 
@@ -159,7 +159,7 @@ This is not a stylistic choice — it follows from headless execution. A headles
 
 The product presents six views and a persistent chat surface:
 
-- **Dispatch** — the operational center. Shows pending, active, and completed tasks. Provides controls for cancelling, approving/rejecting, resuming, and retrying. In manual queue mode, provides processing controls to advance the queue. Drag-to-reorder pending tasks to control execution priority. Selecting a task shows its streamed output.
+- **Dispatch** — the operational center. Shows pending, active, and completed tasks. Provides controls for cancelling, approving/rejecting, resuming, and retrying. Drag-to-reorder pending tasks to control execution priority. Selecting a task shows its streamed output.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.
 - **Jobs** — the primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
@@ -184,7 +184,7 @@ Required tooltip surfaces:
 - **Coalesce Dispatches** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
 - **Dependencies** — the job auto-dispatches when *any* selected upstream job completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled tasks do not trigger dependents.
 - **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.
-- **Auto-dispatch (Settings)** — when enabled, the background worker automatically pulls and executes pending tasks. When disabled, tasks remain pending until the user manually triggers processing from the Dispatch view.
+- **Auto-dispatch (Settings)** — when enabled, the background worker automatically pulls and executes pending tasks in order. When disabled (paused), tasks accumulate as pending. The user reorders them via drag-and-drop in the Dispatch view, then toggles auto-processing when ready.
 - **MCP Servers (Settings)** — register external tool servers at the platform level. Servers registered here become available for per-job selection — a server must be registered and enabled here before any job can use it. Command and args specify how to launch the server process. Per-job enablement is configured on each job's configuration surface.
 - **Model** — the LLM model for this job. Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.
 
