@@ -5,7 +5,7 @@
 mAistro is a fully operational multi-agent orchestration platform with platform-mediated tool access. The coordination layer is complete: four trigger types, approval gates, retry/resume, timeout enforcement, coalescing, queue-first dispatch, and an internal MCP server providing structured tool alternatives with full audit trails. The codebase is cleanly modularized with extracted routers, shared state, and a definitive schema. Product requirements and constraints are formalized in DESIGN.md; architecture is documented across subsystem descriptions.
 
 What's in place:
-- **Queue-first dispatch** — background worker, auto/manual processing, stale sweep, cancellation
+- **Queue-first dispatch** — background worker, auto-processing/paused modes, stale sweep, cancellation
 - **Four trigger types** — manual, commit (watch via subscriptions), schedule (cron), dependency (declarative `depends_on`, circular chains permitted)
 - **Approval gates** — per-task `require_approval`, pending/approved/rejected lifecycle, manual dispatch bypasses
 - **Dispatch continuity** — resume (CLI `--resume`) and retry for failed/timed-out dispatches
@@ -20,7 +20,7 @@ What's in place:
 - **Git feed** — commit diffs with file/line stats, live polling
 - **Project safety** — project switch blocked during active dispatch
 - **Internal MCP server** — platform-hosted, context-aware tool surface with git operations, file access, and task info as structured tools. Every tool call is observable and auditable
-- **Tool control** — per-task `allowed_tools` and `mcp_servers` properties; external MCP server registration
+- **Tool control** — per-task `allowed_tools` and `mcp_servers` properties; discoverable tool inventory (CLI tools, internal MCP tools, external MCP server tools presented as selectable options); external MCP server lifecycle (registration, connection, discovery, per-job assignment)
 - **Files view** — project file browser with glob search, syntax highlighting, markdown rendering
 - **Contextual help** — hover tooltips on configuration fields explaining syntax and behavior
 
@@ -112,7 +112,9 @@ Valuable but deliberately postponed:
 - **Trigger Context** — `dispatch_queue.triggers` JSON array with structured entries.
 - **Task Dependencies** — `depends_on` property, `dependency` trigger type with coalescing.
 - **Watch Semantics** — subscriptions presence = watch active, no separate toggle.
-- **Settings and Configuration UI** — queue behavior, default model, default timeout, MCP server management.
+- **Settings and Configuration UI** — queue behavior (auto-processing/paused), default model, default timeout, MCP server management.
+- **Tool Discoverability** — platform presents available CLI tools, internal MCP tools, and external MCP server tools as selectable options. Users configure from known inventory, not free-text.
+- **External MCP Server Lifecycle** — full registration, connection, tool discovery, and per-job assignment. Health visibility for connected servers.
 - **Route Modularization** — separate routers, shared state module, Pydantic models.
 - **Dispatch Diff View** — `start_commit`/`result_commit` with inline diff display.
 - **Dispatch Continuity** — resume via `--resume`, retry as re-enqueue.
