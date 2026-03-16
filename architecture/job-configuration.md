@@ -23,8 +23,8 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `timeout` | integer | `900` | Maximum execution time in seconds |
 | `require_approval` | boolean | `false` | Whether automated triggers require human approval |
 | `coalesce_dispatches` | boolean | `false` | Global coalescing — never more than one pending task |
-| `allowed_tools` | json | `[]` | CLI tools the agent can use. When set, the platform computes the complement and hides all other tools from the agent |
-| `mcp_servers` | json | `[]` | External MCP servers to enable |
+| `allowed_tools` | json | `[]` | CLI tools the agent can use, selected from the platform's discovered tool inventory. When set, the platform computes the complement and hides all other tools from the agent |
+| `mcp_servers` | json | `[]` | External MCP servers to enable, selected from registered servers |
 | `sort_order` | integer | `0` | Explicit ordering in the job list |
 
 Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_task`) accepts a partial set of properties and writes only the provided keys as overrides.
@@ -54,4 +54,5 @@ Circular dependency chains are permitted. When job A depends on job B and vice v
 - [Dispatch Engine](dispatch-engine.md) reads job properties at dispatch time to determine model, timeout, tools, and approval requirements
 - [Trigger System](trigger-system.md) reads `subscriptions`, `schedule`, `depends_on`, and `coalesce_dispatches` to determine when and how to enqueue tasks
 - [Prompt Assembly](prompt-assembly.md) reads `instructions`, `description`, and `subscriptions` to build the agent's prompt
+- [Tool Mediation](tool-mediation.md) uses `allowed_tools` and `mcp_servers` to compose each job's tool surface at dispatch time
 - The job registry (manifest) is built from all jobs' names, descriptions, and subscriptions — injected into every task prompt so agents know their neighbors

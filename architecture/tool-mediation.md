@@ -63,14 +63,46 @@ Every MCP tool call is recorded as a structured event in the task's chat session
 
 This is richer than parsing tool use from the NDJSON stream — the platform records the actual operation it performed, not just the agent's request. The audit trail integrates with the existing `chat_events` storage (see [Streaming and Sessions](streaming-and-sessions.md)).
 
-## Relationship to External MCP Servers
+## Tool Discoverability
 
-The internal MCP server is distinct from external MCP servers:
+The platform makes the full tool inventory visible and selectable so users configure from known options rather than guessing names.
 
-- **Internal**: hosted by the platform, context-aware, policy-governed, audit-logged. Provides git operations and project context tools. Always connected — not subject to per-job configuration.
-- **External**: registered globally in Settings (`mcp_servers` table), then selectively enabled per-job via the job's `mcp_servers` property. These are opaque to the platform — it connects the agent to them but does not mediate their tool calls. A server must be registered and enabled at the platform level before any job can use it.
+Three tool sources, each with a discovery mechanism:
 
-Both are connected to the CLI at invocation time.
+- **Built-in CLI tools** — the platform maintains a canonical set of CLI tool names (`CLI_NATIVE_TOOLS` in `cli.py`). These are the tools that `allowed_tools` selects from. The configuration surface presents them as a selectable inventory — the user picks from what exists rather than typing free-text names.
+- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_tasks`). They are always available during dispatch and not subject to per-job selection. Their presence is informational — the user can see them but does not need to configure them.
+- **External MCP server tools** — when a registered external server is connected, the platform can discover its tool list via the MCP protocol. Discovered tools become visible alongside built-in tools in the per-job configuration surface.
+
+The configuration surfaces for `allowed_tools` and `mcp_servers` present selectable options drawn from these inventories. Users select from what exists; they do not enter arbitrary text that may not correspond to real tools.
+
+### Tool Surface Composition
+
+During dispatch, the agent's available tools are the union of three sources:
+
+1. **CLI tools** selected via `allowed_tools` (or the full default set if none are selected)
+2. **Internal MCP tools** (always present — the internal server is always connected)
+3. **External MCP tools** from servers enabled for the job via `mcp_servers`
+
+The user can see this composed surface when configuring a job — what the agent will actually have access to.
+
+## External MCP Servers
+
+External MCP servers extend the tool surface beyond built-in CLI and internal platform tools. The platform manages their full lifecycle.
+
+### Internal vs External
+
+- **Internal**: hosted by the platform process, context-aware, policy-governed, audit-logged. Provides git operations and project context tools. Always connected — not subject to per-job configuration.
+- **External**: registered globally in Settings (`mcp_servers` table), opaque to the platform — it connects agents to them but does not mediate their tool calls.
+
+### Lifecycle
+
+**Registration** — external servers are registered at the platform level (Settings). Each registration specifies: server name (primary key), command to launch, command arguments, and environment variables. A registered server can be enabled or disabled globally — disabled servers are unavailable to any job regardless of per-job configuration.
+
+**Connection and Discovery** — when a registered server is enabled, the platform can connect to it and discover its tool inventory via the MCP protocol. Discovered tools are what the user sees when configuring per-job server assignments. If a server cannot be reached or fails to report its tools, the platform surfaces this state so the user knows which servers are healthy.
+
+**Per-Job Assignment** — a job's `mcp_servers` property controls which registered external servers connect during dispatch. The configuration surface presents registered servers as selectable options (not free-text). Only servers that are both registered and globally enabled appear as options.
+
+**Invocation** — at dispatch time, the MCP config builder (`mcp_config.py`) assembles a config file containing the internal server (always) plus any external servers enabled for the job. This file is passed to the CLI via `--mcp-config`. Both internal and external servers are connected to the CLI at subprocess invocation time.
 
 ## Relationship to Other Systems
 
