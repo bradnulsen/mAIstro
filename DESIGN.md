@@ -209,7 +209,7 @@ This is a discoverability requirement, not a UI prescription. The essential beha
 
 External MCP servers extend the tool surface available to agents beyond the platform's built-in and internal tools. The platform manages their full lifecycle: registration, connection, discovery, per-job assignment.
 
-**Registration** — external servers are registered at the platform level (Settings). Each registration specifies a server name, the command to launch it, command arguments, and environment variables. A registered server can be enabled or disabled globally — disabled servers are not available to any job regardless of per-job configuration.
+**Registration** — external servers are registered at the platform level (MCP Servers view). Each registration specifies a server name, the command to launch it, and command arguments. A registered server can be enabled or disabled globally — disabled servers are not available to any job regardless of per-job configuration.
 
 **Connection and Discovery** — when an external server is registered and enabled, the platform can connect to it and discover its tool inventory. The discovered tools are what the user sees when configuring per-job server assignments. If a server cannot be reached or fails to report its tools, the platform surfaces this state clearly — the user knows which servers are healthy and which are not.
 
@@ -225,7 +225,8 @@ The product presents seven views and a persistent chat surface:
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.
 - **Jobs** — the primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
-- **Settings** — platform configuration: queue processing mode, default model, default timeout, MCP server management.
+- **MCP Servers** — tool server management as a dedicated surface. See MCP Servers View below.
+- **Settings** — platform configuration: queue processing mode, default model, default timeout.
 - **Chat** — a persistent, resizable tray providing interactive conversation with the LLM in the project context.
 
 A status bar surfaces running task indicators, providing ambient awareness of system activity without requiring the user to be on the Dispatch view.
@@ -241,14 +242,39 @@ Required tooltip surfaces:
 - **Subscriptions (glob patterns)** — syntax: `*` matches files in one directory, `**` matches recursively across directories. One pattern per line. Dual purpose: patterns determine which commits trigger the job *and* which files are included as context in the task prompt.
 - **Schedule (cron expression)** — five-field format: `minute hour day-of-month month day-of-week`. Ranges (`1-5`), lists (`0,15,30`), steps (`*/10`), and wildcards (`*`). Examples: `*/30 * * * *` (every 30 min), `0 9 * * 1-5` (weekdays at 9am). First evaluation after setting a schedule establishes a baseline — does not fire immediately.
 - **Allowed Tools** — select which CLI tools the agent can use. The platform presents the full inventory of available tools; the user selects from this list. When any tools are selected, the agent sees only those tools plus tools from connected MCP servers. When none are selected, the agent gets the full default tool set. Tools not selected are removed from the agent's environment entirely — the agent has no awareness they exist.
-- **MCP Servers (per-job)** — select which registered external MCP servers this job's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Register servers in Settings first, then enable them here per-job.
+- **MCP Servers (per-job)** — select which registered external MCP servers this job's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Register servers in the MCP Servers view first, then enable them here per-job.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce tasks that wait for manual approval before executing. Manual dispatches bypass this gate.
 - **Coalesce Dispatches** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
 - **Dependencies** — the job auto-dispatches when *any* selected upstream job completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled tasks do not trigger dependents.
 - **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.
 - **Auto-dispatch (Settings)** — when enabled, the background worker automatically pulls and executes pending tasks in order. When disabled (paused), tasks accumulate as pending. The user reorders them via drag-and-drop in the Dispatch view, then toggles auto-processing when ready.
-- **MCP Servers (Settings)** — register external tool servers at the platform level. Servers registered here become available for per-job selection — a server must be registered and enabled here before any job can use it. Command and args specify how to launch the server process. Per-job enablement is configured on each job's configuration surface.
 - **Model** — the LLM model for this job. Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.
+
+### MCP Servers View
+
+MCP server configuration is a first-class surface with its own rail item. It is not buried in Settings. The reason: MCP servers are how users extend what agents can do — they are a primary capability concern, not a secondary platform setting. The view must be simple enough that a user who has never configured an MCP server can succeed on the first attempt.
+
+**Design principles:**
+
+- **Progressive disclosure.** The empty state is not a blank page — it explains what MCP servers are, why you might add one, and how to do it. Configuration complexity is revealed only as the user engages. A user with zero servers sees guidance. A user with three servers sees status and management.
+- **Guided registration.** Adding a server requires three pieces of information: a name, a command, and arguments. The form makes this obvious — labeled fields with placeholder examples that show real, working patterns (e.g., `npx @modelcontextprotocol/server-filesystem /path/to/dir`). No unlabeled inputs, no ambiguous fields. The form validates before submission and explains what went wrong in plain language.
+- **Immediate feedback.** After adding a server, the platform tests connectivity automatically and shows the result — healthy with a tool count, or an error with a plain-language explanation. The user never wonders "did it work?" The test action is also available on demand for any registered server.
+- **Health at a glance.** Each server shows its current state: enabled/disabled, healthy/unreachable, and the tools it provides. The user can scan the list and immediately understand which servers are working.
+- **Safe defaults.** New servers are enabled by default — the most common intent when adding a server is to use it. Disabling is a deliberate choice the user makes later if needed.
+
+**What the view shows:**
+
+- The list of registered servers, each displaying: name, command, enabled state, health status, and discovered tools (when healthy).
+- A registration form for adding new servers.
+- Per-server actions: enable/disable toggle, test connection, remove.
+- When a server is unhealthy, the error is shown inline — not hidden behind a click. Error messages should help the user fix the problem: "command not found" means the command isn't installed or isn't on PATH; "connection refused" means the server started but isn't responding correctly.
+
+**What the view does not do:**
+
+- No environment variable editing in the initial version. Keep the configuration surface minimal — name, command, args. Environment variables can be added later if users need them.
+- No per-job assignment. That stays on the job configuration surface where it belongs — the MCP Servers view manages the global registry; jobs select from it.
+
+**Relationship to job configuration:** The MCP Servers view is where servers are registered and managed. The job configuration surface (Jobs view) is where servers are assigned to specific jobs via the `mcp_servers` property. The per-job tooltip directs users to the MCP Servers view when they need to register new servers. This separation keeps each surface focused: one place to manage servers, another to assign them.
 
 ---
 
