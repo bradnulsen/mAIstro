@@ -1106,9 +1106,19 @@ label {
   color: var(--danger);
 }
 
+.success-text {
+  font-size: 11px;
+  color: var(--success);
+}
+
 .muted-text {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.pulse-dot {
+  display: inline-block;
+  animation: dot-pulse 1.4s ease-in-out infinite;
 }
 
 .action-row {
@@ -1244,6 +1254,21 @@ label {
   margin-bottom: 8px;
   border-bottom: 1px solid var(--border-light);
   padding-bottom: 4px;
+}
+
+/* Section heading with inline HelpTip — mirrors .label-row for h3 context */
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 4px;
+}
+.section-head h3 {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .settings-field {

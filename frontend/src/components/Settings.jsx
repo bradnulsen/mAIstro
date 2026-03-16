@@ -175,8 +175,8 @@ export default function Settings() {
 
         {/* MCP Servers */}
         <div className="settings-section">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8, borderBottom: '1px solid var(--border-light)', paddingBottom: 4 }}>
-            <h3 style={{ margin: 0, borderBottom: 'none', paddingBottom: 0 }}>MCP Servers</h3>
+          <div className="section-head">
+            <h3>MCP Servers</h3>
             <HelpTip text={TIPS.mcpServers} />
           </div>
           {mcpServers.length === 0 && (

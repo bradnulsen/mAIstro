@@ -279,7 +279,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
           {dispatching
             ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Queuing</>
             : props.running
-            ? <><span style={{ display: 'inline-block', animation: 'dot-pulse 1.4s ease-in-out infinite', marginRight: 4 }}>●</span>Running</>
+            ? <><span className="pulse-dot" style={{ marginRight: 4 }}>●</span>Running</>
             : '▶ Queue'}
         </button>
       </div>
@@ -378,7 +378,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                     onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
                     min={0}
                     step={60}
-                    style={{ width: 100, fontFamily: 'var(--font)' }}
+                    style={{ width: 100 }}
                   />
                   <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                     {(() => {
@@ -483,7 +483,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                 value={getVal('schedule') || ''}
                 onChange={e => edit('schedule', e.target.value)}
                 placeholder="e.g. */30 * * * *  or  0 9 * * 1-5"
-                style={{ flex: 1, fontFamily: 'var(--font)' }}
+                style={{ flex: 1 }}
               />
               {getVal('schedule') && (
                 <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>

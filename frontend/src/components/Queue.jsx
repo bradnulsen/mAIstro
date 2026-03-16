@@ -633,7 +633,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       {item.result_commit && (
         <div className="detail-section">
           <label>Commits</label>
-          <div style={{ fontSize: 11, fontFamily: 'var(--font)' }}>
+          <div style={{ fontSize: 11 }}>
             {item.start_commit
               ? `${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`
               : item.result_commit.slice(0, 8)}
@@ -656,7 +656,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
           <label>
             Live Output
             {isStreaming && <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>
-              <span style={{ display: 'inline-block', animation: 'dot-pulse 1.4s ease-in-out infinite' }}>●</span> streaming
+              <span className="pulse-dot">●</span> streaming
             </span>}
           </label>
           {liveTools.length > 0 && (
