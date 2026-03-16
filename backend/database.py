@@ -64,15 +64,14 @@ async def _migrate(db):
     if expected.issubset(cols):
         return  # schema is current
 
-    # Copy existing data into a temp table, rebuild with correct schema, port data back
-    old_cols = sorted(cols)  # columns that exist in the old table
-    col_list = ", ".join(old_cols)
-    await db.execute(f"CREATE TEMP TABLE _dq_backup AS SELECT {col_list} FROM dispatch_queue")
-    await db.execute("DROP TABLE dispatch_queue")
+    # Rebuild: backup data, recreate table, port rows back (only shared columns)
+    await db.execute("ALTER TABLE dispatch_queue RENAME TO _dq_old")
     await db.executescript(SCHEMA_SQL)
-    # Insert old data — new columns (rating, coalesced_id, sort_order) default to NULL
-    await db.execute(f"INSERT INTO dispatch_queue ({col_list}) SELECT {col_list} FROM _dq_backup")
-    await db.execute("DROP TABLE _dq_backup")
+    new_cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
+    shared = sorted(cols & new_cols)
+    col_list = ", ".join(shared)
+    await db.execute(f"INSERT INTO dispatch_queue ({col_list}) SELECT {col_list} FROM _dq_old")
+    await db.execute("DROP TABLE _dq_old")
 
 
 SCHEMA_SQL = """
