@@ -330,17 +330,18 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
     result_commit = upstream_dispatch.get("result_commit") if upstream_dispatch else None
     start_commit = upstream_dispatch.get("start_commit") if upstream_dispatch else None
 
+    # Resolve commit summary once — shared across all dependents
+    commit_context = ""
+    if result_commit and state.PROJECT_DIR:
+        summary = git.commit_oneline(state.PROJECT_DIR, result_commit) or result_commit[:8]
+        commit_context = f"\n  Upstream result commit `{result_commit[:8]}`: {summary}"
+        if start_commit and start_commit != result_commit:
+            commit_context += f"\n  Upstream commit range: `{start_commit[:8]}..{result_commit[:8]}`"
+
     for task in all_tasks:
         deps = task["properties"].get("depends_on") or []
         if completed_task_id in deps:
-
-            # Build context with commit info when available
-            context = f"**Dependency** — triggered by completion of {upstream_name} (dispatch #{dispatch_id})"
-            if result_commit and state.PROJECT_DIR:
-                summary = git.commit_oneline(state.PROJECT_DIR, result_commit) or result_commit[:8]
-                context += f"\n  Upstream result commit `{result_commit[:8]}`: {summary}"
-                if start_commit and start_commit != result_commit:
-                    context += f"\n  Upstream commit range: `{start_commit[:8]}..{result_commit[:8]}`"
+            context = f"**Dependency** — triggered by completion of {upstream_name} (dispatch #{dispatch_id}){commit_context}"
 
             dep_id = await db.enqueue_dispatch(
                 task["id"], "dependency",

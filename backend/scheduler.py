@@ -43,16 +43,6 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _get_last_fire(task_id: str) -> datetime | None:
-    val = await db.get_config(_config_key(task_id))
-    if val:
-        try:
-            return datetime.fromisoformat(val)
-        except ValueError:
-            return None
-    return None
-
-
 async def _set_last_fire(task_id: str, dt: datetime):
     await db.set_config(_config_key(task_id), dt.isoformat())
 
@@ -68,6 +58,9 @@ async def _loop():
             tasks = await db.list_tasks()
             now = _now_utc()
 
+            # Batch-load all last-fire timestamps in one query instead of one per task
+            last_fire_map = await db.get_config_prefix("schedule_last_fire_")
+
             for task in tasks:
                 schedule = task["properties"].get("schedule", "")
                 if not schedule or not schedule.strip():
@@ -82,7 +75,13 @@ async def _loop():
                 if task["properties"].get("running"):
                     continue
 
-                last_fire = await _get_last_fire(task["id"])
+                raw = last_fire_map.get(_config_key(task["id"]))
+                last_fire: datetime | None = None
+                if raw:
+                    try:
+                        last_fire = datetime.fromisoformat(raw)
+                    except ValueError:
+                        pass
 
                 # Determine if we should fire
                 if last_fire is None:

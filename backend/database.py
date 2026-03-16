@@ -149,6 +149,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_cli_session
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_dispatch
     ON chat_sessions (dispatch_id);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_task_id
+    ON chat_sessions (task_id);
 """
 
 SEED_SQL = """
@@ -265,10 +268,13 @@ async def list_tasks() -> list[dict]:
     def_defaults = {d["key"]: d["default_value"] for d in defs}
     def_types = {d["key"]: d["type"] for d in defs}
 
+    # Pre-compute defaults once — avoids N × len(defs) _cast_property calls
+    default_props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
+
     tasks = []
     for row in task_rows:
         task = dict(row)
-        props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
+        props = default_props.copy()
         for key, value in props_by_task.get(task["id"], {}).items():
             props[key] = _cast_property(value, def_types.get(key, "string"))
         props["running"] = task["id"] in running_ids
@@ -607,6 +613,15 @@ async def set_config(key: str, value: str):
         "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (key, value)
     )
     await db.commit()
+
+
+async def get_config_prefix(prefix: str) -> dict[str, str]:
+    """Return all config entries whose key starts with prefix, as a dict."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT key, value FROM config WHERE key LIKE ?", (prefix + "%",)
+    )
+    return {r["key"]: r["value"] for r in rows}
 
 
 # ── Helpers ─────────────────────────────────────────────────
