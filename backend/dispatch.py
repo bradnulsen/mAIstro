@@ -176,8 +176,13 @@ def _build_closing_directive(trigger: str | None = None) -> str:
         )
     if trigger == "dependency":
         return (
-            "An upstream job has completed. "
-            "Review what changed and respond accordingly."
+            "An upstream job has completed — the Invocation section above has commit details. "
+            "Use the commit range to inspect what changed, then respond accordingly."
+        )
+    if trigger == "retry":
+        return (
+            "This is a retry of a previous dispatch that failed or produced insufficient results. "
+            "Review context above, adjust your approach, and try again."
         )
     return (
         "Review the project state — your instructions, subscriptions, and context above. "
