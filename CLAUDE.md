@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on http://localhost:5173. No test suite or linter is configured.
+Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on http://localhost:5173.
 
 ## Architecture
 
@@ -38,7 +38,6 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 ### Key Design Decisions
 - **Git as source of truth**: all project content lives in git. The SQLite DB holds only operational state — task configs, dispatch queue, chat sessions.
 - **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db`; app DB at `<repo>/.maistro/app.db` holds recent-projects list.
-- **Queue-first dispatch**: all dispatches are enqueued before execution. A background worker processes them sequentially. The frontend polls for output.
 - **Internal MCP server**: the platform hosts a context-aware MCP server mediating agent operations. Tool calls are observable and policy-governed. Agents also retain access to native CLI tools.
 - **Task properties as key-value overrides**: properties can be `string`, `json`, `integer`, or `boolean` with defaults.
 - **Dispatch creates chat sessions**: each dispatch links to a chat session for durable output storage and audit trail.

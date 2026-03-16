@@ -116,7 +116,7 @@ A task can use subscriptions purely for context (by gating automatic triggers wi
 
 ### Platform-Mediated Tool Access
 
-The platform hosts an internal MCP server that dispatched agents connect to. This server mediates agent operations — every tool call is observable, auditable, and policy-governed. The server is context-aware: it reads the dispatching task's configuration and presents only relevant tools. Different tasks get different tool surfaces based on their properties and subscriptions. Agents retain native CLI tool access alongside MCP tools — mediated tools are structured alternatives, not restrictions. For detailed design, see architecture/tool-mediation.md.
+The platform hosts an internal MCP server that dispatched agents connect to, mediating agent operations through structured tools with enforced conventions. Every tool call is observable, auditable, and policy-governed. The server is context-aware, presenting task-specific tool surfaces based on configuration and subscriptions. Agents retain native CLI tool access alongside MCP tools — mediated tools are structured alternatives, not restrictions. For detailed architecture and design, see architecture/tool-mediation.md.
 
 ### External MCP Servers
 
