@@ -245,19 +245,35 @@ async def get_task(task_id: str, running_ids: set | None = None) -> dict | None:
 
 
 async def list_tasks() -> list[dict]:
-    db = await get_db()
-    rows = await db.execute_fetchall("SELECT id FROM tasks")
-    # Fetch running task IDs in one query to avoid N+1
-    running_rows = await db.execute_fetchall(
+    """Return all tasks. Uses 3 batch queries instead of 2N+2 (N+1 avoided)."""
+    conn = await get_db()
+    task_rows = await conn.execute_fetchall("SELECT id, name, created_at FROM tasks")
+    if not task_rows:
+        return []
+
+    running_rows = await conn.execute_fetchall(
         "SELECT DISTINCT task_id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
     )
     running_ids = {r["task_id"] for r in running_rows}
 
+    prop_rows = await conn.execute_fetchall("SELECT task_id, key, value FROM task_properties")
+    props_by_task: dict[str, dict] = {}
+    for p in prop_rows:
+        props_by_task.setdefault(p["task_id"], {})[p["key"]] = p["value"]
+
+    defs = await _get_property_defs()
+    def_defaults = {d["key"]: d["default_value"] for d in defs}
+    def_types = {d["key"]: d["type"] for d in defs}
+
     tasks = []
-    for row in rows:
-        task = await get_task(row["id"], running_ids=running_ids)
-        if task:
-            tasks.append(task)
+    for row in task_rows:
+        task = dict(row)
+        props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
+        for key, value in props_by_task.get(task["id"], {}).items():
+            props[key] = _cast_property(value, def_types.get(key, "string"))
+        props["running"] = task["id"] in running_ids
+        task["properties"] = props
+        tasks.append(task)
     tasks.sort(key=lambda t: t["properties"].get("sort_order", 0))
     return tasks
 
@@ -530,6 +546,23 @@ async def add_chat_event(session_id: str, event_type: str, raw_json: str):
     await db.execute(
         "INSERT INTO chat_events (session_id, event_type, raw_json) VALUES (?, ?, ?)",
         (session_id, event_type, raw_json)
+    )
+    await db.commit()
+
+
+async def add_chat_events_batch(session_id: str, events: list[tuple[str, str]]):
+    """Insert multiple chat events in a single transaction.
+
+    Each entry is (event_type, raw_json). Used by the worker to flush
+    buffered raw audit events at dispatch completion rather than committing
+    once per event.
+    """
+    if not events:
+        return
+    db = await get_db()
+    await db.executemany(
+        "INSERT INTO chat_events (session_id, event_type, raw_json) VALUES (?, ?, ?)",
+        [(session_id, et, rj) for et, rj in events],
     )
     await db.commit()
 

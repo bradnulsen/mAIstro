@@ -242,15 +242,16 @@ async def _process_dispatch(dispatch: dict):
 
     full_response = []
     streaming_text = []
+    raw_event_buffer: list[tuple[str, str]] = []
 
     try:
         async for event in run_dispatch(dispatch_id, task, state.PROJECT_DIR,
                                         cancel_event=_cancel_event):
             etype = event.get("type")
 
-            # Raw audit trail — store every NDJSON event
+            # Raw audit trail — buffer and flush in batch at end (avoids per-event commits)
             if etype == "_raw":
-                await db.add_chat_event(session_id, event["event_type"], event["raw_json"])
+                raw_event_buffer.append((event["event_type"], event["raw_json"]))
                 continue
 
             # Broadcast to live subscribers (skip _raw, already handled above)
@@ -270,6 +271,9 @@ async def _process_dispatch(dispatch: dict):
                 streaming_text.append(event.get("content", ""))
             elif etype == "error":
                 await db.add_chat_message(session_id, "system", event.get("message", "error"))
+
+        # Flush buffered audit events in one transaction
+        await db.add_chat_events_batch(session_id, raw_event_buffer)
 
         # Save one clean assistant message — prefer assistant_complete, fall back to streamed text
         response_text = "".join(full_response) or "".join(streaming_text)
@@ -293,6 +297,11 @@ async def _process_dispatch(dispatch: dict):
 
     except Exception as e:
         log.exception("[worker] Dispatch #%d failed: %s", dispatch_id, e)
+        # Flush any buffered audit events before recording the error
+        try:
+            await db.add_chat_events_batch(session_id, raw_event_buffer)
+        except Exception:
+            pass
         response_text = "".join(full_response) or "".join(streaming_text)
         if response_text:
             await db.add_chat_message(session_id, "assistant", response_text)
@@ -313,8 +322,8 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
     """Enqueue tasks that declare a dependency on the completed task."""
     all_tasks = await db.list_tasks()
 
-    # Fetch upstream task and dispatch once — reused for every dependent
-    upstream_task = await db.get_task(completed_task_id)
+    # upstream task is already in all_tasks — no separate get_task() needed
+    upstream_task = next((t for t in all_tasks if t["id"] == completed_task_id), None)
     upstream_name = upstream_task["name"] if upstream_task else completed_task_id
 
     upstream_dispatch = await db.get_dispatch(dispatch_id)
