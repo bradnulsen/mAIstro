@@ -152,6 +152,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_dispatch
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_task_id
     ON chat_sessions (task_id);
+
+CREATE INDEX IF NOT EXISTS idx_task_properties_key
+    ON task_properties (key);
 """
 
 SEED_SQL = """
@@ -326,7 +329,8 @@ async def delete_task(task_id: str) -> bool:
 async def get_tasks_depending_on(task_id: str) -> list[dict]:
     """Return tasks whose depends_on property includes task_id.
 
-    Uses a LIKE pre-filter on the JSON text to avoid loading every task.
+    Uses a LIKE pre-filter on the JSON text (indexed on key) to find candidates,
+    then batch-loads them in 3 queries total instead of 2N+1.
     JSON array serialization guarantees task IDs appear as quoted strings, so
     the pattern ``%"<id>"%`` won't match partial IDs.
     """
@@ -337,14 +341,47 @@ async def get_tasks_depending_on(task_id: str) -> list[dict]:
     )
     if not rows:
         return []
+
+    candidate_ids = [r["task_id"] for r in rows]
+    placeholders = ",".join("?" * len(candidate_ids))
+
+    task_rows = await conn.execute_fetchall(
+        f"SELECT id, name, created_at FROM tasks WHERE id IN ({placeholders})",
+        candidate_ids,
+    )
+    if not task_rows:
+        return []
+
+    running_rows = await conn.execute_fetchall(
+        "SELECT DISTINCT task_id FROM dispatch_queue WHERE started_at IS NOT NULL AND completed_at IS NULL"
+    )
+    running_ids = {r["task_id"] for r in running_rows}
+
+    prop_rows = await conn.execute_fetchall(
+        f"SELECT task_id, key, value FROM task_properties WHERE task_id IN ({placeholders})",
+        candidate_ids,
+    )
+    props_by_task: dict[str, dict] = {}
+    for p in prop_rows:
+        props_by_task.setdefault(p["task_id"], {})[p["key"]] = p["value"]
+
+    defs = await _get_property_defs()
+    def_defaults = {d["key"]: d["default_value"] for d in defs}
+    def_types = {d["key"]: d["type"] for d in defs}
+    default_props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
+
     tasks = []
-    for r in rows:
-        t = await get_task(r["task_id"])
-        if t:
-            # Verify the parsed array actually contains task_id (guards against
-            # substring false-positives in the LIKE pre-filter)
-            if task_id in (t["properties"].get("depends_on") or []):
-                tasks.append(t)
+    for row in task_rows:
+        task = dict(row)
+        props = default_props.copy()
+        for key, value in props_by_task.get(task["id"], {}).items():
+            props[key] = _cast_property(value, def_types.get(key, "string"))
+        props["running"] = task["id"] in running_ids
+        task["properties"] = props
+        # Verify the parsed array actually contains task_id (guards against
+        # substring false-positives in the LIKE pre-filter)
+        if task_id in (props.get("depends_on") or []):
+            tasks.append(task)
     return tasks
 
 
