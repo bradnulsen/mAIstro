@@ -64,6 +64,7 @@ async def _migrate(db):
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN rating TEXT")
     if "coalesced_id" not in cols:
         await db.execute("ALTER TABLE dispatch_queue ADD COLUMN coalesced_id INTEGER REFERENCES dispatch_queue(id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_queue_coalesced ON dispatch_queue (coalesced_id)")
 
 
 SCHEMA_SQL = """
@@ -172,8 +173,6 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_task_id
 CREATE INDEX IF NOT EXISTS idx_task_properties_key
     ON task_properties (key);
 
-CREATE INDEX IF NOT EXISTS idx_dispatch_queue_coalesced
-    ON dispatch_queue (coalesced_id);
 """
 
 SEED_SQL = """
