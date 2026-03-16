@@ -224,8 +224,12 @@ async def _process_dispatch(dispatch: dict):
     raw_event_buffer: list[tuple[str, str]] = []
 
     try:
+        # Pass the dispatch dict (with session_id injected) so run_dispatch
+        # doesn't need to re-fetch it from the database.
+        dispatch_with_session = {**dispatch, "session_id": session_id}
         async for event in run_dispatch(dispatch_id, task, state.PROJECT_DIR,
-                                        cancel_event=_cancel_event):
+                                        cancel_event=_cancel_event,
+                                        dispatch=dispatch_with_session):
             etype = event.get("type")
 
             # Raw audit trail — buffer and flush in batch at end (avoids per-event commits)

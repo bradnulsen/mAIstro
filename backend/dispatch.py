@@ -1,5 +1,6 @@
 """Dispatch engine — prompt assembly, dispatch lifecycle, watch triggers."""
 
+import functools
 import logging
 import os
 import re
@@ -17,17 +18,21 @@ async def run_dispatch(
     task: dict,
     project_dir: str,
     cancel_event=None,
+    dispatch: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Build prompts, invoke Claude CLI, yield events.
 
     Only handles prompt assembly and CLI invocation.
     Lifecycle management (timestamps, chat storage) belongs to the worker.
+
+    ``dispatch`` may be supplied by the worker (already loaded) to avoid a
+    redundant DB round-trip.  Falls back to fetching from DB when absent.
     """
     props = task["properties"]
 
     log.info("[dispatch:%d] Starting task=%s", dispatch_id, task["id"])
 
-    dispatch_record = await db.get_dispatch(dispatch_id)
+    dispatch_record = dispatch if dispatch is not None else await db.get_dispatch(dispatch_id)
     queue_context = _build_queue_context(dispatch_record)
     manifest = await build_task_manifest()
     resume_session_id = dispatch_record.get("resume_session_id") if dispatch_record else None
@@ -256,6 +261,7 @@ def _any_file_matches(files: list[str], patterns: list[str]) -> bool:
     return False
 
 
+@functools.lru_cache(maxsize=256)
 def _glob_to_regex(pattern: str):
     """Convert a glob pattern to a compiled regex with proper ** support.
 
