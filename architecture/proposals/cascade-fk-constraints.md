@@ -1,6 +1,6 @@
 ---
 name: cascade-fk-constraints
-description: Schema proposal — add ON DELETE CASCADE to dispatch_queue and chat_sessions job foreign keys
+description: Schema proposal — add ON DELETE CASCADE to tasks and chat_sessions job foreign keys
 type: proposal
 status: open
 raised_by: Backend
@@ -10,25 +10,25 @@ raised_by: Backend
 
 ## Problem
 
-`dispatch_queue` and `chat_sessions` both reference the jobs table (`tasks`) but **without** `ON DELETE CASCADE`:
+`tasks` and `chat_sessions` both reference the jobs table (`jobs`) but **without** `ON DELETE CASCADE`:
 
 ```sql
 -- current
-dispatch_queue.task_id TEXT NOT NULL REFERENCES tasks(id)
-chat_sessions.task_id  TEXT REFERENCES tasks(id)
+tasks.job_id TEXT NOT NULL REFERENCES jobs(id)
+chat_sessions.job_id  TEXT REFERENCES jobs(id)
 ```
 
-When a job is deleted, `delete_task()` manually cleans up both tables before deleting the job row:
+When a job is deleted, `delete_job()` manually cleans up both tables before deleting the job row:
 
 ```python
-await db.execute("DELETE FROM chat_sessions WHERE task_id = ?", (task_id,))
-await db.execute("DELETE FROM dispatch_queue WHERE task_id = ?", (task_id,))
-cursor = await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+await db.execute("DELETE FROM chat_sessions WHERE job_id = ?", (job_id,))
+await db.execute("DELETE FROM tasks WHERE job_id = ?", (job_id,))
+cursor = await db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
 ```
 
 This works but has two risks:
 
-1. **Ordering matters**: if `PRAGMA foreign_keys=ON` is active and either cleanup step is missed or reordered, the `DELETE FROM tasks` will fail with a FK violation.
+1. **Ordering matters**: if `PRAGMA foreign_keys=ON` is active and either cleanup step is missed or reordered, the `DELETE FROM jobs` will fail with a FK violation.
 2. **Application-enforced invariant**: the constraint lives in Python code, not the schema. Any future code path that deletes a job (e.g. bulk deletion, migration) must remember to replicate the cleanup sequence.
 
 ## Proposed fix
@@ -36,11 +36,11 @@ This works but has two risks:
 Add `ON DELETE CASCADE` to both FKs:
 
 ```sql
-dispatch_queue.task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE
-chat_sessions.task_id  TEXT REFERENCES tasks(id) ON DELETE CASCADE
+tasks.job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE
+chat_sessions.job_id  TEXT REFERENCES jobs(id) ON DELETE CASCADE
 ```
 
-With CASCADE, `DELETE FROM tasks WHERE id = ?` automatically removes dependent rows, and `delete_task()` can be simplified to a single statement.
+With CASCADE, `DELETE FROM jobs WHERE id = ?` automatically removes dependent rows, and `delete_job()` can be simplified to a single statement.
 
 ## Migration note
 
@@ -54,6 +54,6 @@ This is a one-time migration run inside `init_db` (which already uses `executesc
 
 ## Impact
 
-- `delete_task()` in `database.py` becomes a single `DELETE FROM tasks`
+- `delete_job()` in `database.py` becomes a single `DELETE FROM jobs`
 - No behavioral change for normal operation — job deletion is infrequent
 - Enforces referential integrity at the DB level rather than relying on application code ordering

@@ -4,20 +4,20 @@ The dispatch engine is the execution core of mAistro. It enforces the queue-firs
 
 ## Queue-First Invariant
 
-No task may execute without passing through the queue. Every code path — manual dispatch, watch trigger, schedule fire, dependency completion, resume, retry — writes a record to `dispatch_queue` first. The worker is the only code path that reads from the queue and invokes execution.
+No task may execute without passing through the queue. Every code path — manual dispatch, watch trigger, schedule fire, dependency completion, resume, retry — writes a record to `tasks` first. The worker is the only code path that reads from the queue and invokes execution.
 
 This invariant decouples trigger sources from execution. A trigger's responsibility is to write a queue record with appropriate context; it never needs to know about CLI invocation, streaming, or session management.
 
 ## Task Record
 
-Each `dispatch_queue` row tracks:
+Each `tasks` row tracks:
 
 | Column | Purpose |
 |--------|---------|
-| `task_id` | Which job this task belongs to |
+| `job_id` | Which job this task belongs to |
 | `trigger` | Primary trigger type (manual, commit, schedule, dependency, resume, retry) |
 | `trigger_detail` | Trigger-specific reference (commit hash, cron expression, upstream job ID) |
-| `triggers` | JSON array of all trigger entries (supports coalescing — multiple triggers on one task) |
+| `context` | Pre-formatted context text built at the enqueue site |
 | `session_id` | Linked chat session (set when execution starts) |
 | `resume_session_id` | CLI session ID for resume tasks |
 | `approval` | Gate status: `null` (no gate), `pending`, `approved`, `rejected` |
@@ -47,14 +47,14 @@ The queue operates in two modes controlled by the `queue_auto_dispatch` config:
 
 An `asyncio.Lock` guards task processing. Exactly one task runs at a time. The lock is held for the full duration of CLI execution — from session creation through final DB update.
 
-The `_active_dispatch_id` global tracks which task is currently running, enabling cancellation and the "active task blocks project switch" safety invariant.
+The `_active_task_id` global tracks which task is currently running, enabling cancellation and the "active task blocks project switch" safety invariant.
 
 ### Execution Flow
 
 1. **Session creation**: creates (or reuses for resume) a `chat_session` linked to the task
 2. **Lifecycle start**: records `started_at`, `start_commit`, and `session_id` on the task record
 3. **Timeout watchdog**: spawns an async task that fires the cancellation event after the configured timeout
-4. **Task execution**: calls `run_dispatch()` which assembles prompts and invokes the CLI — yields events
+4. **Task execution**: calls `run_task()` which assembles prompts and invokes the CLI — yields events
 5. **Event processing**: raw events go to the audit trail; translated events go to live subscribers; text accumulates for the final chat message. MCP tool invocation events are recorded as structured audit entries
 6. **Completion**: records `completed_at` and `result_commit`; triggers dependent jobs if successful
 7. **Cleanup**: cancels watchdog, broadcasts `_done` to subscribers, clears active task state
@@ -77,7 +77,7 @@ Timed-out and failed tasks explicitly do not trigger dependents.
 
 ## Approval Gates
 
-Jobs with `require_approval=true` get `approval='pending'` on task enqueue — except manual dispatches, which bypass the gate (manual = explicit human intent). The worker's pending task query (`get_oldest_pending_dispatch`) skips rows where `approval='pending'`.
+Jobs with `require_approval=true` get `approval='pending'` on task enqueue — except manual dispatches, which bypass the gate (manual = explicit human intent). The worker's pending task query (`get_oldest_pending_task`) skips rows where `approval='pending'`.
 
 Approval and rejection are API operations:
 - **Approve**: sets `approval='approved'`, wakes the worker
@@ -112,7 +112,7 @@ The summary is computed from git artifacts — the commits between `start_commit
 
 ### Task Rating
 
-The user can rate a completed task with a binary signal (positive or negative). Ratings are stored on the task record (`rating` column on `dispatch_queue`). The default is null (unrated). Ratings are never inferred or auto-assigned — they require explicit user action.
+The user can rate a completed task with a binary signal (positive or negative). Ratings are stored on the task record (`rating` column on `tasks`). The default is null (unrated). Ratings are never inferred or auto-assigned — they require explicit user action.
 
 The rating dataset can later be correlated with job instructions, model choices, and trigger patterns. The platform stores the signal; analysis is a future concern.
 
@@ -122,25 +122,25 @@ The user can merge and split pending tasks directly from the Dispatch view. This
 
 ### Implementation: Coalesced ID
 
-Rather than destructively removing task records during merge (losing individual trigger provenance), the system uses a **`coalesced_id` column** on `dispatch_queue`. This preserves every task as an atomic record while linking them for unified execution.
+Rather than destructively removing task records during merge (losing individual trigger provenance), the system uses a **`coalesced_id` column** on `tasks`. This preserves every task as an atomic record while linking them for unified execution.
 
 | `coalesced_id` value | Meaning |
 |----------------------|---------|
 | `NULL` | Standalone task — visible in queue, dispatched independently |
-| `<dispatch_id>` | Subordinate task — linked to the root task identified by this ID |
+| `<task_id>` | Subordinate task — linked to the root task identified by this ID |
 
 **Queue rendering**: the queue shows all tasks where `coalesced_id IS NULL`. These are either standalone tasks or root tasks that have subordinates linked to them.
 
-**Dispatch collection**: when the worker pulls a task for execution, it collects all tasks whose `coalesced_id` equals the dispatched task's ID. The trigger entries from all collected tasks are unified into the prompt context. Each subordinate task's triggers are preserved verbatim — merge does not rewrite trigger history.
+**Dispatch collection**: when the worker pulls a task for execution, it collects all tasks whose `coalesced_id` equals the dispatched task's ID. The context from all collected tasks is unified into the prompt. Each subordinate task's context is preserved verbatim — merge does not rewrite history.
 
-**Route behavior**: API routes that act on a specific dispatch ID automatically consider all tasks with `coalesced_id` equal to that ID. This means cancellation, approval, and other lifecycle operations propagate to the full group.
+**Route behavior**: API routes that act on a specific task ID automatically consider all tasks with `coalesced_id` equal to that ID. This means cancellation, approval, and other lifecycle operations propagate to the full group.
 
 ### Merge
 
 Combines two pending tasks for the same job into a single logical unit. Triggered by dragging one pending task onto another in the Dispatch view (see [Frontend — Drag Interaction Model](frontend.md)).
 
 1. The older task (by `created_at`) becomes the root — its `coalesced_id` remains NULL
-2. The dragged task gets `coalesced_id` set to the root task's dispatch ID
+2. The dragged task gets `coalesced_id` set to the root task's ID
 3. The root task retains its queue position; the subordinate task becomes invisible in the queue view
 
 **Constraints**:
@@ -170,14 +170,14 @@ The coalesced_id approach has structural advantages:
 
 ## Retry and Resume
 
-- **Retry**: resurrects the original task record — resets all lifecycle fields (`started_at`, `completed_at`, `error`, commits, session), resets `created_at` to now (so it doesn't jump ahead in the queue), appends a retry trigger to the triggers array. The task ID is preserved.
+- **Retry**: resurrects the original task record — resets all lifecycle fields (`started_at`, `completed_at`, `error`, commits, session), resets `created_at` to now (so it doesn't jump ahead in the queue), appends a retry trigger. The task ID is preserved.
 - **Resume**: creates a new task record with `resume_session_id` set to the original CLI session ID. The worker passes this to the CLI's `--resume` flag. If the original chat session still exists, it's reused.
 
 ## Relationship to Other Systems
 
 - [Trigger System](trigger-system.md) writes queue records; the dispatch engine reads and processes them
-- [CLI Bridge](cli-bridge.md) is invoked by `run_dispatch()` — the engine manages the lifecycle around it
-- [Prompt Assembly](prompt-assembly.md) builds the prompts that `run_dispatch()` feeds to the CLI
+- [CLI Bridge](cli-bridge.md) is invoked by `run_task()` — the engine manages the lifecycle around it
+- [Prompt Assembly](prompt-assembly.md) builds the prompts that `run_task()` feeds to the CLI
 - [Streaming and Sessions](streaming-and-sessions.md) receives broadcast events from the worker and stores durable output
 - [Git Integration](git-integration.md) provides `head_hash` for commit tracking and `changed_files_in_commit` for dependency context
 - [Tool Mediation](tool-mediation.md) provides the internal MCP server instance configured per-task

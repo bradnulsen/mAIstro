@@ -29,14 +29,14 @@ The user prompt is assembled from multiple sections, concatenated with double ne
 The job's `instructions` property — the detailed behavioral specification written by the user. This is the core payload that defines what the agent does.
 
 ### 3. Invocation Context
-Built from the task's `triggers` array. Each trigger entry's `context` field (pre-formatted at the enqueue site) is rendered as a bullet point. Duplicate lines are collapsed with a count suffix.
+Built from the task's context and any subordinate tasks' context (for coalesced tasks). Pre-formatted context strings (built at the enqueue site) are rendered as the invocation section. Duplicate lines are collapsed with a count suffix.
 
 This section answers "why am I running?" — commit hashes, schedule expressions, dependency completions, retry history, user notes.
 
 ### 4. Job Registry (Manifest)
 A listing of all jobs in the project with their names, descriptions, and subscription patterns. This gives the agent awareness of its neighbors — useful for jobs that need to coordinate or understand the broader system.
 
-Built by `build_task_manifest()` which queries all jobs at dispatch time.
+Built by `build_job_manifest()` which queries all jobs at dispatch time.
 
 ### 5. Subscribed Files
 If the job has subscription glob patterns, they're resolved against the working tree. Matching files are listed with paths and sizes. The agent reads their contents via its tools as needed — the list is a pointer, not inline content.

@@ -396,12 +396,12 @@ async def enqueue_task(job_id: str, trigger: str,
         (job_id,)
     )
     job_props = {r["key"]: r["value"] for r in prop_rows}
-    coalesce_global = (trigger == "schedule") or (job_props.get("coalesce_tasks") == "true")
+    coalesce_global = (trigger == "schedule") or (job_props.get("coalesce_tasks", "").lower() == "true")
     coalesce_same_type = trigger in ("commit", "dependency")
 
     # Approval gate: manual tasks bypass, others check job property
     approval = None
-    if trigger != "manual" and job_props.get("require_approval") == "true":
+    if trigger != "manual" and job_props.get("require_approval", "").lower() == "true":
         approval = "pending"
 
     # Insert the atomic task

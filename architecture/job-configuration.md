@@ -22,16 +22,16 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `schedule` | string | `""` | Cron expression for scheduled dispatch |
 | `timeout` | integer | `900` | Maximum execution time in seconds |
 | `require_approval` | boolean | `false` | Whether automated triggers require human approval |
-| `coalesce_dispatches` | boolean | `false` | Global coalescing — never more than one pending task |
+| `coalesce_tasks` | boolean | `false` | Global coalescing — never more than one pending task |
 | `allowed_tools` | json | `[]` | CLI tools the agent can use, selected from the platform's discovered tool inventory. When set, the platform computes the complement and hides all other tools from the agent |
 | `mcp_servers` | json | `[]` | External MCP servers to enable, selected from registered servers |
 | `sort_order` | integer | `0` | Explicit ordering in the job list |
 
-Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_task`) accepts a partial set of properties and writes only the provided keys as overrides.
+Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_job`) accepts a partial set of properties and writes only the provided keys as overrides.
 
 ## Ordering
 
-Jobs have an explicit `sort_order` property controlled by drag-to-reorder in the UI. The `reorder` endpoint accepts an ordered list of job IDs and sets `sort_order = index` for each. `list_tasks()` sorts by this value.
+Jobs have an explicit `sort_order` property controlled by drag-to-reorder in the UI. The `reorder` endpoint accepts an ordered list of job IDs and sets `sort_order = index` for each. `list_jobs()` sorts by this value.
 
 ## Dependency Validation
 
@@ -43,16 +43,16 @@ Circular dependency chains are permitted. When job A depends on job B and vice v
 
 ## CRUD Operations
 
-- **Create**: slugifies name → inserts into `tasks` table → writes any initial properties → returns full job
+- **Create**: slugifies name → inserts into `jobs` table → writes any initial properties → returns full job
 - **Read**: loads job row + all property defs (with defaults) + job-specific overrides + derived running status
 - **Update**: updates name if provided, then upserts property overrides
-- **Delete**: cascades — explicitly deletes chat sessions and task records, then deletes the job (which cascades to `task_properties`)
+- **Delete**: cascades — explicitly deletes chat sessions and task records, then deletes the job (which cascades to `job_properties`)
 - **List**: fetches all jobs, batch-queries running status to avoid N+1, sorts by `sort_order`
 
 ## Relationship to Other Systems
 
 - [Dispatch Engine](dispatch-engine.md) reads job properties at dispatch time to determine model, timeout, tools, and approval requirements
-- [Trigger System](trigger-system.md) reads `subscriptions`, `schedule`, `depends_on`, and `coalesce_dispatches` to determine when and how to enqueue tasks
+- [Trigger System](trigger-system.md) reads `subscriptions`, `schedule`, `depends_on`, and `coalesce_tasks` to determine when and how to enqueue tasks
 - [Prompt Assembly](prompt-assembly.md) reads `instructions`, `description`, and `subscriptions` to build the agent's prompt
 - [Tool Mediation](tool-mediation.md) uses `allowed_tools` and `mcp_servers` to compose each job's tool surface at dispatch time
 - The job registry (manifest) is built from all jobs' names, descriptions, and subscriptions — injected into every task prompt so agents know their neighbors

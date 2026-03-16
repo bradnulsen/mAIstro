@@ -14,7 +14,7 @@ The worker maintains an in-memory subscriber registry: `_subscribers` maps task 
 
 ### SSE Transport
 
-`GET /api/dispatch/{dispatch_id}/stream` returns an `EventSourceResponse` (via `sse-starlette`). The stream translates platform events to SSE event types:
+`GET /api/dispatch/{task_id}/stream` returns an `EventSourceResponse` (via `sse-starlette`). The stream translates platform events to SSE event types:
 
 | Platform event | SSE event type | Data |
 |---------------|----------------|------|
@@ -31,7 +31,7 @@ If the task is already completed when the stream endpoint is hit, it returns an 
 
 ### Stored Output
 
-`GET /api/dispatch/{dispatch_id}/output` returns the durable record: all chat messages for the task's session plus the task metadata. This is the cold path — used for viewing past tasks or reconnecting after the live stream ended.
+`GET /api/dispatch/{task_id}/output` returns the durable record: all chat messages for the task's session plus the task metadata. This is the cold path — used for viewing past tasks or reconnecting after the live stream ended.
 
 ## Chat Streaming
 
@@ -59,12 +59,12 @@ The background task (`_run_cli`) runs independently of the SSE stream. If the cl
 
 ## Chat Sessions
 
-Every task creates a linked chat session (`chat_sessions` table). Standalone chat conversations also create sessions, but without a `dispatch_id` link.
+Every task creates a linked chat session (`chat_sessions` table). Standalone chat conversations also create sessions, but without a task link.
 
 Session data:
 - `id`: UUID
-- `task_id`: which job (if task-linked)
-- `dispatch_id`: which task (if task-linked)
+- `job_id`: which job (if task-linked)
+- `task_id`: which task record (if task-linked)
 - `title`: display name (job name + task ID, or first message for standalone)
 - `cli_session_id`: Claude CLI's session identifier, captured from stream events — enables resume
 

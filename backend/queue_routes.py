@@ -7,7 +7,7 @@ editing, merge/split, and queue settings.
 import asyncio
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -38,33 +38,17 @@ class MergeRequest(BaseModel):
 class RateRequest(BaseModel):
     rating: str | None = None
 
+class McpEventRequest(BaseModel):
+    tool: str
+    input: dict
+    result: str
+    timestamp: str
+
 class QueueSettingsRequest(BaseModel):
     auto_dispatch: bool = False
 
 
 # ── Task Routes ────────────────────────────────────────────
-
-@router.post("/api/tasks/{job_id}")
-async def enqueue_job(job_id: str, req: DispatchRequest | None = None):
-    """Enqueue a task for a job. The worker processes it."""
-    require_project()
-    job = await db.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    if job["properties"].get("running"):
-        raise HTTPException(409, "Job is already running")
-
-    user_context = req.context if req else None
-    head = git.head_hash(state.PROJECT_DIR)
-    ref = f" @ `{head[:8]}`" if head else ""
-    if user_context:
-        context = f"**Manual**{ref}: {user_context}"
-    else:
-        context = f"**Manual**{ref}"
-    task_id = await db.enqueue_task(job_id, "manual", trigger_detail=head, context=context)
-    worker.notify()
-    return {"task_id": task_id}
-
 
 @router.get("/api/tasks/queue")
 async def get_task_queue():
@@ -343,3 +327,42 @@ async def queue_process_one(task_id: int):
     if task is None:
         raise HTTPException(404, "Task not found or not pending")
     return {"processed": [task["id"]]}
+
+
+@router.post("/api/tasks/mcp-event")
+async def log_mcp_event(req: McpEventRequest, x_session_id: str = Header(None)):
+    """Log an MCP tool invocation to the task's chat session audit trail."""
+    if not x_session_id:
+        return {"status": "ignored"}
+    raw = json.dumps({
+        "tool": req.tool,
+        "input": req.input,
+        "result": req.result,
+        "timestamp": req.timestamp,
+    })
+    await db.add_chat_event(x_session_id, "mcp_tool_use", raw)
+    return {"status": "ok"}
+
+
+# ── Enqueue (must be last — {job_id} is str and would match static paths) ──
+
+@router.post("/api/tasks/{job_id}")
+async def enqueue_job(job_id: str, req: DispatchRequest | None = None):
+    """Enqueue a task for a job. The worker processes it."""
+    require_project()
+    job = await db.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["properties"].get("running"):
+        raise HTTPException(409, "Job is already running")
+
+    user_context = req.context if req else None
+    head = git.head_hash(state.PROJECT_DIR)
+    ref = f" @ `{head[:8]}`" if head else ""
+    if user_context:
+        context = f"**Manual**{ref}: {user_context}"
+    else:
+        context = f"**Manual**{ref}"
+    task_id = await db.enqueue_task(job_id, "manual", trigger_detail=head, context=context)
+    worker.notify()
+    return {"task_id": task_id}

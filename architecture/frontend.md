@@ -8,7 +8,7 @@ The frontend is a single-page React application that provides the operator inter
 
 `App.jsx` provides the outer layout:
 
-- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, Settings
+- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, MCP Servers, Settings
 - **Status bar**: horizontal strip showing all jobs with running indicators (pulsing dot for active tasks)
 - **Main area**: renders the active view
 - **Chat tray**: a resizable side panel (drag-to-resize, click-to-toggle) housing the interactive chat
@@ -35,8 +35,11 @@ The primary configuration and dispatch surface. Job configuration: create, edit,
 ### Files
 A project file browser providing read-only access to project content. The user searches for files by glob pattern and views their contents inline. Markdown files render as formatted documents; code files render with syntax highlighting. This view enables direct inspection of project files without leaving the application or switching to an external editor.
 
+### MCP Servers
+A dedicated surface for managing external tool servers. MCP servers extend what agents can do — they are a primary capability concern, not a secondary platform setting. The view manages the global server registry: registration, health monitoring, enable/disable, and removal. Per-job server assignment remains on the Jobs configuration surface. See [Tool Mediation — External MCP Servers](tool-mediation.md#external-mcp-servers) for lifecycle details.
+
 ### Settings (`Settings.jsx`)
-Queue settings (auto-dispatch toggle), MCP server management, and global configuration.
+Platform configuration: queue processing mode (auto-dispatch toggle), default model, default timeout.
 
 ### Chat (`Chat.jsx`)
 Interactive conversation interface in the side tray. Manages chat sessions, displays message history, and streams responses via SSE.

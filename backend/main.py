@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("maistro")
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -82,12 +82,6 @@ class UpdateMcpServerRequest(BaseModel):
 
 class ConfigRequest(BaseModel):
     value: str
-
-class McpEventRequest(BaseModel):
-    tool: str
-    input: dict
-    result: str
-    timestamp: str
 
 
 # ── System Routes ───────────────────────────────────────────
@@ -392,23 +386,6 @@ async def delete_mcp_server(name: str):
     require_project()
     await db.delete_mcp_server(name)
     return {"status": "deleted"}
-
-
-# ── MCP Tool Event Route ────────────────────────────────────
-
-@app.post("/api/tasks/mcp-event")
-async def log_mcp_event(req: McpEventRequest, x_session_id: str = Header(None)):
-    """Log an MCP tool invocation to the task's chat session audit trail."""
-    if not x_session_id:
-        return {"status": "ignored"}
-    raw = json.dumps({
-        "tool": req.tool,
-        "input": req.input,
-        "result": req.result,
-        "timestamp": req.timestamp,
-    })
-    await db.add_chat_event(x_session_id, "mcp_tool_use", raw)
-    return {"status": "ok"}
 
 
 # ── Files Routes ─────────────────────────────────────────────

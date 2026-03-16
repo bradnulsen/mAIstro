@@ -172,8 +172,11 @@ for row in old.execute("SELECT * FROM task_properties"):
         key = "coalesce_tasks"
     if key in ("base_tools", "disallowed_tools", "cooldown_seconds"):
         continue
+    value = row["value"]
+    if key in ("coalesce_tasks", "require_approval"):
+        value = value.lower()
     new.execute("INSERT OR IGNORE INTO job_properties VALUES (?, ?, ?)",
-                (row["task_id"], key, row["value"]))
+                (row["task_id"], key, value))
 print(f"  {new.execute('SELECT count(*) FROM job_properties').fetchone()[0]} properties")
 
 # 4. tasks <- dispatch_queue (atomize: extract trigger/context from triggers JSON)

@@ -70,7 +70,7 @@ The platform makes the full tool inventory visible and selectable so users confi
 Three tool sources, each with a discovery mechanism:
 
 - **Built-in CLI tools** — the platform maintains a canonical set of CLI tool names (`CLI_NATIVE_TOOLS` in `cli.py`). These are the tools that `allowed_tools` selects from. The configuration surface presents them as a selectable inventory — the user picks from what exists rather than typing free-text names.
-- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_tasks`). They are always available during dispatch and not subject to per-job selection. Their presence is informational — the user can see them but does not need to configure them.
+- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_jobs`). They are always available during dispatch and not subject to per-job selection. Their presence is informational — the user can see them but does not need to configure them.
 - **External MCP server tools** — when a registered external server is connected, the platform can discover its tool list via the MCP protocol. Discovered tools become visible alongside built-in tools in the per-job configuration surface.
 
 The configuration surfaces for `allowed_tools` and `mcp_servers` present selectable options drawn from these inventories. Users select from what exists; they do not enter arbitrary text that may not correspond to real tools.
@@ -92,11 +92,11 @@ External MCP servers extend the tool surface beyond built-in CLI and internal pl
 ### Internal vs External
 
 - **Internal**: hosted by the platform process, context-aware, policy-governed, audit-logged. Provides git operations and project context tools. Always connected — not subject to per-job configuration.
-- **External**: registered globally in Settings (`mcp_servers` table), opaque to the platform — it connects agents to them but does not mediate their tool calls.
+- **External**: registered globally in the MCP Servers view (`mcp_servers` table), opaque to the platform — it connects agents to them but does not mediate their tool calls.
 
 ### Lifecycle
 
-**Registration** — external servers are registered at the platform level (Settings). Each registration specifies: server name (primary key), command to launch, command arguments, and environment variables. A registered server can be enabled or disabled globally — disabled servers are unavailable to any job regardless of per-job configuration.
+**Registration** — external servers are registered at the platform level via the dedicated MCP Servers view. Each registration specifies: server name (primary key), command to launch, and command arguments. A registered server can be enabled or disabled globally — disabled servers are unavailable to any job regardless of per-job configuration.
 
 **Connection and Discovery** — the platform discovers external server capabilities through ephemeral probes. A probe spawns the server process, performs the MCP initialize/tools/list handshake over stdio, extracts the tool names, and terminates the process. This is a short-lived, stateless interaction — no persistent connection is maintained outside of dispatch.
 
@@ -104,7 +104,7 @@ External MCP servers extend the tool surface beyond built-in CLI and internal pl
 
 Probing serves two purposes:
 - **Inventory enrichment** — the tool inventory endpoint probes all enabled servers in parallel and includes their discovered tools alongside CLI native and internal MCP tools. This gives the configuration surface a complete picture of what tools exist across all sources.
-- **Health checking** — each probe returns a status (`ok`, `error`, or `disabled`) and, on failure, an error message. The frontend surfaces server health so the user knows which servers are reachable before assigning them to jobs.
+- **Health checking** — each probe returns a status (`ok`, `error`, or `disabled`) and, on failure, an error message. The MCP Servers view surfaces server health so the user knows which servers are reachable before assigning them to jobs.
 
 Probes are on-demand — triggered by the inventory endpoint or by a dedicated per-server probe endpoint (`GET /api/mcp/servers/{name}/tools`). There is no background polling or persistent health monitoring. The probe timeout (10 seconds) bounds how long a misbehaving server can block the response.
 
@@ -120,4 +120,5 @@ If a server cannot be reached or fails the handshake, the platform reports the f
 - [Dispatch Engine](dispatch-engine.md) configures the server instance per-task based on job properties
 - [Streaming and Sessions](streaming-and-sessions.md) stores tool invocation events as part of the audit trail
 - [Job Configuration](job-configuration.md) provides the properties that shape each job's tool surface
+- [Frontend](frontend.md) provides the MCP Servers view for registration and health management
 - [Storage](storage.md) holds `mcp_servers` table for external server registrations

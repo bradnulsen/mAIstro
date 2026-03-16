@@ -8,7 +8,7 @@ The trigger system determines when and why tasks are created. Six trigger types 
 
 The user explicitly dispatches a job via the API. Always creates a new task — never coalesces. Bypasses approval gates. Context includes the HEAD commit hash and any user-provided notes.
 
-**Entry point**: `POST /api/dispatch/{task_id}` → `queue_routes.py`
+**Entry point**: `POST /api/dispatch/{job_id}` → `queue_routes.py`
 
 ### Commit (Watch)
 
@@ -39,7 +39,7 @@ A background scheduler evaluates cron expressions. When a job's schedule fires, 
 
 **Coalescing**: always coalesces globally — any pending task for the same job absorbs the new trigger. Repeated cron fires while a task is pending produce one run, not many.
 
-**Persistence**: last-fire timestamps are stored in the `config` table (key: `schedule_last_fire_{task_id}`), surviving process restarts.
+**Persistence**: last-fire timestamps are stored in the `config` table (key: `schedule_last_fire_{job_id}`), surviving process restarts.
 
 ### Dependency
 
@@ -59,35 +59,35 @@ When a job's task completes successfully, the worker scans for jobs that declare
 
 Continues a previous task using the CLI's session resume capability. Creates a new task record with `resume_session_id`. Never coalesces — each resume is distinct intent.
 
-**Entry point**: `POST /api/dispatch/{dispatch_id}/resume`
+**Entry point**: `POST /api/dispatch/{task_id}/resume`
 
 ### Retry
 
 Re-enqueues a failed or timed-out task. Unlike resume, retry resurrects the original record in-place — resets lifecycle fields, appends a retry trigger to the history, resets `created_at` so it doesn't jump ahead in the queue. Never coalesces.
 
-**Entry point**: `POST /api/dispatch/{dispatch_id}/retry`
+**Entry point**: `POST /api/dispatch/{task_id}/retry`
 
 ## Coalescing
 
-Coalescing prevents redundant pending tasks. The mechanism is unified in `enqueue_dispatch()`:
+Coalescing prevents redundant pending tasks. The mechanism is unified in `enqueue_task()`:
 
 1. Determine coalescing mode:
    - `schedule` trigger → coalesce globally (any pending task for the job)
-   - `coalesce_dispatches=true` on the job → coalesce globally regardless of trigger type
+   - `coalesce_tasks=true` on the job → coalesce globally regardless of trigger type
    - `commit` or `dependency` trigger → coalesce with same-type pending tasks
    - All others → no coalescing
 
-2. If coalescing: query for an existing pending task (not started, no error). If found, append the new trigger entry to its `triggers` JSON array and return the existing task ID.
+2. If coalescing: query for an existing pending task (not started, no error). If found, the new trigger is absorbed and the existing task ID is returned.
 
 3. If not coalescing (or no compatible pending task found): insert a new record.
 
-The `triggers` column accumulates all trigger entries that contributed to a task. Each entry has `trigger` (type), `detail` (reference), and `context` (pre-formatted string built at the enqueue site). Context is immutable once written — it captures the state at trigger time, not execution time.
+The `context` column stores pre-formatted text built at the enqueue site. Context is immutable once written — it captures the state at trigger time, not execution time.
 
 ### Coalesced ID Mechanism
 
-Automatic coalescing can use the same `coalesced_id` mechanism as manual merge (see [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition)). Instead of appending a trigger entry to an existing task's JSON array, the system creates a new atomic task record with `coalesced_id` pointing to the existing pending task. Both approaches achieve the same result — one execution that addresses multiple triggers — but the coalesced_id approach preserves each trigger as a first-class record.
+Automatic coalescing can use the same `coalesced_id` mechanism as manual merge (see [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition)). Instead of modifying an existing task's record, the system creates a new atomic task record with `coalesced_id` pointing to the existing pending task. Both approaches achieve the same result — one execution that addresses multiple triggers — but the coalesced_id approach preserves each trigger as a first-class record.
 
-The queue-level view filters on `coalesced_id IS NULL`, so subordinate tasks are invisible in the queue. At dispatch time, the worker collects all tasks linked to the root and unifies their trigger context.
+The queue-level view filters on `coalesced_id IS NULL`, so subordinate tasks are invisible in the queue. At dispatch time, the worker collects all tasks linked to the root and unifies their context.
 
 ## Manual Queue Composition
 
@@ -95,7 +95,7 @@ Two user-initiated operations complement automatic coalescing — merge and spli
 
 ### Merge
 
-Combines two or more pending tasks for the same job. The oldest task becomes the root; all others get `coalesced_id` set to the root's dispatch ID. Trigger history is preserved — no entries are lost or rewritten.
+Combines two or more pending tasks for the same job. The oldest task becomes the root; all others get `coalesced_id` set to the root's task ID. Trigger history is preserved — no entries are lost or rewritten.
 
 Constraints: pending tasks only, same job only. Cross-job merge would violate the one-task-one-job invariant.
 
@@ -121,6 +121,6 @@ A job can use subscriptions purely for context (by gating automatic triggers wit
 ## Relationship to Other Systems
 
 - [Dispatch Engine](dispatch-engine.md) processes the task records that triggers create
-- [Job Configuration](job-configuration.md) provides the properties that control trigger behavior (subscriptions, schedule, depends_on, coalesce_dispatches, require_approval)
+- [Job Configuration](job-configuration.md) provides the properties that control trigger behavior (subscriptions, schedule, depends_on, coalesce_tasks, require_approval)
 - [Git Integration](git-integration.md) provides the post-commit hook and changed file detection
 - [Prompt Assembly](prompt-assembly.md) consumes trigger context for the "why you're running" section

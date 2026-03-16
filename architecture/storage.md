@@ -8,7 +8,7 @@ Two SQLite databases serve distinct scopes: one per-project for operational stat
 **Access**: Async via `aiosqlite` — single persistent connection, reused across the process lifetime
 **Module**: `backend/database.py`
 
-The project database holds all operational state for a single project: job definitions, task records (dispatch queue), chat sessions, chat messages, raw CLI events, MCP server configs, and key-value configuration.
+The project database holds all operational state for a single project: job definitions, task records, chat sessions, chat messages, raw CLI events, MCP server configs, and key-value configuration.
 
 ### Connection Management
 
@@ -24,38 +24,38 @@ Seven tables:
 
 | Table | Purpose |
 |-------|---------|
-| `tasks` | Job identity (id, name, created_at) |
-| `task_property_defs` | EAV registry — defines property keys, default values, and types |
-| `task_properties` | EAV overrides — per-job property values |
-| `dispatch_queue` | Every task record with full lifecycle columns |
-| `chat_sessions` | Session metadata, links tasks to their output |
+| `jobs` | Job identity (id, name, created_at) |
+| `job_property_defs` | EAV registry — defines property keys, default values, and types |
+| `job_properties` | EAV overrides — per-job property values |
+| `tasks` | Every task record with full lifecycle columns |
+| `chat_sessions` | Session metadata, links jobs and tasks to their output |
 | `chat_messages` | Durable chat messages (role + content) |
 | `chat_events` | Raw NDJSON audit trail per session |
 | `mcp_servers` | External tool server registrations |
 | `config` | Key-value configuration store |
 
-Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent, no migration framework. The seed SQL populates `task_property_defs` with core property definitions and sets default config values.
+Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent, no migration framework. The seed SQL populates `job_property_defs` with core property definitions and sets default config values.
 
 ### Entity-Attribute-Value Property System
 
-Job properties use EAV rather than columns. `task_property_defs` defines the universe of property keys with a default value and a type (`string`, `json`, `integer`, `boolean`). `task_properties` holds per-job overrides.
+Job properties use EAV rather than columns. `job_property_defs` defines the universe of property keys with a default value and a type (`string`, `json`, `integer`, `boolean`). `job_properties` holds per-job overrides.
 
-On read, `get_task()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
+On read, `get_job()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
 
 This design means adding a new property requires only a seed SQL insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
-### Dispatch Queue Extensions
+### Task Table Extensions
 
-Two columns extend the `dispatch_queue` table beyond the core lifecycle:
+Two columns extend the `tasks` table beyond the core lifecycle:
 
 - **`rating`** — nullable binary signal (positive/negative) set by the user on completed tasks. Defaults to null (unrated). Stored directly on the task record for efficient query and display.
-- **`coalesced_id`** — nullable foreign key referencing another `dispatch_queue` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a dispatch ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
+- **`coalesced_id`** — nullable foreign key referencing another `tasks` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a task ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
 
 ### Key Invariants
 
-- The `dispatch_queue.triggers` column stores a JSON array of trigger entries, parsed on every read via `_parse_dispatch_row()`
-- Foreign keys with `ON DELETE CASCADE` handle `task_properties` cleanup; `chat_sessions` and `dispatch_queue` are explicitly deleted in `delete_task()` because they reference `tasks` but need cleanup before the cascade fires
-- The `running` status is derived at query time from `dispatch_queue` (started but not completed), never stored as a property
+- The `tasks.context` column stores pre-formatted context text built at the enqueue site
+- Foreign keys with `ON DELETE CASCADE` handle `job_properties` cleanup; `chat_sessions` and `tasks` are explicitly deleted in `delete_job()` because they reference `jobs` but need cleanup before the cascade fires
+- The `running` status is derived at query time from `tasks` (started but not completed), never stored as a property
 - Tasks with non-null `coalesced_id` are invisible in queue listings but included when their root task is dispatched or acted upon
 
 ## Application Database
