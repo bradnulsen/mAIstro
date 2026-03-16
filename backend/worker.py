@@ -293,7 +293,10 @@ async def _process_dispatch(dispatch: dict):
             log.info("[worker] Dispatch #%d completed (commit=%s)", dispatch_id, head[:8])
 
             # Trigger dependent tasks
-            await _enqueue_dependents(task_id, dispatch_id)
+            await _enqueue_dependents(task_id, dispatch_id,
+                                      task_name=task["name"],
+                                      start_commit=start_commit,
+                                      result_commit=head)
 
     except Exception as e:
         log.exception("[worker] Dispatch #%d failed: %s", dispatch_id, e)
@@ -318,17 +321,14 @@ async def _process_dispatch(dispatch: dict):
         _cancel_event = None
 
 
-async def _enqueue_dependents(completed_task_id: str, dispatch_id: int):
+async def _enqueue_dependents(completed_task_id: str, dispatch_id: int,
+                              task_name: str | None = None,
+                              start_commit: str | None = None,
+                              result_commit: str | None = None):
     """Enqueue tasks that declare a dependency on the completed task."""
     all_tasks = await db.list_tasks()
 
-    # upstream task is already in all_tasks — no separate get_task() needed
-    upstream_task = next((t for t in all_tasks if t["id"] == completed_task_id), None)
-    upstream_name = upstream_task["name"] if upstream_task else completed_task_id
-
-    upstream_dispatch = await db.get_dispatch(dispatch_id)
-    result_commit = upstream_dispatch.get("result_commit") if upstream_dispatch else None
-    start_commit = upstream_dispatch.get("start_commit") if upstream_dispatch else None
+    upstream_name = task_name or completed_task_id
 
     # Resolve commit summary once — shared across all dependents
     commit_context = ""

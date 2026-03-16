@@ -344,8 +344,13 @@ async def enqueue_dispatch(task_id: str, trigger: str,
     new_entry = {"trigger": trigger, "detail": trigger_detail, "context": context}
     db = await get_db()
 
-    task = await get_task(task_id)
-    coalesce_global = (trigger == "schedule") or (task and task["properties"].get("coalesce_dispatches"))
+    # Fetch only the two properties needed — avoids a full get_task() load (all props + running check)
+    prop_rows = await db.execute_fetchall(
+        "SELECT key, value FROM task_properties WHERE task_id = ? AND key IN ('coalesce_dispatches', 'require_approval')",
+        (task_id,)
+    )
+    task_props = {r["key"]: r["value"] for r in prop_rows}
+    coalesce_global = (trigger == "schedule") or (task_props.get("coalesce_dispatches") == "true")
     coalesce_same_type = trigger in ("commit", "dependency")
 
     if coalesce_global or coalesce_same_type:
@@ -374,7 +379,7 @@ async def enqueue_dispatch(task_id: str, trigger: str,
 
     # Approval gate: manual dispatches bypass (explicit intent), others check task property
     approval = None
-    if trigger != "manual" and task and task["properties"].get("require_approval"):
+    if trigger != "manual" and task_props.get("require_approval") == "true":
         approval = "pending"
 
     cursor = await db.execute(
