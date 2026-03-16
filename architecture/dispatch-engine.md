@@ -38,8 +38,8 @@ The worker is a single `asyncio.Task` running a poll loop. It wakes on notificat
 
 The queue operates in two modes controlled by the `queue_auto_dispatch` config:
 
-- **Auto-processing** (`true`): the worker loop continuously pulls the oldest pending task and processes it
-- **Manual** (`false`): the loop runs but skips processing. Tasks execute only when explicitly triggered via `process_next()`, `process_one()`, or `process_all()`
+- **Auto-processing** (`true`): the worker loop continuously pulls the oldest pending task and processes it in order
+- **Paused** (`false`): tasks accumulate as pending. The user reorders them via drag-to-reorder in the Dispatch view, then toggles auto-processing when ready
 
 ### Sequential Execution
 
@@ -81,7 +81,7 @@ Approval and rejection are API operations:
 - **Approve**: sets `approval='approved'`, wakes the worker
 - **Reject**: sets `approval='rejected'`, marks as completed with error "rejected"
 
-Manual processing via `process_one()` auto-approves pending-approval tasks (explicit intent, same rationale as manual dispatch).
+Processing a specific task via `process_one()` auto-approves pending-approval tasks (explicit intent, same rationale as manual dispatch).
 
 ## Commit Tracking (No Auto-Commit)
 

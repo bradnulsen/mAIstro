@@ -18,7 +18,7 @@ The app polls job status every 5 seconds to keep the status bar current.
 ## Views
 
 ### Dispatch (`Queue.jsx`)
-The primary operational view. Shows pending, active, and completed tasks. Provides controls for cancelling, approving/rejecting, resuming, and retrying tasks. In manual queue mode, provides processing controls to advance the queue. Drag-to-reorder pending tasks to control execution priority. Displays task output with streaming text, tool use events, and diff views.
+The primary operational view. Shows pending, active, and completed tasks. Provides controls for cancelling, approving/rejecting, resuming, and retrying tasks. Drag-to-reorder pending tasks to control execution priority. Displays task output with streaming text, tool use events, and diff views.
 
 ### Activity Feed (`Feed.jsx`)
 Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked job and trigger type.
