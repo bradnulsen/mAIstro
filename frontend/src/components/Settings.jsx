@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getProject, getConfig, setConfig, getQueueSettings, setQueueSettings } from '../api'
 import HelpTip from './HelpTip'
-import McpServers from './McpServers'
 
 const TIPS = {
   autoDispatch: 'When enabled, the background worker automatically pulls and executes pending tasks in order. When disabled (paused), tasks accumulate as pending. Reorder them via drag-and-drop in the Dispatch view, then toggle auto-processing when ready.',
@@ -139,8 +138,6 @@ export default function Settings() {
         </div>
 
       </div>
-
-      <McpServers />
     </div>
   )
 }

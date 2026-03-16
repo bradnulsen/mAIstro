@@ -6,8 +6,9 @@ import Queue from './components/Queue'
 import Chat from './components/Chat'
 import Files from './components/Files'
 import Settings from './components/Settings'
+import McpServers from './components/McpServers'
 
-const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', settings: 'settings' }
+const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', mcp: 'mcp', settings: 'settings' }
 
 export default function App() {
   const [project, setProject] = useState(null)
@@ -96,6 +97,11 @@ export default function App() {
           onClick={() => setView(VIEWS.files)}
           title="Files"
         >&#9783;</button>
+        <button
+          className={`rail-icon ${view === VIEWS.mcp ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.mcp)}
+          title="MCP Servers"
+        >⧈</button>
         <div className="rail-spacer" />
         <button
           className={`rail-icon ${view === VIEWS.settings ? 'active' : ''}`}
@@ -127,6 +133,7 @@ export default function App() {
         {view === VIEWS.tasks && <Tasks jobs={jobs} onRefresh={refreshJobs} onNavigate={setView} />}
         {view === VIEWS.queue && <Queue />}
         {view === VIEWS.files && <Files />}
+        {view === VIEWS.mcp && <McpServers />}
         {view === VIEWS.settings && <Settings />}
       </div>
 
