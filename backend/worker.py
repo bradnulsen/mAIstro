@@ -326,7 +326,9 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int,
                               start_commit: str | None = None,
                               result_commit: str | None = None):
     """Enqueue tasks that declare a dependency on the completed task."""
-    all_tasks = await db.list_tasks()
+    dependent_tasks = await db.get_tasks_depending_on(completed_task_id)
+    if not dependent_tasks:
+        return
 
     upstream_name = task_name or completed_task_id
 
@@ -338,18 +340,16 @@ async def _enqueue_dependents(completed_task_id: str, dispatch_id: int,
         if start_commit and start_commit != result_commit:
             commit_context += f"\n  Upstream commit range: `{start_commit[:8]}..{result_commit[:8]}`"
 
-    for task in all_tasks:
-        deps = task["properties"].get("depends_on") or []
-        if completed_task_id in deps:
-            context = f"**Dependency** — triggered by completion of {upstream_name} (dispatch #{dispatch_id}){commit_context}"
+    for task in dependent_tasks:
+        context = f"**Dependency** — triggered by completion of {upstream_name} (dispatch #{dispatch_id}){commit_context}"
 
-            dep_id = await db.enqueue_dispatch(
-                task["id"], "dependency",
-                trigger_detail=completed_task_id,
-                context=context,
-            )
-            log.info("[worker] Dependency trigger: enqueued #%d for '%s' (upstream: '%s' #%d)",
-                     dep_id, task["id"], completed_task_id, dispatch_id)
-            notify()
+        dep_id = await db.enqueue_dispatch(
+            task["id"], "dependency",
+            trigger_detail=completed_task_id,
+            context=context,
+        )
+        log.info("[worker] Dependency trigger: enqueued #%d for '%s' (upstream: '%s' #%d)",
+                 dep_id, task["id"], completed_task_id, dispatch_id)
+        notify()
 
 

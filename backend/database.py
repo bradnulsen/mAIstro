@@ -285,8 +285,8 @@ async def list_tasks() -> list[dict]:
 
 async def update_task(task_id: str, updates: dict) -> dict | None:
     db = await get_db()
-    existing = await get_task(task_id)
-    if not existing:
+    row = await db.execute_fetchall("SELECT 1 FROM tasks WHERE id = ?", (task_id,))
+    if not row:
         return None
 
     if "name" in updates:
@@ -321,6 +321,31 @@ async def delete_task(task_id: str) -> bool:
     cursor = await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     await db.commit()
     return cursor.rowcount > 0
+
+
+async def get_tasks_depending_on(task_id: str) -> list[dict]:
+    """Return tasks whose depends_on property includes task_id.
+
+    Uses a LIKE pre-filter on the JSON text to avoid loading every task.
+    JSON array serialization guarantees task IDs appear as quoted strings, so
+    the pattern ``%"<id>"%`` won't match partial IDs.
+    """
+    conn = await get_db()
+    rows = await conn.execute_fetchall(
+        'SELECT task_id FROM task_properties WHERE key = "depends_on" AND value LIKE ?',
+        (f'%"{task_id}"%',)
+    )
+    if not rows:
+        return []
+    tasks = []
+    for r in rows:
+        t = await get_task(r["task_id"])
+        if t:
+            # Verify the parsed array actually contains task_id (guards against
+            # substring false-positives in the LIKE pre-filter)
+            if task_id in (t["properties"].get("depends_on") or []):
+                tasks.append(t)
+    return tasks
 
 
 # ── Dispatch Queue ──────────────────────────────────────────

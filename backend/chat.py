@@ -67,9 +67,9 @@ async def _build_chat_context() -> str:
         task_lines.append(f"- **{t['name']}** [{watch}, {status}] — {desc}")
     task_summary = "\n".join(task_lines) if task_lines else "(no tasks configured)"
 
-    queue = await db.get_dispatch_queue()
+    queue = await db.get_dispatch_queue(limit=10)
     dispatch_lines = []
-    for d in (queue or [])[:10]:
+    for d in (queue or []):
         status = "error" if d.get("error") else "completed" if d.get("completed_at") else "running" if d.get("started_at") else "pending"
         dispatch_lines.append(f"- #{d['id']} {d.get('task_name', '?')} [{status}] {d.get('created_at', '')}")
     dispatch_summary = "\n".join(dispatch_lines) if dispatch_lines else "(no recent dispatches)"
@@ -122,6 +122,7 @@ async def chat(req: ChatRequest):
         full_response = []
         streaming_text = []
         new_cli_session_id = None
+        raw_event_buffer: list[tuple[str, str]] = []
         try:
             async for event in cli.invoke(
                 prompt=message,
@@ -132,11 +133,9 @@ async def chat(req: ChatRequest):
             ):
                 etype = event["type"]
 
-                # Store raw events to DB, don't push to SSE
+                # Buffer raw events — flush in batch at end (avoids per-event commits)
                 if etype == "_raw":
-                    await db.add_chat_event(
-                        session_id, event["event_type"], event["raw_json"]
-                    )
+                    raw_event_buffer.append((event["event_type"], event["raw_json"]))
                     continue
 
                 # assistant_complete: DB storage only, don't stream
@@ -156,6 +155,7 @@ async def chat(req: ChatRequest):
             await event_queue.put({"type": "error", "message": str(e)})
         finally:
             # Always save to DB — this runs even if client disconnected
+            await db.add_chat_events_batch(session_id, raw_event_buffer)
             # Prefer assistant_complete (authoritative), fall back to streamed deltas
             response_text = "".join(full_response) or "".join(streaming_text)
             if response_text:
