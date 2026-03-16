@@ -20,7 +20,7 @@ What's in place:
 - **Git feed** — commit diffs with file/line stats, live polling
 - **Project safety** — project switch blocked during active dispatch
 - **Internal MCP server** — platform-hosted, context-aware tool surface with git operations, file access, and task info as structured tools. Every tool call is observable and auditable
-- **Tool control** — per-task `base_tools`, `disallowed_tools`, and `mcp_servers` properties; external MCP server registration
+- **Tool control** — per-task `allowed_tools` and `mcp_servers` properties; external MCP server registration
 - **Files view** — project file browser with glob search, syntax highlighting, markdown rendering
 - **Contextual help** — hover tooltips on configuration fields explaining syntax and behavior
 
