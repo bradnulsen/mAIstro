@@ -73,5 +73,5 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 - Running state is derived from `dispatch_queue` (started_at IS NOT NULL AND completed_at IS NULL), not stored as a task property
 - Subscriptions serve dual purpose: trigger matching (watch) and context injection (all dispatches)
 - Trigger context is stored in the `dispatch_queue.triggers` JSON array (each entry has `trigger`, `detail`, `context`). Context strings are pre-formatted at the enqueue site
-- Queue can be auto-processing or manual — controlled via `/api/queue/settings` (auto_dispatch toggle)
+- Queue can be auto-processing or paused — controlled via `/api/queue/settings` (auto_dispatch toggle)
 - Backend port: 8420, Frontend port: 5173
