@@ -1416,6 +1416,31 @@ label.muted-text {
   margin-top: 4px;
 }
 
+.mcp-health-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.mcp-health-dot.healthy { background: var(--success, #4caf50); }
+.mcp-health-dot.unhealthy { background: var(--error, #f44336); }
+
+.mcp-server-tools {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  padding-left: 2px;
+}
+
+.mcp-server-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 /* Settings field with inline save button */
 .settings-save-row {
   display: flex;

@@ -152,6 +152,9 @@ export const updateMcpServer = (name, updates) =>
 export const deleteMcpServer = (name) =>
   fetchJSON(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' })
 
+export const probeMcpServer = (name) =>
+  fetchJSON(`/api/mcp/servers/${encodeURIComponent(name)}/tools`)
+
 // ── Files ──
 
 export const searchFiles = (pattern) =>

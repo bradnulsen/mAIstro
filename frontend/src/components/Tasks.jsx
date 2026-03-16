@@ -157,7 +157,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
   const [deleteError, setDeleteError] = useState('')
   const [activeTab, setActiveTab] = useState('definition')
   const [availableMcpServers, setAvailableMcpServers] = useState([])
-  const [toolInventory, setToolInventory] = useState({ cli_native: [], internal_mcp: [] })
+  const [toolInventory, setToolInventory] = useState({ cli_native: [], internal_mcp: [], external_servers: {} })
   const props = task.properties || {}
 
   const refreshSubs = useCallback(() => {
@@ -569,6 +569,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
 
           {(() => {
             const enabledServers = availableMcpServers.filter(s => s.enabled)
+            const extServers = toolInventory.external_servers || {}
             return enabledServers.length > 0 ? (
               <div className="field-group">
                 <div className="label-row">
@@ -579,18 +580,30 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                   {enabledServers.map(s => {
                     const selected = getVal('mcp_servers') || []
                     const checked = selected.includes(s.name)
+                    const probe = extServers[s.name]
                     return (
-                      <label key={s.name} className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            const next = checked ? selected.filter(n => n !== s.name) : [...selected, s.name]
-                            edit('mcp_servers', next)
-                          }}
-                        />
-                        {s.name}
-                      </label>
+                      <div key={s.name}>
+                        <label className="checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const next = checked ? selected.filter(n => n !== s.name) : [...selected, s.name]
+                              edit('mcp_servers', next)
+                            }}
+                          />
+                          {s.name}
+                          {probe && probe.status === 'ok' && (
+                            <span className="muted-text"> ({probe.tools.length} tools)</span>
+                          )}
+                          {probe && probe.status === 'error' && (
+                            <span className="error-text"> (unreachable)</span>
+                          )}
+                        </label>
+                        {checked && probe && probe.status === 'ok' && probe.tools.length > 0 && (
+                          <div className="mcp-server-tools">{probe.tools.join(', ')}</div>
+                        )}
+                      </div>
                     )
                   })}
                 </div>

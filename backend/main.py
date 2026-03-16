@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from backend import appstate, database as db, git, scheduler, worker
 from backend.chat import router as chat_router
 from backend.cli import CLI_NATIVE_TOOLS
+from backend.mcp_probe import probe_server
 from backend.queue_routes import router as queue_router
 from backend.task_routes import router as task_router
 from backend.dispatch import check_watch_triggers
@@ -314,11 +315,35 @@ INTERNAL_MCP_TOOLS = [
 
 @app.get("/api/tools/inventory")
 async def get_tool_inventory():
-    """Return the full tool inventory: CLI native tools and internal MCP tools."""
-    return {
+    """Return the full tool inventory: CLI native, internal MCP, and external server tools."""
+    result = {
         "cli_native": sorted(CLI_NATIVE_TOOLS),
         "internal_mcp": INTERNAL_MCP_TOOLS,
+        "external_servers": {},
     }
+
+    # Probe enabled external servers for their tool inventories (parallel)
+    if state.PROJECT_DIR:
+        import asyncio
+        servers = await db.list_mcp_servers()
+        enabled = [s for s in servers if s.get("enabled", True)]
+        disabled = [s for s in servers if not s.get("enabled", True)]
+
+        for s in disabled:
+            result["external_servers"][s["name"]] = {"status": "disabled", "tools": []}
+
+        if enabled:
+            probes = await asyncio.gather(*(
+                probe_server(
+                    s["command"],
+                    json.loads(s.get("args") or "[]"),
+                    json.loads(s.get("env") or "{}"),
+                ) for s in enabled
+            ))
+            for s, probe in zip(enabled, probes):
+                result["external_servers"][s["name"]] = probe
+
+    return result
 
 
 # ── MCP Server Routes ──────────────────────────────────────
@@ -347,6 +372,23 @@ async def update_mcp_server(name: str, req: UpdateMcpServerRequest):
     if req.enabled is not None:
         await db.update_mcp_server_enabled(name, req.enabled)
     return {"status": "updated"}
+
+
+@app.get("/api/mcp/servers/{name}/tools")
+async def probe_mcp_server(name: str):
+    """Probe an external MCP server and return its discovered tools and health."""
+    require_project()
+    servers = await db.list_mcp_servers()
+    server = next((s for s in servers if s["name"] == name), None)
+    if not server:
+        raise HTTPException(404, "Server not found")
+    if not server.get("enabled", True):
+        return {"status": "disabled", "tools": []}
+    return await probe_server(
+        server["command"],
+        json.loads(server.get("args") or "[]"),
+        json.loads(server.get("env") or "{}"),
+    )
 
 
 @app.delete("/api/mcp/servers/{name}")

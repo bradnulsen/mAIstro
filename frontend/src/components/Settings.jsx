@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   getProject, getConfig, setConfig, getQueueSettings, setQueueSettings,
-  listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer,
+  listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer, probeMcpServer,
 } from '../api'
 import HelpTip from './HelpTip'
 
@@ -29,6 +29,9 @@ export default function Settings() {
   const [mcpCommand, setMcpCommand] = useState('')
   const [mcpArgs, setMcpArgs] = useState('')
   const [mcpError, setMcpError] = useState('')
+
+  // MCP server probes: { [name]: { status, tools, error, loading } }
+  const [serverProbes, setServerProbes] = useState({})
 
   const load = useCallback(async () => {
     try {
@@ -97,7 +100,18 @@ export default function Settings() {
     await deleteMcpServer(name)
     const servers = await listMcpServers()
     setMcpServers(servers)
+    setServerProbes(prev => { const next = { ...prev }; delete next[name]; return next })
     flash('Server removed')
+  }
+
+  const handleProbeMcp = async (name) => {
+    setServerProbes(prev => ({ ...prev, [name]: { loading: true } }))
+    try {
+      const result = await probeMcpServer(name)
+      setServerProbes(prev => ({ ...prev, [name]: { ...result, loading: false } }))
+    } catch (e) {
+      setServerProbes(prev => ({ ...prev, [name]: { status: 'error', tools: [], error: e.message, loading: false } }))
+    }
   }
 
   if (loading) return <div className="loading">Loading settings...</div>
@@ -189,26 +203,50 @@ export default function Settings() {
           {mcpServers.length === 0 && (
             <div className="muted-text">No MCP servers configured</div>
           )}
-          {mcpServers.map(s => (
-            <div key={s.name} className={`mcp-server-item${s.enabled ? '' : ' disabled'}`}>
-              <div>
-                <input
-                  type="checkbox"
-                  checked={!!s.enabled}
-                  onChange={e => handleToggleMcp(s.name, e.target.checked)}
-                  title={s.enabled ? 'Enabled — available to jobs' : 'Disabled — unavailable to any job'}
-                  style={{ width: 'auto' }}
-                />
+          {mcpServers.map(s => {
+            const probe = serverProbes[s.name]
+            return (
+              <div key={s.name} className={`mcp-server-item${s.enabled ? '' : ' disabled'}`}>
                 <div>
-                  <div className="mcp-server-name">{s.name}</div>
-                  <div className="mcp-server-cmd">
-                    {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
+                  <input
+                    type="checkbox"
+                    checked={!!s.enabled}
+                    onChange={e => handleToggleMcp(s.name, e.target.checked)}
+                    title={s.enabled ? 'Enabled — available to jobs' : 'Disabled — unavailable to any job'}
+                    style={{ width: 'auto' }}
+                  />
+                  <div>
+                    <div className="mcp-server-name">
+                      {s.name}
+                      {probe && !probe.loading && (
+                        <span className={`mcp-health-dot ${probe.status === 'ok' ? 'healthy' : 'unhealthy'}`}
+                          title={probe.status === 'ok' ? `Healthy — ${probe.tools.length} tools` : probe.error || 'Unreachable'} />
+                      )}
+                    </div>
+                    <div className="mcp-server-cmd">
+                      {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
+                    </div>
+                    {probe && !probe.loading && probe.status === 'ok' && probe.tools.length > 0 && (
+                      <div className="mcp-server-tools">
+                        {probe.tools.join(', ')}
+                      </div>
+                    )}
+                    {probe && !probe.loading && probe.status === 'error' && (
+                      <div className="error-text mcp-server-tools">{probe.error}</div>
+                    )}
                   </div>
                 </div>
+                <div className="mcp-server-actions">
+                  {s.enabled ? (
+                    <button className="small" onClick={() => handleProbeMcp(s.name)} disabled={probe?.loading}>
+                      {probe?.loading ? '...' : 'Test'}
+                    </button>
+                  ) : null}
+                  <button className="small danger" onClick={() => handleDeleteMcp(s.name)}>Remove</button>
+                </div>
               </div>
-              <button className="small danger" onClick={() => handleDeleteMcp(s.name)}>Remove</button>
-            </div>
-          ))}
+            )
+          })}
           <div className="mcp-add-form">
             <div className="mcp-add-form-row">
               <div>
