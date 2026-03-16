@@ -314,11 +314,10 @@ async def update_task(task_id: str, updates: dict) -> dict | None:
 async def reorder_tasks(task_ids: list[str]):
     """Set sort_order for multiple tasks in a single transaction."""
     db = await get_db()
-    for i, task_id in enumerate(task_ids):
-        await db.execute(
-            "INSERT OR REPLACE INTO task_properties (task_id, key, value) VALUES (?, 'sort_order', ?)",
-            (task_id, str(i))
-        )
+    await db.executemany(
+        "INSERT OR REPLACE INTO task_properties (task_id, key, value) VALUES (?, 'sort_order', ?)",
+        [(task_id, str(i)) for i, task_id in enumerate(task_ids)],
+    )
     await db.commit()
 
 
@@ -518,11 +517,10 @@ async def update_dispatch(dispatch_id: int, **kwargs):
 async def reorder_dispatches(dispatch_ids: list[int]):
     """Set explicit sort_order on pending dispatches to control execution priority."""
     db = await get_db()
-    for i, did in enumerate(dispatch_ids):
-        await db.execute(
-            "UPDATE dispatch_queue SET sort_order = ? WHERE id = ? AND started_at IS NULL AND error IS NULL",
-            (i, did),
-        )
+    await db.executemany(
+        "UPDATE dispatch_queue SET sort_order = ? WHERE id = ? AND started_at IS NULL AND error IS NULL",
+        [(i, did) for i, did in enumerate(dispatch_ids)],
+    )
     await db.commit()
 
 
