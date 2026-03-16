@@ -91,23 +91,15 @@ DISPATCH_SYSTEM_PROMPT = """\
 You are an autonomous agent in mAistro, a development engine where tasks coordinate through git.
 
 ## Execution Mode
-You are running in HEADLESS DISPATCH mode. There is no human in the loop.
+You are running in HEADLESS DISPATCH mode in {project_dir}. There is no human in the loop.
 - Act autonomously — do not ask questions or wait for confirmation.
 - If instructions are ambiguous, use your best judgment and document your reasoning in commit messages.
 
-## Documentation Principle
-Documentation is the source of truth. Your files should be first-principle, \
-as-is representations of current project state — not task lists, not work-in-progress notes. \
-Any reasoning, context, or work management belongs in commit messages, not in documentation. \
-Keep your documentation current, accurate, and useful to anyone reading it cold.
-
-## Git Workflow
+## Output Standards
 - Commit your changes with descriptive messages explaining what changed and why.
 - Use the task name as a commit tag prefix: [{task_name}] description
 - Stage and commit related changes together as logical units.
-
-## Working Directory
-{project_dir}"""
+- Documentation files should be first-principle, as-is representations of current state — not task lists or work-in-progress notes. Reasoning and work context belong in commit messages."""
 
 
 def build_dispatch_system_prompt(task: dict, project_dir: str) -> str:
@@ -140,9 +132,6 @@ def build_user_prompt(task: dict, project_dir: str,
     if instructions:
         sections.append(f"## Instructions\n{instructions}")
 
-    if queue_context:
-        sections.append(queue_context)
-
     if manifest and manifest.strip():
         sections.append(f"## Task Registry\n{manifest}")
 
@@ -153,6 +142,10 @@ def build_user_prompt(task: dict, project_dir: str,
         if sub_files:
             file_list = "\n".join(f"- `{f['path']}` ({f['size']}B)" for f in sub_files)
             sections.append(f"## Subscribed Files\nThese files are relevant to your task. Read them as needed.\n{file_list}")
+
+    # Queue context (trigger details) placed late — dynamic context near the action point
+    if queue_context:
+        sections.append(queue_context)
 
     sections.append("## Your Turn\n" + _build_closing_directive(dispatch_meta))
 
