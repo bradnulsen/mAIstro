@@ -148,7 +148,6 @@ export default function Settings() {
                   type="checkbox"
                   checked={queueSettings.auto_dispatch}
                   onChange={e => handleAutoDispatch(e.target.checked)}
-                  style={{ width: 'auto' }}
                 />
                 Auto-dispatch queued items
               </label>
@@ -213,7 +212,6 @@ export default function Settings() {
                     checked={!!s.enabled}
                     onChange={e => handleToggleMcp(s.name, e.target.checked)}
                     title={s.enabled ? 'Enabled — available to jobs' : 'Disabled — unavailable to any job'}
-                    style={{ width: 'auto' }}
                   />
                   <div>
                     <div className="mcp-server-name">

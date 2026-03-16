@@ -234,6 +234,11 @@ textarea {
   min-height: 60px;
 }
 
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+}
+
 label {
   font-size: 11px;
   text-transform: uppercase;
@@ -280,6 +285,9 @@ label.muted-text {
 .feed-item.pending_approval {
   border-left: 2px solid var(--warning);
 }
+
+.feed-item.dragging { opacity: 0.4; }
+.feed-item.drag-over { border-top: 2px solid var(--accent); }
 
 .feed-avatar {
   width: 28px;
@@ -415,6 +423,9 @@ label.muted-text {
 .task-list-item.active .status-dot {
   box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.4);
 }
+
+.task-list-item.dragging { opacity: 0.4; }
+.task-list-item.drag-over { border-top: 2px solid var(--accent); }
 
 .task-search {
   padding: 6px 8px;
@@ -1177,6 +1188,11 @@ label.muted-text {
   color: var(--success);
 }
 
+.warning-text {
+  font-size: 11px;
+  color: var(--warning);
+}
+
 .muted-text {
   font-size: 11px;
   color: var(--text-muted);
@@ -1196,6 +1212,12 @@ label.muted-text {
 .action-row.compact {
   margin-top: 4px;
   gap: 4px;
+}
+
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .toolbar-divider {
@@ -1244,6 +1266,29 @@ label.muted-text {
 .scroll-area {
   flex: 1;
   overflow-y: auto;
+}
+
+/* ── Live Output (dispatch streaming) ── */
+
+.live-indicator {
+  margin-left: 6px;
+  color: var(--running);
+  font-size: 10px;
+  font-weight: normal;
+}
+
+.live-tools {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.live-connecting {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ── Detail Panel (Feed + Queue) ── */
@@ -1637,6 +1682,14 @@ label.muted-text {
   font-size: 11px;
 }
 
+.detail-duration {
+  margin-top: 2px;
+}
+
+.detail-duration.running {
+  color: var(--running);
+}
+
 .detail-scroll {
   flex: 1;
   overflow-y: auto;
@@ -1664,6 +1717,17 @@ label.muted-text {
   margin-right: 4px;
   margin-bottom: 2px;
   font-size: 10px;
+}
+
+/* ── Diff Stats Summary ── */
+
+.diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: normal;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 /* ── Diff File Row ── */

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Markdown from 'react-markdown'
 import {
   createTask, updateTask, deleteTask, getTaskSubscriptions,
-  dispatchTask, listMcpServers, getToolInventory,
+  dispatchTask, listMcpServers, getToolInventory, reorderTasks,
 } from '../api'
 import HelpTip from './HelpTip'
 
@@ -25,6 +25,8 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
   const [createError, setCreateError] = useState('')
   const [search, setSearch] = useState('')
   const searchRef = useRef(null)
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dragOverIdx, setDragOverIdx] = useState(null)
 
   const filteredTasks = tasks.filter(t => {
     if (!search.trim()) return true
@@ -42,6 +44,19 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
     ]
     return fields.some(f => f && f.toLowerCase().includes(q))
   })
+
+  const canDrag = !search.trim() // disable drag during search
+
+  const handleDragEnd = async () => {
+    if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
+      const ids = tasks.map(t => t.id)
+      const [moved] = ids.splice(dragIdx, 1)
+      ids.splice(dragOverIdx, 0, moved)
+      try { await reorderTasks(ids); await onRefresh() } catch {}
+    }
+    setDragIdx(null)
+    setDragOverIdx(null)
+  }
 
   useEffect(() => {
     if (!selected && tasks.length > 0) {
@@ -93,11 +108,15 @@ export default function Tasks({ tasks, onRefresh, onNavigate }) {
             {filteredTasks.length === 0 && search && (
               <div className="muted-text" style={{ padding: '12px' }}>No matches</div>
             )}
-            {filteredTasks.map(t => (
+            {filteredTasks.map((t, i) => (
               <div
                 key={t.id}
-                className={`task-list-item ${selected === t.id ? 'active' : ''}`}
+                className={`task-list-item ${selected === t.id ? 'active' : ''}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}${dragIdx === i ? ' dragging' : ''}`}
                 onClick={() => setSelected(t.id)}
+                draggable={canDrag}
+                onDragStart={e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }}
+                onDragOver={e => { e.preventDefault(); setDragOverIdx(i) }}
+                onDragEnd={handleDragEnd}
               >
                 <span className={`status-dot ${t.properties?.running ? 'running' : 'idle'}`} />
                 <span>{t.name}</span>
@@ -376,7 +395,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               <label>Timeout (seconds)</label>
               <HelpTip text={TIPS.timeout} />
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="field-row">
               <input
                 type="number"
                 value={getVal('timeout') ?? 900}
@@ -385,7 +404,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                 step={60}
                 style={{ width: 100 }}
               />
-              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              <span className="muted-text">
                 {(() => {
                   const v = getVal('timeout') ?? 900
                   if (v === 0) return 'no limit'
@@ -446,7 +465,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                 )
               })}
               {allTasks.length <= 1 && (
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>No other tasks to depend on</span>
+                <span className="muted-text">No other tasks to depend on</span>
               )}
             </div>
           </div>
@@ -456,7 +475,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
               <label>Schedule (cron)</label>
               <HelpTip text={TIPS.schedule} />
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="field-row">
               <input
                 type="text"
                 value={getVal('schedule') || ''}
@@ -465,7 +484,7 @@ function TaskDetail({ task, allTasks, onRefresh, onDelete, onNavigate }) {
                 style={{ flex: 1 }}
               />
               {getVal('schedule') && (
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                <span className="muted-text" style={{ whiteSpace: 'nowrap' }}>
                   {describeCron(getVal('schedule'))}
                 </span>
               )}

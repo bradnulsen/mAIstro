@@ -4,6 +4,7 @@ import {
   getDispatchQueue, cancelDispatch, updateDispatch, getDispatchOutput,
   getDispatchDiff, getQueueSettings, setQueueSettings, processOne,
   streamDispatch, resumeDispatch, retryDispatch, approveDispatch, rejectDispatch,
+  reorderDispatches,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
@@ -76,6 +77,8 @@ export default function Queue() {
 
   const [refreshing, setRefreshing] = useState(false)
   const detailScrollRef = useRef(null)
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dragOverIdx, setDragOverIdx] = useState(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -282,6 +285,18 @@ export default function Queue() {
     return () => document.removeEventListener('keydown', handleKey)
   }, [selected, confirmCancel, retryContext])
 
+  const handleDragEnd = async () => {
+    if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
+      // Only reorder the pending items (not running)
+      const pendingIds = filtered.filter(i => getStatus(i) !== 'running').map(i => i.id)
+      const [moved] = pendingIds.splice(dragIdx, 1)
+      pendingIds.splice(dragOverIdx, 0, moved)
+      try { await reorderDispatches(pendingIds); await refresh() } catch {}
+    }
+    setDragIdx(null)
+    setDragOverIdx(null)
+  }
+
   const anyRunning = items.some(i => getStatus(i) === 'running')
   const filtered = items.filter(item =>
     filter === 'upcoming' ? isUpcoming(item) : !isUpcoming(item)
@@ -289,7 +304,16 @@ export default function Queue() {
   if (filter === 'past') {
     filtered.sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
   } else {
-    filtered.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))
+    // Pending dispatches: sort_order first (null last), then created_at; running items stay at top
+    filtered.sort((a, b) => {
+      const aRunning = getStatus(a) === 'running' ? 0 : 1
+      const bRunning = getStatus(b) === 'running' ? 0 : 1
+      if (aRunning !== bRunning) return aRunning - bRunning
+      const aSort = a.sort_order ?? Infinity
+      const bSort = b.sort_order ?? Infinity
+      if (aSort !== bSort) return aSort - bSort
+      return (a.created_at || '').localeCompare(b.created_at || '')
+    })
   }
 
   return (
@@ -326,18 +350,23 @@ export default function Queue() {
               {filter === 'upcoming' ? 'No pending or running dispatches' : 'No past dispatches'}
             </div>
           )}
-          {filtered.map(item => {
+          {filtered.map((item, i) => {
             const status = getStatus(item)
             const triggers = getTriggers(item)
             const triggerTypes = [...new Set(triggers.map(t => t.trigger))]
             // First context that has content, for preview
             const previewCtx = triggers.find(t => t.context)?.context
             const triggerCount = triggers.length > 1 ? ` (${triggers.length})` : ''
+            const draggable = filter === 'upcoming' && status !== 'running'
             return (
               <div
                 key={item.id}
-                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}`}
+                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}${dragIdx === i ? ' dragging' : ''}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}`}
                 onClick={() => setSelected(item)}
+                draggable={draggable}
+                onDragStart={draggable ? (e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }) : undefined}
+                onDragOver={draggable ? (e => { e.preventDefault(); setDragOverIdx(i) }) : undefined}
+                onDragEnd={draggable ? handleDragEnd : undefined}
               >
                 <div className="feed-avatar">
                   {(item.task_name || '?')[0].toUpperCase()}
@@ -605,12 +634,12 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
           {item.started_at && <div>Started: {formatDate(item.started_at, true)}</div>}
           {item.completed_at && <div>Completed: {formatDate(item.completed_at, true)}</div>}
           {item.started_at && item.completed_at && (
-            <div style={{ marginTop: 2, color: 'var(--text)' }}>
+            <div className="detail-duration">
               Duration: {formatDuration(item.started_at, item.completed_at)}
             </div>
           )}
           {item.started_at && !item.completed_at && (
-            <div style={{ marginTop: 2, color: 'var(--running)' }}>
+            <div className="detail-duration running">
               Running for {formatDuration(item.started_at)}
             </div>
           )}
@@ -629,7 +658,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
       {item.error && status !== 'cancelled' && (
         <div className="detail-section">
           <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
-          <div className="detail-meta" style={{ color: status === 'timed_out' ? 'var(--warning)' : 'var(--danger)' }}>
+          <div className={`detail-meta ${status === 'timed_out' ? 'warning-text' : 'error-text'}`}>
             {status === 'timed_out' ? 'Dispatch exceeded timeout limit' : item.error}
           </div>
         </div>
@@ -640,12 +669,12 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
         <div className="detail-section">
           <label>
             Live Output
-            {isStreaming && <span style={{ marginLeft: 6, color: 'var(--running)', fontSize: 10, fontWeight: 'normal' }}>
+            {isStreaming && <span className="live-indicator">
               <span className="pulse-dot">●</span> streaming
             </span>}
           </label>
           {liveTools.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+            <div className="live-tools">
               Tools: {liveTools.map((t, i) => (
                 <span key={i} className="tool-badge">{t}</span>
               ))}
@@ -656,7 +685,7 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
               <Markdown>{mdBreaks(liveText)}</Markdown>
             </div>
           ) : isStreaming ? (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="live-connecting">
               <span className="tool-spinner" /> connecting...
             </div>
           ) : null}
@@ -689,10 +718,10 @@ function DispatchDetail({ item, output, onUpdate, liveText, liveTools, isStreami
             <span className={`collapse-arrow ${diffOpen ? 'open' : ''}`}>▸</span>
             Code Changes
             {diffData && diffData.files.length > 0 && (
-              <span className="muted-text" style={{ fontWeight: 'normal' }}>
+              <span className="diff-stats">
                 {diffData.files.length} {diffData.files.length === 1 ? 'file' : 'files'}
-                {diffData.insertions > 0 && <span className="feed-stat-add" style={{ marginLeft: 4 }}>+{diffData.insertions}</span>}
-                {diffData.deletions > 0 && <span className="feed-stat-del" style={{ marginLeft: 2 }}>-{diffData.deletions}</span>}
+                {diffData.insertions > 0 && <span className="feed-stat-add">+{diffData.insertions}</span>}
+                {diffData.deletions > 0 && <span className="feed-stat-del">-{diffData.deletions}</span>}
               </span>
             )}
           </label>
