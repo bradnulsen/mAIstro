@@ -116,12 +116,7 @@ A task can use subscriptions purely for context (by gating automatic triggers wi
 
 ### Platform-Mediated Tool Access
 
-- The platform hosts an internal MCP server that dispatched agents connect to. This server mediates agent operations — every tool call flows through platform code, making actions observable, auditable, and policy-governed.
-- The internal server is context-aware: it reads the dispatching task's configuration and presents only relevant tools. Different tasks get different tool surfaces based on their properties and subscriptions.
-- **Git operations as structured tools** — `git_commit`, `git_diff`, `git_log`, `git_status` are platform-mediated tools with enforced conventions (commit authorship, message format, path restrictions). These replace unmediated shell-based git access.
-- **Read-only project context tools** — file listing, file reading, and task information retrieval are available as structured tools, scoped by the task's subscriptions and configuration.
-- **Tool invocation logging** — every MCP tool call is recorded as a structured event in the dispatch session, creating an audit trail richer than NDJSON stream parsing.
-- Agents retain access to native CLI tools (including Bash) alongside MCP tools. MCP tools are structured alternatives, not an exclusive replacement.
+The platform hosts an internal MCP server that dispatched agents connect to. This server mediates agent operations — every tool call is observable, auditable, and policy-governed. The server is context-aware: it reads the dispatching task's configuration and presents only relevant tools. Different tasks get different tool surfaces based on their properties and subscriptions. Agents retain native CLI tool access alongside MCP tools — mediated tools are structured alternatives, not restrictions. For detailed design, see architecture/tool-mediation.md.
 
 ### External MCP Servers
 

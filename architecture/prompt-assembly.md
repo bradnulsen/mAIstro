@@ -42,7 +42,7 @@ Built by `build_task_manifest()` which queries all tasks at dispatch time.
 If the task has subscription glob patterns, they're resolved against the working tree. Matching files are listed with paths and sizes. The agent reads their contents via its tools as needed — the list is a pointer, not inline content.
 
 ### 6. Action Directive
-A closing section: "Review the project state — your instructions, subscriptions, and context above. Identify what needs to be done and do it. If nothing needs updating, say so briefly."
+A closing section tailored to the dispatch trigger. For commit-triggered dispatches: "Changes in your subscribed files triggered this dispatch. Review the triggering commits above and respond accordingly." For dependency-triggered dispatches: "An upstream task has completed. Review what changed and respond accordingly." For schedule and manual dispatches: "Review the project state — your instructions, subscriptions, and context above. Identify what needs to be done and do it. If nothing needs updating, say so briefly."
 
 ## Context Immutability
 

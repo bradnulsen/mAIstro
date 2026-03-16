@@ -100,7 +100,7 @@ This is a concentration bet. It advances multiple goals simultaneously: accounta
 
 Valuable but not blocking the current phase:
 
-- **Bash lockdown** — restricting or removing Bash access for agents once MCP tools cover their operational needs. This is the end state of the accountability story but requires P1 to be mature and comprehensive. Premature restriction breaks agents. Let the MCP tools prove themselves first, then tighten.
+- **Bash restriction** — moving from open-ended Bash access to structured MCP tools as the default path for agent operations. As MCP tools mature and cover more operational needs, agents will prefer their precision and auditability. This is the natural end state of the accountability story but requires P1 to be comprehensive. Restricting too early breaks agents before they have viable alternatives.
 - **Parallel dispatch** — concurrent execution via git worktrees. High complexity (merge conflicts, branch management, cleanup on failure), and the sequential constraint is documented in DESIGN.md. The MCP server architecture actually makes this harder (server must handle concurrent sessions with different tool contexts). Defer until sequential processing is a proven bottleneck, not a theoretical one.
 - **Conditional dependencies** — "only run if upstream output matches X." Useful for branching workflows but adds significant complexity to the trigger model.
 - **Richer dependency context** — upstream dispatch output summary injected into downstream context.
