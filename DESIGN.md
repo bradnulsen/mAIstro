@@ -110,9 +110,9 @@ A task can use subscriptions purely for context (by gating automatic triggers wi
 
 ### Git Integration
 
-- The platform installs a post-commit hook in the project directory. This hook notifies the backend of new commits, enabling watch triggers. The hook is fire-and-forget: it must not block or slow git operations, and silent failure is acceptable.
-- The platform reads git state (log, diff, head hash, changed files) but does not write to git directly — only agents commit.
-- Dispatch diffs are tracked via `start_commit` and `result_commit`, enabling before/after comparison.
+- The platform installs a post-commit hook in the project directory to notify the backend of new commits, enabling watch triggers. The hook is asynchronous and fails silently — hook failures do not affect git operations.
+- The platform reads git state (log, diff, head hash, changed files). Only agents commit changes through MCP tools.
+- Dispatch diffs are tracked via `start_commit` and `result_commit` for before/after comparison.
 
 ### Platform-Mediated Tool Access
 
@@ -160,19 +160,19 @@ Required tooltip surfaces:
 
 ### Operational Integrity
 
-- **Queue-first invariant**: no dispatch may execute without passing through the queue. All code paths — manual, watch, schedule, dependency — enqueue first, execute second.
-- **Sequential execution**: exactly one dispatch runs at a time. The worker holds a lock during processing. No concurrent dispatch execution.
-- **Project isolation**: each project has its own SQLite database. No cross-project state leakage. The app-level database holds only the recent-projects list.
-- **Git as content truth**: all project content lives in git. The SQLite database holds only operational state (task configs, queue records, chat sessions). If the database is deleted, project content is unaffected.
-- **Single active project**: the platform operates on one project at a time. The active project is a global state that all operations reference.
+- **Queue-first invariant**: every dispatch passes through the queue before execution. All code paths — manual, watch, schedule, dependency — enqueue first, then execute.
+- **Sequential execution**: exactly one dispatch runs at a time. The worker holds a lock during processing.
+- **Project isolation**: each project has its own SQLite database. The app-level database holds only the recent-projects list.
+- **Git is content source-of-truth**: all project content lives in git. The SQLite database holds only operational state (task configs, queue records, chat sessions).
+- **Single active project**: the platform operates on one project at a time. The active project is global state that all operations reference.
 
 ### Data Integrity
 
-- **Task identity is immutable**: a task's slug ID, once derived from its initial name, never changes. All references (dispatches, properties, dependencies) use the slug. Renaming changes only the display label.
-- **Dispatch lifecycle is monotonic**: a dispatch progresses from created → started → completed. Once completed, a dispatch record is never restarted (retry creates a new cycle by resetting lifecycle fields on the same record).
-- **Trigger context is immutable at the enqueue site**: each trigger entry's context string is built when the trigger fires, not when the dispatch executes. This preserves the causal record — the prompt reflects what was true when the trigger occurred.
-- **Cascading deletes**: task deletion removes all associated data (properties, dispatches, sessions). No orphaned records.
-- **Running state is derived, not stored**: whether a dispatch is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL), never persisted as a separate status field.
+- **Task identity is immutable**: a task's slug ID, once derived from its initial name, stays constant. All references (dispatches, properties, dependencies) use the slug. Renaming changes only the display label.
+- **Dispatch lifecycle is monotonic**: a dispatch progresses from created → started → completed. Retry creates a new cycle by resetting lifecycle fields on the same record, preserving dispatch identity.
+- **Trigger context is immutable at enqueue time**: each trigger entry's context string is built when the trigger fires. This preserves the causal record — the prompt reflects what was true when the trigger occurred.
+- **Task deletion cascades**: removing a task removes all associated data (properties, dispatches, sessions). This prevents orphaned records.
+- **Running state is derived**: whether a dispatch is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL), not persisted as a separate status field.
 
 ### Accountability
 
@@ -181,9 +181,9 @@ Required tooltip surfaces:
 
 ### Safety
 
-- **Active dispatch blocks project switch**: the platform refuses to open a different project while a dispatch is running. This prevents state corruption from changing the working directory mid-execution.
-- **Stale sweep on startup**: any dispatch marked as in-flight when the process starts is marked interrupted. No zombie dispatches.
-- **Approval gates are non-bypassable for automated triggers**: only manual dispatch (explicit human intent) skips the approval check. All other trigger types respect `require_approval`.
-- **Timeout enforcement is mandatory**: every dispatch has a timeout. The watchdog runs unconditionally. A task cannot run forever.
-- **Dependency cycles are absorbed**: circular dependency chains produce redundant triggers that coalescing absorbs. No unbounded dispatch growth.
-- **Hook must not obstruct git**: the post-commit hook runs asynchronously and fails silently. A hook failure never prevents or delays a commit.
+- **Active dispatch locks project state**: while a dispatch is running, the platform keeps the project directory unchanged. This prevents state corruption from changing the working directory mid-execution.
+- **Stale sweep on startup**: any dispatch marked as in-flight when the process starts is marked interrupted. This eliminates zombie dispatches.
+- **Approval gates apply to all automated triggers**: manual dispatch (explicit human intent) bypasses the approval check; all other trigger types require `require_approval` approval.
+- **Timeouts are enforced**: every dispatch has a configurable timeout. The watchdog runs unconditionally. Tasks have bounded execution time.
+- **Dependency cycles coalesce gracefully**: circular dependency chains produce redundant triggers that coalescing absorbs, preventing unbounded dispatch growth.
+- **Post-commit hook is non-blocking**: the hook runs asynchronously and fails silently. Hook failures never prevent or delay git operations.

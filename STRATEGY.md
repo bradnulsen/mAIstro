@@ -33,19 +33,13 @@ This is the accountability gap. The platform orchestrates work but cannot enforc
 
 **Control at the point of action, not observation after the fact.** Instead of building dashboards to understand what agents did (observability-first), we build infrastructure that shapes what agents *can* do (accountability-first). Observability becomes a natural byproduct — when operations flow through a controlled pipeline, logging is trivial.
 
-The mechanism: an **internal MCP server** that the platform hosts and agents connect to. This server is context-aware — it presents different tools to different tasks based on their configuration. It replaces unconstrained CLI tool access with platform-mediated operations where every action is observable, auditable, and policy-governed.
-
-This is a concentration bet. It advances multiple goals simultaneously: accountability (every operation is mediated), observability (every operation is logged), inter-task coordination (tasks can queue other tasks), and quality control (deterministic tool behavior replaces open-ended Bash).
+The mechanism is an **internal MCP server** that the platform hosts and agents connect to. This server is context-aware — it presents different tools to different tasks based on their configuration. It replaces unconstrained CLI tool access with platform-mediated operations where every action is observable, auditable, and policy-governed. This is a concentration bet, advancing multiple goals simultaneously: accountability (every operation is mediated), observability (every operation is logged), inter-task coordination (tasks can queue other tasks), and quality control (deterministic tool behavior replaces open-ended Bash).
 
 ## Priority 1: Internal MCP Server — Platform-Mediated Tool Infrastructure
 
-**The problem:** Agents operate through the Claude CLI's native tools (Bash, file I/O, git) with no platform-level mediation. The platform controls *when* agents run but not *how* they work. Tool invocations are opaque — visible in the NDJSON stream but not governed, shaped, or auditable at the platform level.
+**The problem:** Agents currently operate through the Claude CLI's native tools (Bash, file I/O, git) with no platform-level governance. Tool invocations are opaque — visible in the output stream but not governed, shaped, or auditable.
 
-**Why first:** This is the highest-leverage change on the roadmap. It creates the infrastructure layer that every future accountability, observability, and coordination feature builds on. An MCP server that mediates agent operations gives us:
-- **Observable operations** — every tool call flows through platform code, making logging and metrics trivial
-- **Context-aware tooling** — different tasks get different tool surfaces based on their configuration. A Strategist doesn't need Bash; an Engineer doesn't need queue controls
-- **Deterministic control** — platform-defined tools with precise behavior, replacing open-ended Bash for operations that should be structured (git commits, file reads within subscription scope, queue management)
-- **Policy enforcement** — the server can enforce invariants (e.g., agents only modify files within their subscription patterns, commit messages follow the task's tag format)
+**Why first:** This is the highest-leverage change on the roadmap. It creates the infrastructure layer that every future accountability, observability, and coordination feature builds on.
 
 **Specifically:**
 - **mAistro hosts an MCP server** that is started alongside the backend and registered with dispatched CLI sessions. The server runs as a sidecar to the FastAPI app (or within the same process via stdio bridge)

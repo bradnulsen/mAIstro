@@ -36,15 +36,13 @@ Backend runs on http://localhost:8420 (uvicorn with `--reload`), frontend on htt
 6. Post-commit hook notifies backend — tasks with subscriptions matching changed files get auto-enqueued (multiple commits coalesce into one pending dispatch)
 
 ### Key Design Decisions
-- **Git as source of truth**: all project content lives in git. The SQLite DB (`.maistro/` dir, gitignored) holds only operational state — task configs, dispatch queue, chat sessions
-- **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db` (async via aiosqlite); app DB at `<repo>/.maistro/app.db` (sync, `appstate.py`) holds recent-projects list
-- **Queue-first dispatch**: dispatches are always enqueued first, then processed asynchronously by the background worker. Frontend polls `/api/dispatch/{id}/output` for stored results. This decouples request handling from long-running CLI invocations
-- **Internal MCP server**: the platform hosts a context-aware MCP server that dispatched agents connect to. Tool calls are observable, auditable, and policy-governed. Structured tools (git operations, file listing, task queries) replace unmediated shell access. Agents retain native CLI tool access alongside MCP tools
-- **Task properties are EAV**: `task_property_defs` table defines keys with defaults and types; `task_properties` stores per-task overrides. Types: `string`, `json`, `integer`, `boolean`
-- **Claude CLI via Popen+threads**: `cli.py` uses `subprocess.Popen` with thread readers pushing to `asyncio.Queue` (avoids Windows ProactorEventLoop issues). Pipes prompt and system prompt via stdin to avoid cmd arg quoting issues. Reads NDJSON from both stdout and stderr (CLI writes to stderr on `--resume`)
-- **Universal system prompt**: `DISPATCH_SYSTEM_PROMPT` in `dispatch.py` covers execution mode and output standards (commit practices, documentation principles) for all tasks. Task-specific `instructions` are layered into the user prompt
-- **Dispatch creates chat sessions**: each dispatch gets a linked chat session for durable output storage — serves as a permanent audit trail
-- **Vite proxies `/api` to backend**: frontend makes API calls to same origin, Vite dev server proxies to port 8420
+- **Git as source of truth**: all project content lives in git. The SQLite DB holds only operational state — task configs, dispatch queue, chat sessions.
+- **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db`; app DB at `<repo>/.maistro/app.db` holds recent-projects list.
+- **Queue-first dispatch**: all dispatches are enqueued before execution. A background worker processes them sequentially. The frontend polls for output.
+- **Internal MCP server**: the platform hosts a context-aware MCP server mediating agent operations. Tool calls are observable and policy-governed. Agents also retain access to native CLI tools.
+- **Task properties as key-value overrides**: properties can be `string`, `json`, `integer`, or `boolean` with defaults.
+- **Dispatch creates chat sessions**: each dispatch links to a chat session for durable output storage and audit trail.
+- **Vite proxies `/api` to backend**: frontend makes API calls to same origin; Vite dev server proxies to port 8420.
 
 ## Key Files
 
