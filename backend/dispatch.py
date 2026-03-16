@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from typing import AsyncIterator
 
 from backend import cli, database as db, git, mcp_config as mcp_cfg
@@ -239,11 +240,36 @@ async def check_watch_triggers(commit_hash: str, project_dir: str) -> list[dict]
 
 def _any_file_matches(files: list[str], patterns: list[str]) -> bool:
     """Check if any file matches any glob pattern (supports ** recursive)."""
-    from pathlib import PurePath
     for pattern in patterns:
+        regex = _glob_to_regex(pattern)
         for f in files:
-            if PurePath(f).match(pattern):
+            if regex.match(f):
                 return True
     return False
 
 
+def _glob_to_regex(pattern: str):
+    """Convert a glob pattern to a compiled regex with proper ** support.
+
+    PurePath.match() doesn't handle ** recursion correctly on all platforms.
+    This converts ** to match any number of path segments (including zero),
+    and * to match within a single segment.
+    """
+    parts = []
+    i = 0
+    while i < len(pattern):
+        if pattern[i:i+2] == '**':
+            parts.append('.*')
+            i += 2
+            if i < len(pattern) and pattern[i] == '/':
+                i += 1
+        elif pattern[i] == '*':
+            parts.append('[^/]*')
+            i += 1
+        elif pattern[i] == '?':
+            parts.append('[^/]')
+            i += 1
+        else:
+            parts.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile('^' + ''.join(parts) + '$')
