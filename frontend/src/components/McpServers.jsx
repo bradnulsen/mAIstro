@@ -79,18 +79,12 @@ export default function McpServers() {
   if (loading) return <div className="loading">Loading...</div>
 
   return (
-    <div className="settings-view">
-      <div className="header-bar">
-        <h1>MCP Servers</h1>
-        <div className="spacer" />
-        {saveMsg && <span className="success-text">{saveMsg}</span>}
-      </div>
-
       <div className="settings-content">
         <div className="settings-section">
           <div className="section-head">
-            <h3>Registered Servers</h3>
+            <h3>MCP Servers</h3>
             <HelpTip text={TIP_MCP} />
+            {saveMsg && <span className="success-text" style={{ marginLeft: 8 }}>{saveMsg}</span>}
           </div>
           {mcpServers.length === 0 && (
             <div className="muted-text">No MCP servers configured</div>
@@ -160,6 +154,5 @@ export default function McpServers() {
           </div>
         </div>
       </div>
-    </div>
   )
 }
