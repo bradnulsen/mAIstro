@@ -48,23 +48,21 @@ async def init_db(project_dir: str):
     await close_db()
     DB_PATH = get_db_path(project_dir)
     db = await get_db()
+    # Drop stale tables before running schema (CREATE TABLE IF NOT EXISTS won't add columns)
+    await _migrate(db)
     await db.executescript(SCHEMA_SQL)
     await db.executescript(SEED_SQL)
-    # Lightweight migrations for columns added after initial schema
-    await _migrate(db)
     await db.commit()
 
 
 async def _migrate(db):
-    """Recreate dispatch_queue if schema is stale (missing columns).
-
-    Dispatch queue is operational state — safe to drop and recreate.
-    """
+    """Drop dispatch_queue if schema is stale so CREATE TABLE rebuilds it cleanly."""
     cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
+    if not cols:
+        return  # fresh DB — table doesn't exist yet, schema will create it
     expected = {"sort_order", "rating", "coalesced_id"}
     if not expected.issubset(cols):
         await db.execute("DROP TABLE IF EXISTS dispatch_queue")
-        await db.executescript(SCHEMA_SQL)
 
 
 SCHEMA_SQL = """
