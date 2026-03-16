@@ -56,15 +56,15 @@ async def init_db(project_dir: str):
 
 
 async def _migrate(db):
-    """Add columns that CREATE TABLE IF NOT EXISTS won't retroactively add."""
+    """Recreate dispatch_queue if schema is stale (missing columns).
+
+    Dispatch queue is operational state — safe to drop and recreate.
+    """
     cols = {r["name"] for r in await db.execute_fetchall("PRAGMA table_info(dispatch_queue)")}
-    if "sort_order" not in cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN sort_order INTEGER")
-    if "rating" not in cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN rating TEXT")
-    if "coalesced_id" not in cols:
-        await db.execute("ALTER TABLE dispatch_queue ADD COLUMN coalesced_id INTEGER REFERENCES dispatch_queue(id)")
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_dispatch_queue_coalesced ON dispatch_queue (coalesced_id)")
+    expected = {"sort_order", "rating", "coalesced_id"}
+    if not expected.issubset(cols):
+        await db.execute("DROP TABLE IF EXISTS dispatch_queue")
+        await db.executescript(SCHEMA_SQL)
 
 
 SCHEMA_SQL = """
@@ -173,6 +173,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_task_id
 CREATE INDEX IF NOT EXISTS idx_task_properties_key
     ON task_properties (key);
 
+CREATE INDEX IF NOT EXISTS idx_dispatch_queue_coalesced
+    ON dispatch_queue (coalesced_id);
 """
 
 SEED_SQL = """
