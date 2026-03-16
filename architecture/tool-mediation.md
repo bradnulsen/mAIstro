@@ -4,7 +4,7 @@ The platform hosts an internal MCP server that dispatched agents connect to. Thi
 
 ## Purpose
 
-Without mediation, agents interact with the project through unstructured shell commands (via the CLI's Bash tool). The internal MCP server provides structured alternatives with enforced conventions, audit trails, and per-job access control. Agents retain access to native CLI tools (subject to `allowed_tools` filtering) alongside MCP tools — mediated tools are preferred alternatives, not an exclusive replacement.
+Without mediation, agents interact with the project through unstructured shell commands (via the CLI's Bash tool). The internal MCP server provides structured alternatives with enforced conventions, audit trails, and per-job access control. Agents retain access to native CLI tools (subject to tool scoping via `--allowedTools` and `--disallowedTools` flags) alongside MCP tools — mediated tools are preferred alternatives, not an exclusive replacement.
 
 ## Architecture
 
@@ -14,16 +14,23 @@ The internal server runs as part of the backend process and is connected to the 
 
 The server reads the dispatching job's configuration (properties, subscriptions) and presents only relevant tools. Different jobs get different tool surfaces based on:
 
-- **Job properties**: `allowed_tools` and `mcp_servers` shape the available tool set
+- **Job properties**: `allowed_tools`, `disallowed_tools`, and `mcp_servers` shape the available tool set
 - **Subscriptions**: glob patterns scope which files and paths are relevant to the job
 
 This means two jobs dispatched in sequence may see entirely different tool inventories from the same internal server.
 
-### Whitelist-Only Model
+### Dual-Flag Tool Scoping
 
-Tool configuration follows a whitelist-only approach. The `allowed_tools` property specifies which CLI tools the agent can use. When set, the agent sees only those tools plus tools from connected MCP servers. When empty, the agent gets the full default tool set.
+The Claude CLI provides two complementary flags for tool access control:
 
-There is no blacklist property. Restrictions are **invisible** to the agent — a tool not in the allowed set simply does not appear. The agent has no awareness that excluded tools exist. This design keeps job prompts clean (no "you are not allowed to..." instructions) and prevents agents from reasoning about or attempting to work around restrictions.
+- **`--allowedTools`** — tools the agent can use without permission prompting. This is a *permission* flag, not a visibility flag.
+- **`--disallowedTools`** — tools that are **hidden** from the agent entirely. The agent cannot see, invoke, or reason about disallowed tools. This is the enforcement mechanism for invisible restrictions.
+
+These flags are inverses: `allowed + disallowed = all tools`. When the platform sets `allowed_tools` on a job, it computes the complement and passes `--disallowedTools` to the CLI to hide excluded tools.
+
+This distinction matters because the platform runs with `--dangerously-skip-permissions`. In this mode, `--allowedTools` alone does not restrict tool access — all permission checks are bypassed. **`--disallowedTools` is the only mechanism that actually removes tools from the agent's view**, regardless of permission mode.
+
+The user-facing model remains whitelist-only: the user defines what a job *can* do via `allowed_tools` (and `disallowed_tools` as its explicit complement). The agent sees only tools in its allowed set — restrictions are invisible. No prompt instructions mention excluded tools, and the agent has no awareness they exist.
 
 ## Tool Categories
 
