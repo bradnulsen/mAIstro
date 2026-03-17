@@ -21,9 +21,10 @@ The system prompt is delivered via stdin wrapped in `<system-instructions>` tags
 The user prompt is assembled from multiple sections, concatenated with double newlines:
 
 ### 1. Job Identity
-- Job name as a heading
+- Job name as a heading (`# Job: {name}`)
 - Description (if present)
-- Dispatch mode: "manually dispatched" or "auto-dispatched ({trigger})"
+
+No dispatch mode label. The trigger type is communicated solely through the invocation context section, which carries the actual causal data. A generic label like "auto-dispatched (commit)" restates what the invocation context already says without adding information.
 
 ### 2. Instructions
 The job's `instructions` property — the detailed behavioral specification written by the user. This is the core payload that defines what the agent does.
@@ -31,7 +32,16 @@ The job's `instructions` property — the detailed behavioral specification writ
 ### 3. Invocation Context
 Built from the task's context and any subordinate tasks' context (for coalesced tasks). Pre-formatted context strings (built at the enqueue site) are rendered as the invocation section. Duplicate lines are collapsed with a count suffix (e.g. `×3`).
 
-This section answers "why am I running?" — commit hashes, schedule expressions, dependency completions, retry history, user notes.
+This section answers "why am I running?" — commit hashes, schedule expressions, dependency completions, retry history, user notes. Each enqueue site formats its own context string with full causal detail:
+
+- **Commit**: `` **Commit** `abc123de`: Add login feature ``
+- **Schedule**: `` **Schedule** (`*/60 * * * *`) at abc123de ``
+- **Dependency**: `` **Dependency** — triggered by completion of Engineer (task #42), commits abc123de..def456ab ``
+- **Retry**: `` **Retry** of task #42: previous run failed: <error> — commits abc123de..def456ab ``
+- **Resume**: `` **Resume** — continuing from task #42 ``
+- **Manual**: `` **Manual** at abc123de `` (with optional user notes)
+
+The invocation context is the **single source of trigger-type awareness** in the prompt. No other section restates or re-derives trigger semantics.
 
 When multiple triggers have been coalesced into a single task, the section header includes a framing line: "Multiple triggers have been coalesced into this task (N items). Address them together." This tells the agent to treat the listed reasons as a unified scope rather than picking one.
 
@@ -44,14 +54,15 @@ Built by `build_job_manifest()` which queries all jobs at dispatch time.
 If the job has subscription glob patterns, they're resolved against the working tree. Matching files are listed with paths and sizes. The agent reads their contents via its tools as needed — the list is a pointer, not inline content.
 
 ### 6. Action Directive
-A closing section ("Your Turn") tailored to the dispatch trigger. Each trigger type gets a specific directive that focuses the agent on the right starting action:
+A static closing section ("Your Turn") that applies universally to all trigger types:
 
-- **commit**: Review the triggering commits in subscribed files and respond accordingly.
-- **dependency**: An upstream job completed — use the commit range in the Invocation section to inspect what changed.
-- **schedule**: Check subscribed files and project state for anything needing attention; say so briefly if nothing does.
-- **retry**: Previous task failed or was insufficient — review context, adjust approach, try again.
-- **resume**: Continuing an interrupted session — pick up where you left off.
-- **manual** (default): Review instructions, subscriptions, and context; identify what needs doing.
+```
+## Your Turn
+Review the project state — your instructions, subscriptions, and context above.
+Identify what needs to be done and do it. If nothing needs updating, say so briefly.
+```
+
+This is intentionally trigger-agnostic. The invocation context (section 3) already carries all trigger-specific information — the closing directive should not re-derive it. A single static closer keeps business logic out of the prompt assembly layer and avoids the trap of restating what the context already says in weaker, generic prose.
 
 ## Context Immutability
 
