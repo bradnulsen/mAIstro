@@ -344,7 +344,7 @@ export default function Queue() {
             onTransfer={handleTransfer}
           />
           <KanbanColumn
-            title="Queued"
+            title="Queue"
             items={queuedItems}
             column="queued"
             dragMode="reorder"
@@ -538,7 +538,7 @@ function KanbanColumn({
     >
       <div className="kanban-column-header">
         <span className="kanban-column-title">{title}</span>
-        <span className="kanban-column-count">{items.length}</span>
+        <span className="kanban-column-count">{items.length + (activeItems?.length || 0)}</span>
       </div>
       <div className="kanban-column-body">
         {items.length === 0 && !activeItems?.length && (
@@ -547,6 +547,7 @@ function KanbanColumn({
         {/* Active tasks appear above queued items */}
         {activeItems && activeItems.length > 0 && (
           <>
+            <div className="kanban-section-divider">Active</div>
             {activeItems.map(item => (
               <div
                 key={item.id}
@@ -569,7 +570,7 @@ function KanbanColumn({
                 </div>
               </div>
             ))}
-            {items.length > 0 && <div className="kanban-section-divider">Queued</div>}
+            {items.length > 0 && <div className="kanban-section-divider">Queue ({items.length})</div>}
           </>
         )}
 
