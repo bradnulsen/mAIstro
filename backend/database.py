@@ -29,6 +29,7 @@ async def get_db() -> aiosqlite.Connection:
         await _conn.execute("PRAGMA synchronous=NORMAL")
         await _conn.execute("PRAGMA cache_size=-8000")
         await _conn.execute("PRAGMA foreign_keys=ON")
+        await _conn.execute("PRAGMA temp_store=MEMORY")
     return _conn
 
 
@@ -86,6 +87,15 @@ async def _migrate(db: aiosqlite.Connection):
         await db.commit()
     except Exception:
         pass  # Column already removed or never existed
+
+    # Covering index for get_oldest_queued_task() — runs every ~2s in the worker loop.
+    # Adds approval to the filter columns so SQLite resolves the approval predicate
+    # from the index without touching the heap.
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_queued_worker "
+        "ON tasks (queued_at, started_at, error, coalesced_id, approval)"
+    )
+    await db.commit()
 
 
 SCHEMA_SQL = """

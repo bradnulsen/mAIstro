@@ -283,8 +283,8 @@ async def post_commit_hook(req: PostCommitRequest):
     triggered = await check_watch_triggers(req.commit_hash, state.PROJECT_DIR)
     dispatched = []
 
+    summary = git.commit_oneline(state.PROJECT_DIR, req.commit_hash) or req.commit_hash[:8]
     for job in triggered:
-        summary = git.commit_oneline(state.PROJECT_DIR, req.commit_hash) or req.commit_hash[:8]
         context = f"**Commit** `{req.commit_hash[:8]}`: {summary}"
         await db.enqueue_task(
             job["id"], "commit", trigger_detail=req.commit_hash, context=context
