@@ -80,6 +80,13 @@ async def _migrate(db: aiosqlite.Connection):
     )
     await db.commit()
 
+    # Add outcome_summary column (stored at completion time for History card display)
+    try:
+        await db.execute("ALTER TABLE tasks ADD COLUMN outcome_summary TEXT")
+        await db.commit()
+    except Exception:
+        pass  # Column already exists
+
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (

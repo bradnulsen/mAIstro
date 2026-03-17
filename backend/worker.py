@@ -268,7 +268,9 @@ async def _process_task(task: dict):
         else:
             head = git.head_hash(state.PROJECT_DIR)
             now = utcnow()
-            await db.update_task(task_id, _commit=False, completed_at=now, result_commit=head)
+            outcome = git.outcome_summary(state.PROJECT_DIR, start_commit, head) if start_commit else None
+            await db.update_task(task_id, _commit=False, completed_at=now,
+                                 result_commit=head, outcome_summary=outcome)
             sub_ids = [s["id"] for s in subordinates]
             await db.update_tasks_batch(sub_ids, completed_at=now, result_commit=head)
             log.info("[worker] Task #%d completed (commit=%s)", task_id, head[:8])

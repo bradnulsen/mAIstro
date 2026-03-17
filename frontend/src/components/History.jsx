@@ -240,6 +240,7 @@ function HistoryColumn({ title, items, loading, emptyLabel, selected, onSelect }
         {items.map(item => {
           const status = getStatus(item)
           const reason = errorSummary(item, status)
+          const hasCommits = item.start_commit && item.result_commit && item.start_commit !== item.result_commit
           return (
             <div
               key={item.id}
@@ -256,13 +257,33 @@ function HistoryColumn({ title, items, loading, emptyLabel, selected, onSelect }
                   <span className={`queue-status ${status}`}>
                     {STATUS_LABELS[status] || status}
                   </span>
+                  {item.rating && (
+                    <span className={`card-rating ${item.rating}`}>
+                      {item.rating === 'positive' ? '+' : '−'}
+                    </span>
+                  )}
                   <span>{formatDate(item.completed_at, true)}</span>
                 </div>
-                <div className="feed-message">
-                  {reason
-                    ? <span className="history-error-reason">{reason}</span>
-                    : (item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`)}
-                </div>
+                {reason ? (
+                  <div className="feed-message">
+                    <span className="history-error-reason">{reason}</span>
+                  </div>
+                ) : (
+                  <>
+                    {item.outcome_summary ? (
+                      <div className="feed-message history-outcome">{item.outcome_summary.split('\n')[0]}</div>
+                    ) : (
+                      <div className="feed-message">
+                        {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
+                      </div>
+                    )}
+                    {hasCommits && (
+                      <div className="feed-commits">
+                        {item.start_commit.slice(0, 8)}..{item.result_commit.slice(0, 8)}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           )

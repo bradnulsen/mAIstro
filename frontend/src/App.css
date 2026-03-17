@@ -433,6 +433,25 @@ label.muted-text {
   font-style: italic;
 }
 
+.history-outcome {
+  color: var(--text-secondary, #ccc);
+}
+
+.feed-commits {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  margin-top: 1px;
+}
+
+.card-rating {
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+}
+.card-rating.positive { color: var(--accent-green, #4caf50); }
+.card-rating.negative { color: var(--accent-red, #f44336); }
+
 .feed-stats {
   flex-shrink: 0;
   display: flex;
