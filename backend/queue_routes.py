@@ -169,9 +169,8 @@ async def cancel_task(task_id: int):
     now = utcnow()
     await db.update_task(task_id, completed_at=now, error="cancelled")
     subs = await db.get_subordinate_tasks(task_id)
-    for sub in subs:
-        if not sub.get("completed_at"):
-            await db.update_task(sub["id"], completed_at=now, error="cancelled")
+    sub_ids = [s["id"] for s in subs if not s.get("completed_at")]
+    await db.update_tasks_batch(sub_ids, completed_at=now, error="cancelled")
     return {"status": "cancelled", "was_running": was_running}
 
 

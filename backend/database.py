@@ -161,6 +161,15 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_job
 
 CREATE INDEX IF NOT EXISTS idx_job_properties_key
     ON job_properties (key);
+
+CREATE INDEX IF NOT EXISTS idx_job_properties_job_id
+    ON job_properties (job_id);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_job_running
+    ON tasks (job_id, started_at, completed_at);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_coalesce_lookup
+    ON tasks (job_id, started_at, error, coalesced_id);
 """
 
 SEED_SQL = """
@@ -449,10 +458,12 @@ async def get_task_queue(limit: int = 50) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
         """SELECT t.*, j.name as job_name,
-                  (SELECT COUNT(*) FROM tasks sub WHERE sub.coalesced_id = t.id) as subordinate_count
+                  COUNT(sub.id) as subordinate_count
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
+           LEFT JOIN tasks sub ON sub.coalesced_id = t.id
            WHERE t.coalesced_id IS NULL
+           GROUP BY t.id
            ORDER BY t.created_at DESC LIMIT ?""",
         (limit,)
     )
@@ -479,6 +490,18 @@ async def update_task(task_id: int, **kwargs):
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [task_id]
     await db.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
+    await db.commit()
+
+
+async def update_tasks_batch(task_ids: list[int], **kwargs):
+    """Update multiple tasks with the same field values in a single statement."""
+    if not task_ids:
+        return
+    db = await get_db()
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    placeholders = ",".join("?" * len(task_ids))
+    vals = list(kwargs.values()) + list(task_ids)
+    await db.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
     await db.commit()
 
 

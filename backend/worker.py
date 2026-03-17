@@ -253,16 +253,16 @@ async def _process_task(task: dict):
             now = utcnow()
             await db.update_task(task_id, completed_at=now,
                                  result_commit=head, error="timed out")
-            for sub in subordinates:
-                await db.update_task(sub["id"], completed_at=now,
-                                     result_commit=head, error="timed out")
+            sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
+            await db.update_tasks_batch(sub_ids, completed_at=now,
+                                        result_commit=head, error="timed out")
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
         else:
             head = git.head_hash(state.PROJECT_DIR)
             now = utcnow()
             await db.update_task(task_id, completed_at=now, result_commit=head)
-            for sub in subordinates:
-                await db.update_task(sub["id"], completed_at=now, result_commit=head)
+            sub_ids = [s["id"] for s in subordinates]
+            await db.update_tasks_batch(sub_ids, completed_at=now, result_commit=head)
             log.info("[worker] Task #%d completed (commit=%s)", task_id, head[:8])
 
             await _enqueue_dependents(job_id, task_id,
@@ -282,8 +282,8 @@ async def _process_task(task: dict):
         await db.add_chat_message(session_id, "system", f"Error: {e}")
         now = utcnow()
         await db.update_task(task_id, completed_at=now, error=str(e))
-        for sub in subordinates:
-            await db.update_task(sub["id"], completed_at=now, error=str(e))
+        sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
+        await db.update_tasks_batch(sub_ids, completed_at=now, error=str(e))
     finally:
         if watchdog and not watchdog.done():
             watchdog.cancel()
