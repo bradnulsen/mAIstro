@@ -17,6 +17,7 @@ export default function McpServers() {
 
   // MCP server probes: { [name]: { status, tools, error, loading } }
   const [serverProbes, setServerProbes] = useState({})
+  const [activeProbeServer, setActiveProbeServer] = useState(null)
 
   const load = useCallback(async () => {
     try {
@@ -67,6 +68,7 @@ export default function McpServers() {
   }
 
   const handleProbeMcp = async (name) => {
+    setActiveProbeServer(name)
     setServerProbes(prev => ({ ...prev, [name]: { loading: true } }))
     try {
       const result = await probeMcpServer(name)
@@ -78,6 +80,9 @@ export default function McpServers() {
 
   if (loading) return <div className="loading">Loading...</div>
 
+  const activeProbe = activeProbeServer ? serverProbes[activeProbeServer] : null
+  const activeServer = activeProbeServer ? mcpServers.find(s => s.name === activeProbeServer) : null
+
   return (
     <div className="settings-view">
       <div className="header-bar">
@@ -86,15 +91,16 @@ export default function McpServers() {
         <div className="spacer" />
         {saveMsg && <span className="success-text">{saveMsg}</span>}
       </div>
-      <div className="settings-content">
-        <div className="settings-section">
+      <div className="mcp-layout">
+        <div className="mcp-config-panel">
           {mcpServers.length === 0 && (
             <div className="muted-text">No MCP servers configured</div>
           )}
           {mcpServers.map(s => {
             const probe = serverProbes[s.name]
+            const isActive = activeProbeServer === s.name
             return (
-              <div key={s.name} className={`mcp-server-item${s.enabled ? '' : ' disabled'}`}>
+              <div key={s.name} className={`mcp-server-item${s.enabled ? '' : ' disabled'}${isActive ? ' active' : ''}`}>
                 <div>
                   <input
                     type="checkbox"
@@ -115,14 +121,6 @@ export default function McpServers() {
                     <div className="mcp-server-cmd">
                       {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
                     </div>
-                    {probe && !probe.loading && probe.status === 'ok' && probe.tools.length > 0 && (
-                      <div className="mcp-server-tools">
-                        {probe.tools.join(', ')}
-                      </div>
-                    )}
-                    {probe && !probe.loading && probe.status === 'error' && (
-                      <div className="error-text mcp-server-tools">{probe.error}</div>
-                    )}
                   </div>
                 </div>
                 <div className="mcp-server-actions">
@@ -148,12 +146,58 @@ export default function McpServers() {
               </div>
             </div>
             <div className="mcp-add-form-args">
-              <label>Arguments (space-separated)</label>
-              <input value={mcpArgs} onChange={e => setMcpArgs(e.target.value)} placeholder="-m my_server --port 3000" />
+              <label>Arguments</label>
+              <textarea
+                value={mcpArgs}
+                onChange={e => setMcpArgs(e.target.value)}
+                placeholder={`-m my_server\n--port 3000\n--verbose`}
+                rows={4}
+              />
             </div>
             {mcpError && <div className="error-text">{mcpError}</div>}
             <button onClick={handleAddMcp}>Add Server</button>
           </div>
+        </div>
+        <div className="mcp-results-panel">
+          {!activeProbeServer && (
+            <div className="mcp-results-empty">
+              <div className="muted-text">Click <strong>Test</strong> on a server to inspect its tools and connectivity.</div>
+            </div>
+          )}
+          {activeProbeServer && activeProbe?.loading && (
+            <div className="mcp-results-body">
+              <div className="mcp-results-server-name">{activeProbeServer}</div>
+              <div className="muted-text">Testing...</div>
+            </div>
+          )}
+          {activeProbeServer && activeProbe && !activeProbe.loading && (
+            <div className="mcp-results-body">
+              <div className="mcp-results-server-name">
+                {activeProbeServer}
+                <span className={`mcp-health-dot ${activeProbe.status === 'ok' ? 'healthy' : 'unhealthy'}`} />
+              </div>
+              {activeServer && (
+                <div className="mcp-results-cmd">
+                  {activeServer.command} {activeServer.args ? (() => { try { return JSON.parse(activeServer.args).join(' ') } catch { return activeServer.args } })() : ''}
+                </div>
+              )}
+              {activeProbe.status === 'error' && (
+                <div className="error-text mcp-results-error">{activeProbe.error || 'Unreachable'}</div>
+              )}
+              {activeProbe.status === 'ok' && (
+                <>
+                  <div className="mcp-results-tools-label">
+                    {activeProbe.tools.length} {activeProbe.tools.length === 1 ? 'tool' : 'tools'} available
+                  </div>
+                  {activeProbe.tools.length > 0 && (
+                    <ul className="mcp-results-tools-list">
+                      {activeProbe.tools.map(t => <li key={t}>{t}</li>)}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
