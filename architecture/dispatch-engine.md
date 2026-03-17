@@ -28,7 +28,7 @@ Each `tasks` row tracks:
 | `completed_at` | When execution finished (success, failure, or cancellation) |
 | `result_commit` | HEAD hash after execution completed |
 | `error` | Error message if failed, timed out, cancelled, interrupted, or rejected |
-| `rating` | User-assigned binary rating (positive/negative), null by default |
+| `outcome_summary` | Git-derived summary of commits produced (stored at completion time) |
 | `coalesced_id` | Links subordinate tasks to a root task for merge; NULL = standalone/root |
 
 ### Task State Derivation
@@ -143,21 +143,15 @@ The commit range (`start_commit..result_commit`) feeds into dependency trigger c
 
 ## Dispatch Outcomes
 
-When a task completes, the platform derives an outcome summary and supports user rating. These serve both the operator (scan completed work at a glance) and downstream agents (understand what upstream actually produced).
+When a task completes, the platform derives an outcome summary from git. This serves both the operator (scan completed work at a glance) and downstream agents (understand what upstream actually produced).
 
 ### Outcome Summary
 
 The summary is computed from git artifacts — the commits between `start_commit` and `result_commit`. It captures commit messages and change statistics. This is a derived value, not an authored one: the platform reads what the repository records, not what the agent claims.
 
 - If `start_commit == result_commit`, the task produced no commits and has no summary
-- The summary is computed at completion time and stored (or derived on read) for display in the History view
+- The summary is computed at completion time and stored on the task record (`outcome_summary` column). The API prefers the stored value and falls back to live git computation for older tasks that predate the column
 - When this task triggers downstream dependents, the outcome summary is included in the trigger context — downstream agents receive concrete information about what their upstream produced
-
-### Task Rating
-
-The user can rate a completed task with a binary signal (positive or negative). Ratings are stored on the task record (`rating` column on `tasks`). The default is null (unrated). Ratings are never inferred or auto-assigned — they require explicit user action.
-
-The rating dataset can later be correlated with job instructions, model choices, and trigger patterns. The platform stores the signal; analysis is a future concern.
 
 ## Manual Queue Composition
 
