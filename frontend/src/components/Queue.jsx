@@ -4,7 +4,7 @@ import {
   getTaskQueue, cancelTask, updateTask, getTaskOutput,
   getTaskDiff, getTaskOutcome, getQueueSettings, setQueueSettings, processOne,
   streamTask, approveTask, rejectTask,
-  reorderTasks, mergeTasks, splitTask, getSubordinates,
+  reorderTasks, mergeTasks, splitTask, uncoalesceTask, getSubordinates,
   transferTask,
 } from '../api'
 import {
@@ -204,6 +204,18 @@ export default function Queue() {
       await refresh()
     } catch (e) {
       setActionError(e.message)
+    }
+  }
+
+  const handleUncoalesce = async (taskId, e) => {
+    e.stopPropagation()
+    setActionError('')
+    try {
+      await uncoalesceTask(taskId)
+      setSubordinates(prev => prev.filter(s => s.id !== taskId))
+      await refresh()
+    } catch (err) {
+      setActionError(err.message)
     }
   }
 
@@ -693,6 +705,13 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }
               title={`Task #${t.id}`}
             >
               {TRIGGER_ICONS[t.trigger] || ''} {triggerLabel(t)}
+              {isPending && !t.isRoot && allTriggers.length > 1 && (
+                <button
+                  className="trigger-chip-remove"
+                  onClick={(e) => handleUncoalesce(t.id, e)}
+                  title="Split this trigger out"
+                >×</button>
+              )}
             </span>
           ))}
         </div>
