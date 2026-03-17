@@ -270,13 +270,9 @@ function HistoryColumn({ title, items, loading, emptyLabel, selected, onSelect }
                   </div>
                 ) : (
                   <>
-                    {item.outcome_summary ? (
-                      <div className="feed-message history-outcome">{item.outcome_summary.split('\n')[0]}</div>
-                    ) : (
-                      <div className="feed-message">
-                        {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
-                      </div>
-                    )}
+                    <div className="feed-message">
+                      {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
+                    </div>
                     {hasCommits && (
                       <div className="feed-commits">
                         {item.start_commit.slice(0, 8)}..{item.result_commit.slice(0, 8)}
