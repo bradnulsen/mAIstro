@@ -345,7 +345,7 @@ export default function Queue() {
               <div className="detail-actions">
                 {confirmCancel === selected.id ? (
                   <div className="action-row">
-                    <span style={{ fontSize: 12 }}>Cancel this task?</span>
+                    <span className="confirm-text">Cancel this task?</span>
                     <button className="danger small" onClick={() => handleCancel(selected.id)}>Confirm</button>
                     <button className="small" onClick={() => setConfirmCancel(null)}>No</button>
                   </div>

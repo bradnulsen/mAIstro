@@ -1217,6 +1217,10 @@ label.muted-text {
   white-space: nowrap;
 }
 
+.project-opener > p {
+  color: var(--text-muted);
+}
+
 .project-error {
   color: var(--danger);
   font-size: 12px;
@@ -2122,3 +2126,85 @@ label.muted-text {
   display: flex;
   gap: 4px;
 }
+
+.chat-new-bar button { flex: 1; }
+
+/* ── Job Detail Header Row ── */
+
+.job-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-header h2 {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* ── Task Actions (dispatch row) ── */
+
+.task-actions > textarea { flex: 1; }
+.task-actions button.primary { align-self: flex-end; }
+.task-actions .tool-spinner { margin-right: 5px; }
+
+/* ── Field Row Inputs ── */
+
+/* Text inputs in field-row (e.g. schedule) fill remaining space */
+.field-row > input[type="text"] { flex: 1; }
+/* Muted descriptions alongside inputs never wrap */
+.field-row .muted-text { white-space: nowrap; }
+
+/* ── Task List / Detail Overrides ── */
+
+/* Save bar error text expands to push buttons right */
+.task-save-bar .error-text { flex: 1; }
+
+/* New Job footer button fills the footer width */
+.task-list-footer > button { width: 100%; }
+
+/* Create-form text input fills row */
+.task-create-form-row input { flex: 1; }
+
+/* Fixed-width number inputs */
+.timeout-input { width: 100px; }
+
+/* File size column in resolved file list */
+.resolved-file-item .file-size { color: var(--text-muted); }
+
+/* Dispatch error message spacing */
+.dispatch-error { margin-bottom: 8px; }
+
+/* Danger zone sub-errors */
+.task-section.danger .error-text { margin-top: 6px; }
+
+/* ── Confirmation Text ── */
+
+/* Short confirm prompts inside .action-row */
+.confirm-text { font-size: 12px; }
+
+/* ── Detail Action Errors (Queue + History) ── */
+
+.detail-actions .error-text { margin-top: 6px; }
+
+/* ── MCP Server Content Block ── */
+
+.mcp-server-content { flex: 1; min-width: 0; }
+
+/* ── Feed Commit Detail Panel ── */
+
+/* Changed-files section doesn't shrink when diff panel expands */
+.commit-files-section { flex-shrink: 0; }
+
+/* Individual changed file row */
+.commit-changed-file { font-size: 11px; padding: 1px 0; }
+
+/* Diff section — flex column fills remaining panel height */
+.diff-wrapper {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.diff-wrapper label { flex-shrink: 0; }

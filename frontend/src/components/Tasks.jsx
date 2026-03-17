@@ -16,6 +16,8 @@ const TIPS = {
   timeout: 'Maximum execution time in seconds. The platform gracefully terminates the agent when reached, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.',
   model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.',
   mcpServers: 'External MCP servers to connect to this job\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
+  allowedInternalTools: 'Internal MCP tools the agent can access. When a subset is selected, only listed tools are presented by the internal server. All checked = default (no restrictions). Use this to create read-only jobs or restrict dispatch capabilities.',
+  allowedDispatchTargets: 'Jobs this agent can dispatch via the dispatch_task tool. When none are selected, the agent cannot dispatch other jobs. Self-dispatch is always prohibited.',
 }
 
 export default function Tasks({ jobs, onRefresh, onNavigate }) {
@@ -134,7 +136,6 @@ export default function Tasks({ jobs, onRefresh, onNavigate }) {
                     onChange={e => { setNewName(e.target.value); setCreateError('') }}
                     onKeyDown={e => e.key === 'Enter' && handleCreate()}
                     autoFocus
-                    style={{ flex: 1 }}
                   />
                   <button className="small primary" onClick={handleCreate}>+</button>
                   <button className="small" onClick={() => { setCreating(false); setCreateError('') }}>✕</button>
@@ -142,7 +143,7 @@ export default function Tasks({ jobs, onRefresh, onNavigate }) {
                 {createError && <span className="error-text">{createError}</span>}
               </div>
             ) : (
-              <button className="small" style={{ width: '100%' }} onClick={() => setCreating(true)}>
+              <button className="small" onClick={() => setCreating(true)}>
                 + New Job
               </button>
             )}
@@ -261,7 +262,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
       {isDirty && (
         <div className="task-save-bar">
           <span className="task-save-bar-label">Unsaved changes</span>
-          {saveError && <span className="error-text" style={{ flex: 1 }}>{saveError}</span>}
+          {saveError && <span className="error-text">{saveError}</span>}
           <button onClick={() => { setEditing({}); setSaveError('') }}>Discard</button>
           <button className="primary" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
@@ -269,8 +270,8 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: props.description ? 4 : 12 }}>
-        <h2 style={{ flex: 1 }}>{job.name}</h2>
+      <div className="job-header" style={{ marginBottom: props.description ? 4 : 12 }}>
+        <h2>{job.name}</h2>
         <span className="muted-text">id: {job.id}</span>
       </div>
       {props.description && (
@@ -287,7 +288,6 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
           placeholder="Optional context... (↵ to dispatch)"
           maxHeight={120}
           minRows={1}
-          style={{ flex: 1 }}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey && !dispatching) {
               e.preventDefault()
@@ -299,10 +299,9 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
           className="primary"
           onClick={handleDispatch}
           disabled={dispatching}
-          style={{ alignSelf: 'flex-end' }}
         >
           {dispatching
-            ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Dispatching</>
+            ? <><span className="tool-spinner" />Dispatching</>
             : '▶ Dispatch'}
         </button>
       </div>
@@ -316,7 +315,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
         </div>
       )}
       {dispatchError && (
-        <div className="error-text" style={{ marginBottom: 8 }}>{dispatchError}</div>
+        <div className="error-text dispatch-error">{dispatchError}</div>
       )}
 
       {/* Tabbed sections */}
@@ -399,7 +398,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
                 onChange={e => edit('timeout', parseInt(e.target.value) || 0)}
                 min={0}
                 step={60}
-                style={{ width: 100 }}
+                className="timeout-input"
               />
               <span className="muted-text">
                 {(() => {
@@ -478,10 +477,9 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
                 value={getVal('schedule') || ''}
                 onChange={e => edit('schedule', e.target.value)}
                 placeholder="e.g. */30 * * * *  or  0 9 * * 1-5"
-                style={{ flex: 1 }}
               />
               {getVal('schedule') && (
-                <span className="muted-text" style={{ whiteSpace: 'nowrap' }}>
+                <span className="muted-text">
                   {describeCron(getVal('schedule'))}
                 </span>
               )}
@@ -517,7 +515,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
                   {subs.subscriptions.map(f => (
                     <div key={f.path} className="resolved-file-item">
                       <span>{f.path}</span>
-                      <span style={{ color: 'var(--text-muted)' }}>{formatSize(f.size)}</span>
+                      <span className="file-size">{formatSize(f.size)}</span>
                     </div>
                   ))}
                 </div>
@@ -571,15 +569,68 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
 
           {toolInventory.internal_mcp.length > 0 && (
             <div className="field-group">
-              <label>Internal Platform Tools <span className="muted-text">(always available)</span></label>
-              <div className="checkbox-list">
-                {toolInventory.internal_mcp.map(tool => (
-                  <label key={tool} className="checkbox-label readonly">
-                    <input type="checkbox" checked disabled />
-                    {tool}
-                  </label>
-                ))}
+              <div className="label-row">
+                <label>Internal Platform Tools</label>
+                <HelpTip text={TIPS.allowedInternalTools} />
               </div>
+              <div className="checkbox-list">
+                {toolInventory.internal_mcp.map(tool => {
+                  const allowed = getVal('allowed_internal_tools') || []
+                  const checked = allowed.includes(tool)
+                  const allEmpty = allowed.length === 0
+                  return (
+                    <label key={tool} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={allEmpty || checked}
+                        onChange={() => {
+                          if (allEmpty) {
+                            edit('allowed_internal_tools', toolInventory.internal_mcp.filter(t => t !== tool))
+                          } else {
+                            const next = checked ? allowed.filter(t => t !== tool) : [...allowed, tool]
+                            edit('allowed_internal_tools', next.length === toolInventory.internal_mcp.length ? [] : next)
+                          }
+                        }}
+                      />
+                      {tool}
+                    </label>
+                  )
+                })}
+              </div>
+              {(getVal('allowed_internal_tools') || []).length === 0 && toolInventory.internal_mcp.length > 0 && (
+                <span className="muted-text">All internal tools enabled (default)</span>
+              )}
+            </div>
+          )}
+
+          {allJobs.length > 1 && (
+            <div className="field-group">
+              <div className="label-row">
+                <label>Allowed Dispatch Targets</label>
+                <HelpTip text={TIPS.allowedDispatchTargets} />
+              </div>
+              <div className="checkbox-list">
+                {allJobs.filter(j => j.id !== job.id).map(j => {
+                  const targets = getVal('allowed_dispatch_targets') || []
+                  const checked = targets.includes(j.id)
+                  return (
+                    <label key={j.id} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          const next = checked ? targets.filter(t => t !== j.id) : [...targets, j.id]
+                          edit('allowed_dispatch_targets', next)
+                        }}
+                      />
+                      {j.name}
+                    </label>
+                  )
+                })}
+              </div>
+              {(getVal('allowed_dispatch_targets') || []).length === 0 && (
+                <span className="muted-text">No dispatch targets — agent cannot dispatch other jobs</span>
+              )}
             </div>
           )}
 
@@ -639,15 +690,15 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
       <div className="task-section danger">
         <h3>Danger Zone</h3>
         {confirmDelete ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12 }}>Delete "{job.name}"?</span>
+          <div className="action-row">
+            <span className="confirm-text">Delete "{job.name}"?</span>
             <button className="danger small" onClick={handleDelete}>Confirm</button>
             <button className="small" onClick={() => setConfirmDelete(false)}>Cancel</button>
           </div>
         ) : (
           <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Job</button>
         )}
-        {deleteError && <div className="error-text" style={{ marginTop: 6 }}>{deleteError}</div>}
+        {deleteError && <div className="error-text">{deleteError}</div>}
       </div>
     </div>
   )

@@ -15,6 +15,9 @@ export default function McpServers() {
   const [mcpArgs, setMcpArgs] = useState('')
   const [mcpError, setMcpError] = useState('')
 
+  // Edit state: { name, command, args }
+  const [editing, setEditing] = useState(null)
+
   // MCP server probes: { [name]: { status, tools, error, loading } }
   const [serverProbes, setServerProbes] = useState({})
   const [activeProbeServer, setActiveProbeServer] = useState(null)
@@ -67,6 +70,21 @@ export default function McpServers() {
     flash('Server removed')
   }
 
+  const startEdit = (s) => {
+    const args = s.args ? (() => { try { return JSON.parse(s.args).join('\n') } catch { return s.args } })() : ''
+    setEditing({ name: s.name, command: s.command, args })
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editing) return
+    const args = editing.args.trim() ? editing.args.trim().split(/\s+/) : []
+    await updateMcpServer(editing.name, { command: editing.command, args })
+    setEditing(null)
+    const servers = await listMcpServers()
+    setMcpServers(servers)
+    flash('Server updated')
+  }
+
   const handleProbeMcp = async (name) => {
     setActiveProbeServer(name)
     setServerProbes(prev => ({ ...prev, [name]: { loading: true } }))
@@ -99,6 +117,7 @@ export default function McpServers() {
           {mcpServers.map(s => {
             const probe = serverProbes[s.name]
             const isActive = activeProbeServer === s.name
+            const isEditing = editing?.name === s.name
             return (
               <div key={s.name} className={`mcp-server-item${s.enabled ? '' : ' disabled'}${isActive ? ' active' : ''}`}>
                 <div>
@@ -108,7 +127,7 @@ export default function McpServers() {
                     onChange={e => handleToggleMcp(s.name, e.target.checked)}
                     title={s.enabled ? 'Enabled — available to jobs' : 'Disabled — unavailable to any job'}
                   />
-                  <div>
+                  <div className="mcp-server-content">
                     <div className="mcp-server-name">
                       {s.name}
                       {probe && !probe.loading && (
@@ -118,18 +137,44 @@ export default function McpServers() {
                         />
                       )}
                     </div>
-                    <div className="mcp-server-cmd">
-                      {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
-                    </div>
+                    {isEditing ? (
+                      <div className="mcp-edit-form">
+                        <div className="mcp-edit-row">
+                          <label>Command</label>
+                          <input value={editing.command} onChange={e => setEditing({ ...editing, command: e.target.value })} />
+                        </div>
+                        <div className="mcp-edit-row">
+                          <label>Arguments</label>
+                          <textarea
+                            value={editing.args}
+                            onChange={e => setEditing({ ...editing, args: e.target.value })}
+                            rows={2}
+                          />
+                        </div>
+                        <div className="mcp-edit-actions">
+                          <button className="small" onClick={handleSaveEdit}>Save</button>
+                          <button className="small" onClick={() => setEditing(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mcp-server-cmd">
+                        {s.command} {s.args ? (() => { try { return JSON.parse(s.args).join(' ') } catch { return s.args } })() : ''}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="mcp-server-actions">
-                  {s.enabled && (
+                  {!isEditing && (
+                    <button className="small" onClick={() => startEdit(s)}>Edit</button>
+                  )}
+                  {s.enabled && !isEditing && (
                     <button className="small" onClick={() => handleProbeMcp(s.name)} disabled={probe?.loading}>
                       {probe?.loading ? '...' : 'Test'}
                     </button>
                   )}
-                  <button className="small danger" onClick={() => handleDeleteMcp(s.name)}>Remove</button>
+                  {!isEditing && (
+                    <button className="small danger" onClick={() => handleDeleteMcp(s.name)}>Remove</button>
+                  )}
                 </div>
               </div>
             )

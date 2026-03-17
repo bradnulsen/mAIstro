@@ -118,19 +118,19 @@ export default function Feed() {
               {selected.message}
             </div>
             {selected.files && (
-              <div className="detail-section" style={{ flexShrink: 0 }}>
+              <div className="detail-section commit-files-section">
                 <label>Changed Files</label>
                 {selected.files.map(f => (
-                  <div key={f} style={{ fontSize: 11, padding: '1px 0' }}>{f}</div>
+                  <div key={f} className="commit-changed-file">{f}</div>
                 ))}
               </div>
             )}
             {loadingDiff && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '8px 0' }}>Loading diff...</div>
+              <div className="diff-status-note">Loading diff...</div>
             )}
             {diff && (
-              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                <label style={{ flexShrink: 0 }}>Diff</label>
+              <div className="diff-wrapper">
+                <label>Diff</label>
                 <pre className="diff-view">
                   {diff.split('\n').map((line, i) => (
                     <div key={i} className={

@@ -204,7 +204,7 @@ function ProjectOpener({ onOpen }) {
   return (
     <div className="project-opener">
       <h1>⬡ mAistro</h1>
-      <p style={{ color: 'var(--text-muted)' }}>Open a project directory to begin</p>
+      <p>Open a project directory to begin</p>
       <div className="input-row">
         <input
           type="text"

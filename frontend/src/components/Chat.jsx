@@ -232,7 +232,7 @@ export default function Chat() {
       {/* Session list */}
       <div className="chat-sidebar">
         <div className="chat-new-bar">
-          <button className="small" style={{ flex: 1 }} onClick={handleNewChat}>+ New</button>
+          <button className="small" onClick={handleNewChat}>+ New</button>
         </div>
         {sessions.length > 0 && (
           <div className="scroll-area">

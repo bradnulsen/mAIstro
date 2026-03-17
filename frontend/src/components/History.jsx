@@ -184,7 +184,7 @@ export default forwardRef(function History(props, ref) {
                 </div>
               )}
               {actionError && (
-                <div className="error-text" style={{ marginTop: 6 }}>{actionError}</div>
+                <div className="error-text">{actionError}</div>
               )}
             </div>
           </div>
