@@ -450,16 +450,16 @@ async def enqueue_task(job_id: str, trigger: str,
     if auto_queue == "true":
         queued_at = utcnow()
 
-    # Insert the atomic task
+    # Insert the atomic task (not committed yet — coalesce update shares the transaction)
     cursor = await db.execute(
         """INSERT INTO tasks (job_id, trigger, trigger_detail, context, approval, queued_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
         (job_id, trigger, trigger_detail, context, approval, queued_at)
     )
     new_id = cursor.lastrowid
-    await db.commit()
 
     # Coalesce: find an existing pending root and link this task to it
+    root_id = None
     if coalesce_global or coalesce_same_type:
         query = """SELECT id FROM tasks
                    WHERE job_id = ? AND started_at IS NULL AND error IS NULL
@@ -476,10 +476,10 @@ async def enqueue_task(job_id: str, trigger: str,
                 "UPDATE tasks SET coalesced_id = ? WHERE id = ?",
                 (root_id, new_id)
             )
-            await db.commit()
-            return root_id
 
-    return new_id
+    # Single commit: insert + optional coalesce link land atomically
+    await db.commit()
+    return root_id if root_id is not None else new_id
 
 
 async def get_task(task_id: int) -> dict | None:
@@ -761,16 +761,18 @@ async def rate_task(task_id: int, rating: str | None) -> bool:
 async def sweep_stale_tasks(now: str):
     """Mark any in-flight tasks as interrupted (e.g. after restart)."""
     db = await get_db()
+    # Read stale IDs first, then update — avoids two full scans with identical predicates.
     rows = await db.execute_fetchall(
         "SELECT id FROM tasks WHERE started_at IS NOT NULL AND completed_at IS NULL"
     )
-    if rows:
-        await db.execute(
-            "UPDATE tasks SET completed_at = ?, error = 'interrupted'"
-            " WHERE started_at IS NOT NULL AND completed_at IS NULL",
-            (now,)
-        )
-        await db.commit()
+    if not rows:
+        return []
+    await db.execute(
+        "UPDATE tasks SET completed_at = ?, error = 'interrupted'"
+        " WHERE started_at IS NOT NULL AND completed_at IS NULL",
+        (now,)
+    )
+    await db.commit()
     return [row["id"] for row in rows]
 
 
