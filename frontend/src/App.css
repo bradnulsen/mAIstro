@@ -622,6 +622,7 @@ label.muted-text {
   background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: 4px;
+  min-height: 200px;
   max-height: 300px;
   overflow-y: auto;
   cursor: text;
@@ -748,10 +749,6 @@ label.muted-text {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 16px;
-}
-.instructions-preview {
-  min-height: 200px;
-  overflow-y: auto;
 }
 
 .task-actions {
@@ -1666,7 +1663,7 @@ label.muted-text {
   font-size: 11px;
   font-family: var(--font-mono, monospace);
   color: var(--text);
-  background: var(--bg-offset, var(--bg-secondary));
+  background: var(--bg);
   padding: 2px 6px;
   border-radius: 3px;
   border: 1px solid var(--border-light);
