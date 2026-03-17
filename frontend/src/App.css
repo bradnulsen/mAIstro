@@ -1595,12 +1595,11 @@ label.muted-text {
 }
 
 .mcp-config-panel {
-  width: 400px;
-  min-width: 280px;
+  flex: 1;
+  min-width: 0;
   border-right: 1.5px solid var(--border);
   overflow-y: auto;
   padding: 16px 20px;
-  flex-shrink: 0;
 }
 
 .mcp-results-panel {
@@ -1656,17 +1655,21 @@ label.muted-text {
 
 .mcp-results-tools-list {
   margin: 0;
-  padding: 0 0 0 16px;
-  list-style: disc;
+  padding: 0;
+  list-style: none;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 
 .mcp-results-tools-list li {
-  font-size: 12px;
+  font-size: 11px;
   font-family: var(--font-mono, monospace);
   color: var(--text);
+  background: var(--bg-offset, var(--bg-secondary));
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-light);
 }
 
 /* ── MCP server items (config panel) ── */
@@ -1733,7 +1736,7 @@ label.muted-text {
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   line-height: 1.5;
-  min-height: 72px;
+  min-height: 48px;
 }
 
 .mcp-add-form .error-text {

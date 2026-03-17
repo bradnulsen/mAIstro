@@ -151,7 +151,7 @@ export default function McpServers() {
                 value={mcpArgs}
                 onChange={e => setMcpArgs(e.target.value)}
                 placeholder={`-m my_server\n--port 3000\n--verbose`}
-                rows={4}
+                rows={2}
               />
             </div>
             {mcpError && <div className="error-text">{mcpError}</div>}

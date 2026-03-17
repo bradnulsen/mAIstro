@@ -289,7 +289,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
           minRows={1}
           style={{ flex: 1 }}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey && !dispatching && !props.running) {
+            if (e.key === 'Enter' && !e.shiftKey && !dispatching) {
               e.preventDefault()
               handleDispatch()
             }
@@ -298,14 +298,11 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
         <button
           className="primary"
           onClick={handleDispatch}
-          disabled={dispatching || props.running}
-          title={props.running ? 'Job is currently running' : undefined}
+          disabled={dispatching}
           style={{ alignSelf: 'flex-end' }}
         >
           {dispatching
             ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Queuing</>
-            : props.running
-            ? <><span className="pulse-dot" style={{ marginRight: 4 }}>●</span>Running</>
             : '▶ Queue'}
         </button>
       </div>
