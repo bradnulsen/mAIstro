@@ -350,31 +350,22 @@ export default function Queue() {
                       </>
                     )}
                     {selectedStatus === 'pending' && (
-                      <>
-                        <button
-                          className="small primary"
-                          onClick={() => handleTransfer(selected.id, true)}
-                          title="Move to active column"
-                        >
-                          → Active
-                        </button>
-                        <button
-                          className="small"
-                          onClick={() => handleProcessOne(selected.id)}
-                          disabled={anyRunning}
-                          title={anyRunning ? 'Another task is running' : 'Run this task now'}
-                        >
-                          ▶ Run Now
-                        </button>
-                      </>
+                      <button
+                        className="small"
+                        onClick={() => handleProcessOne(selected.id)}
+                        disabled={anyRunning}
+                        title={anyRunning ? 'Another task is running' : 'Activate this task'}
+                      >
+                        ▶ Activate
+                      </button>
                     )}
                     {selectedStatus === 'queued' && (
                       <button
                         className="small"
                         onClick={() => handleTransfer(selected.id, false)}
-                        title="Move back to pending"
+                        title="Shelve back to pending"
                       >
-                        ← Pending
+                        ▣ Shelve
                       </button>
                     )}
                     {selectedStatus === 'pending' && selected.subordinate_count > 0 && (
