@@ -492,6 +492,16 @@ async def reorder_tasks(task_ids: list[int]):
     await db.commit()
 
 
+async def _flatten_coalesce(conn: aiosqlite.Connection, task_id: int, new_root_id: int):
+    """After setting task_id.coalesced_id = new_root_id, re-point any tasks
+    that were subordinates of task_id to new_root_id instead.
+    Ensures coalesce groups are always flat (depth 1)."""
+    await conn.execute(
+        "UPDATE tasks SET coalesced_id = ? WHERE coalesced_id = ?",
+        (new_root_id, task_id)
+    )
+
+
 async def get_subordinate_tasks(root_id: int) -> list[dict]:
     """Return all tasks with coalesced_id pointing to root_id."""
     db = await get_db()
@@ -543,6 +553,10 @@ async def merge_tasks(task_ids: list[int]) -> int:
         f"UPDATE tasks SET coalesced_id = ? WHERE id IN ({sub_placeholders})",
         [root_id] + sub_ids,
     )
+    # Flatten: any tasks that were subordinates of the newly-merged tasks
+    # should now point directly to the new root
+    for sid in sub_ids:
+        await _flatten_coalesce(db, sid, root_id)
     await db.commit()
     return root_id
 

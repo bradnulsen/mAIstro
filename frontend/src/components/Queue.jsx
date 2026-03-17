@@ -4,7 +4,7 @@ import {
   getTaskQueue, cancelTask, updateTask, getTaskOutput,
   getTaskDiff, getTaskOutcome, getQueueSettings, setQueueSettings, processOne,
   streamTask, resumeTask, retryTask, approveTask, rejectTask,
-  reorderTasks, mergeTasks, splitTask, rateTask,
+  reorderTasks, mergeTasks, splitTask, getSubordinates, rateTask,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
@@ -585,7 +585,17 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
 
   const [outcomeSummary, setOutcomeSummary] = useState(null)
 
-  useEffect(() => { setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false); setOutcomeSummary(null) }, [item.id])
+  // Subordinate triggers for coalesced tasks
+  const [subordinates, setSubordinates] = useState([])
+  const [selectedTrigger, setSelectedTrigger] = useState(null) // null = root
+
+  useEffect(() => {
+    setEditingContext(null); setSaveError(''); setDiffData(null); setDiffOpen(false)
+    setOutcomeSummary(null); setSelectedTrigger(null); setSubordinates([])
+    if (item.subordinate_count > 0) {
+      getSubordinates(item.id).then(setSubordinates).catch(() => setSubordinates([]))
+    }
+  }, [item.id, item.subordinate_count])
 
   useEffect(() => {
     if (!item.completed_at || !item.start_commit || !item.result_commit || item.start_commit === item.result_commit) return
@@ -613,9 +623,14 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
     if (editingContext === null) return
     setSaveError('')
     try {
-      await updateTask(item.id, { context: editingContext })
+      const targetId = selectedTrigger ?? item.id
+      await updateTask(targetId, { context: editingContext })
       setEditingContext(null)
       if (onUpdate) await onUpdate()
+      // Re-fetch subordinates to get updated context
+      if (item.subordinate_count > 0) {
+        getSubordinates(item.id).then(setSubordinates).catch(() => {})
+      }
     } catch (e) { setSaveError(e.message) }
   }
 
@@ -626,7 +641,13 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
     return () => clearInterval(interval)
   }, [status])
 
-  const ctx = item.context || ''
+  // Build the list of all triggers (root + subordinates)
+  const allTriggers = [
+    { id: item.id, trigger: item.trigger, trigger_detail: item.trigger_detail, context: item.context, isRoot: true },
+    ...subordinates.map(s => ({ id: s.id, trigger: s.trigger, trigger_detail: s.trigger_detail, context: s.context, isRoot: false })),
+  ]
+  const activeTrigger = allTriggers.find(t => t.id === selectedTrigger) || allTriggers[0]
+  const ctx = activeTrigger?.context || ''
 
   return (
     <>
@@ -638,11 +659,18 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
       </div>
 
       <div className="detail-section">
-        <label>Trigger</label>
+        <label>Triggers{allTriggers.length > 1 ? ` (${allTriggers.length})` : ''}</label>
         <div className="trigger-chips">
-          <span className="trigger-chip active">
-            {TRIGGER_ICONS[item.trigger] || ''} {triggerLabel(item)}
-          </span>
+          {allTriggers.map(t => (
+            <span
+              key={t.id}
+              className={`trigger-chip${activeTrigger.id === t.id ? ' active' : ''}${allTriggers.length > 1 ? ' selectable' : ''}`}
+              onClick={() => allTriggers.length > 1 && setSelectedTrigger(t.id === item.id ? null : t.id)}
+              title={`Task #${t.id}`}
+            >
+              {TRIGGER_ICONS[t.trigger] || ''} {triggerLabel(t)}
+            </span>
+          ))}
         </div>
       </div>
 

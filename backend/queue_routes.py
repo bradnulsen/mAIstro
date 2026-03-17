@@ -206,7 +206,7 @@ async def resume_task(task_id: int):
 
 @router.post("/api/tasks/{task_id}/retry")
 async def retry_task(task_id: int, req: RetryRequest | None = None):
-    """Retry a completed task — creates a new task with retry context."""
+    """Retry a completed task — resurrects the original record in-place."""
     require_project()
     task = await db.get_task(task_id)
     if not task:
@@ -214,6 +214,7 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     if not task.get("completed_at"):
         raise HTTPException(409, "Task is not completed")
 
+    # Build retry context from the previous run's outcome
     parts = []
     error = task.get("error")
     if error:
@@ -228,13 +229,25 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     retry_summary = " — ".join(parts) if parts else "fresh re-dispatch"
     retry_context = f"**Retry** of task #{task_id}: {retry_summary}"
 
-    new_id = await db.enqueue_task(
-        task["job_id"], "retry",
+    # Resurrect in-place: reset lifecycle fields, update trigger, reset created_at
+    now = utcnow()
+    await db.update_task(
+        task_id,
+        trigger="retry",
         trigger_detail=str(task_id),
         context=retry_context,
+        started_at=None,
+        completed_at=None,
+        error=None,
+        start_commit=None,
+        result_commit=None,
+        session_id=None,
+        resume_session_id=None,
+        rating=None,
+        created_at=now,
     )
     worker.notify()
-    return {"task_id": new_id}
+    return {"task_id": task_id}
 
 
 @router.post("/api/tasks/merge")
@@ -246,6 +259,14 @@ async def merge_tasks_route(req: MergeRequest):
         return {"root_id": root_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/api/tasks/{task_id}/subordinates")
+async def get_subordinates(task_id: int):
+    """Get all subordinate tasks coalesced under this root."""
+    require_project()
+    subs = await db.get_subordinate_tasks(task_id)
+    return subs
 
 
 @router.post("/api/tasks/{task_id}/split")

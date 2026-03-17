@@ -107,6 +107,9 @@ export const mergeTasks = (taskIds) =>
 export const splitTask = (id) =>
   fetchJSON(`/api/tasks/${id}/split`, { method: 'POST' })
 
+export const getSubordinates = (id) =>
+  fetchJSON(`/api/tasks/${id}/subordinates`)
+
 export const rateTask = (id, rating) =>
   fetchJSON(`/api/tasks/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
 
