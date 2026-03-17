@@ -259,7 +259,7 @@ export default function Queue() {
         <div className="header-bar">
           <h1>Dispatch</h1>
           <div className="dispatch-tabs">
-            <button className="dispatch-tab" onClick={() => setTab('queue')}>Queue</button>
+            <button className="dispatch-tab" onClick={() => setTab('queue')}>Upcoming</button>
             <button className="dispatch-tab active">History</button>
           </div>
           <div className="spacer" />
@@ -277,7 +277,7 @@ export default function Queue() {
       <div className="header-bar">
         <h1>Dispatch</h1>
         <div className="dispatch-tabs">
-          <button className="dispatch-tab active">Queue</button>
+          <button className="dispatch-tab active">Upcoming</button>
           <button className="dispatch-tab" onClick={() => setTab('history')}>History</button>
         </div>
         <div className="spacer" />
@@ -304,7 +304,7 @@ export default function Queue() {
             onTransfer={handleTransfer}
           />
           <KanbanColumn
-            title="Queue"
+            title="Active"
             items={queuedItems}
             column="queued"
             dragMode="reorder"
@@ -354,9 +354,9 @@ export default function Queue() {
                         <button
                           className="small primary"
                           onClick={() => handleTransfer(selected.id, true)}
-                          title="Move to queued column"
+                          title="Move to active column"
                         >
-                          → Queue
+                          → Active
                         </button>
                         <button
                           className="small"
@@ -507,7 +507,6 @@ function KanbanColumn({
         {/* Active tasks appear above queued items */}
         {activeItems && activeItems.length > 0 && (
           <>
-            <div className="kanban-section-divider">Active</div>
             {activeItems.map(item => (
               <div
                 key={item.id}
