@@ -785,12 +785,9 @@ async def approve_task(task_id: int) -> bool:
     """Approve a pending-approval task (and its subordinates)."""
     db = await get_db()
     cursor = await db.execute(
-        "UPDATE tasks SET approval = 'approved' WHERE id = ? AND approval = 'pending'",
-        (task_id,)
-    )
-    await db.execute(
-        "UPDATE tasks SET approval = 'approved' WHERE coalesced_id = ? AND approval = 'pending'",
-        (task_id,)
+        "UPDATE tasks SET approval = 'approved'"
+        " WHERE (id = ? OR coalesced_id = ?) AND approval = 'pending'",
+        (task_id, task_id)
     )
     await db.commit()
     return cursor.rowcount > 0
@@ -802,12 +799,9 @@ async def reject_task(task_id: int) -> bool:
     from backend.state import utcnow
     now = utcnow()
     cursor = await db.execute(
-        "UPDATE tasks SET approval = 'rejected', completed_at = ?, error = 'rejected' WHERE id = ? AND approval = 'pending'",
-        (now, task_id)
-    )
-    await db.execute(
-        "UPDATE tasks SET approval = 'rejected', completed_at = ?, error = 'rejected' WHERE coalesced_id = ? AND approval = 'pending'",
-        (now, task_id)
+        "UPDATE tasks SET approval = 'rejected', completed_at = ?, error = 'rejected'"
+        " WHERE (id = ? OR coalesced_id = ?) AND approval = 'pending'",
+        (now, task_id, task_id)
     )
     await db.commit()
     return cursor.rowcount > 0
