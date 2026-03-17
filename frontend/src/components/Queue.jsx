@@ -812,7 +812,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }
             const content = getMessageContent(msg)
             if (!content.trim()) return null
             return (
-              <div key={i} className="md-content md-output" style={{ marginBottom: 6 }}>
+              <div key={i} className="md-content md-output">
                 <Markdown>{mdBreaks(content)}</Markdown>
               </div>
             )
@@ -839,14 +839,14 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }
           {diffOpen && (
             <>
               {diffLoading && (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 0' }}>Loading diff...</div>
+                <div className="diff-status-note">Loading diff...</div>
               )}
               {diffData && diffData.files.length > 0 && (
                 <>
-                  <div style={{ marginBottom: 8 }}>
+                  <div className="diff-file-list">
                     {diffData.files.map(f => (
                       <div key={f.path} className="diff-file-row">
-                        <span style={{ flex: 1 }}>{f.path}</span>
+                        <span>{f.path}</span>
                         {f.insertions > 0 && <span className="feed-stat-add">+{f.insertions}</span>}
                         {f.deletions > 0 && <span className="feed-stat-del">-{f.deletions}</span>}
                       </div>
@@ -864,7 +864,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }
                 </>
               )}
               {diffData && diffData.files.length === 0 && (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '4px 0' }}>No changes</div>
+                <div className="diff-status-note">No changes</div>
               )}
             </>
           )}

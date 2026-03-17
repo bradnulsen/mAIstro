@@ -125,8 +125,8 @@ export default function Tasks({ jobs, onRefresh, onNavigate }) {
           </div>
           <div className="task-list-footer">
             {creating ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ display: 'flex', gap: 4 }}>
+              <div className="task-create-form">
+                <div className="task-create-form-row">
                   <input
                     type="text"
                     placeholder="Job name"

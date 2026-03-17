@@ -126,7 +126,7 @@ export default function App() {
           ) : (
             <span key={j.id} className="status-idle-task">{j.name}</span>
           ))}
-          {jobs.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No jobs configured</span>}
+          {jobs.length === 0 && <span className="muted-text">No jobs configured</span>}
         </div>
 
         {view === VIEWS.feed && <Feed />}

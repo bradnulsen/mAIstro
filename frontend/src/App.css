@@ -19,6 +19,7 @@
   --code-bg: #1a1a1a;
   --code-text: #e0e0e0;
   --font: 'Courier New', monospace;
+  --font-mono: 'Courier New', monospace;
   /* Diff viewer — lighter tones suited for dark code background */
   --diff-add: #7ec87e;
   --diff-add-bg: rgba(74, 170, 74, 0.12);
@@ -1681,7 +1682,7 @@ label.muted-text {
 }
 
 .mcp-server-item.disabled { opacity: 0.5; }
-.mcp-server-item.active { border-color: var(--accent, #7c6af7); }
+.mcp-server-item.active { border-color: var(--accent); }
 
 .mcp-server-item > :first-child {
   flex: 1;
@@ -1748,8 +1749,8 @@ label.muted-text {
   vertical-align: middle;
 }
 
-.mcp-health-dot.healthy { background: var(--success, #4caf50); }
-.mcp-health-dot.unhealthy { background: var(--error, #f44336); }
+.mcp-health-dot.healthy { background: var(--success); }
+.mcp-health-dot.unhealthy { background: var(--danger); }
 
 .mcp-server-tools {
   font-size: 11px;
@@ -2031,4 +2032,49 @@ label.muted-text {
   font-weight: bold;
   margin-bottom: 12px;
   flex-shrink: 0;
+}
+
+/* ── Diff Panel Utilities ── */
+
+/* Inline status note — "Loading diff...", "No changes" */
+.diff-status-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+/* Wrapper around per-file stat rows */
+.diff-file-list {
+  margin-bottom: 8px;
+}
+
+/* Path span in .diff-file-row takes remaining space */
+.diff-file-row > span:first-child {
+  flex: 1;
+}
+
+/* Spacing between stacked output blocks */
+.md-output + .md-output {
+  margin-top: 6px;
+}
+
+/* ── Task Create Form (task-list footer) ── */
+
+.task-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-create-form-row {
+  display: flex;
+  gap: 4px;
+}
+
+/* ── Chat New Session Bar ── */
+
+.chat-new-bar {
+  padding: 6px;
+  display: flex;
+  gap: 4px;
 }
