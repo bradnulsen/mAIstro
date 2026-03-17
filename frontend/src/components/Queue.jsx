@@ -7,62 +7,17 @@ import {
   reorderTasks, mergeTasks, splitTask, getSubordinates,
   transferTask,
 } from '../api'
-import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
+import {
+  formatDate, formatDuration, TRIGGER_ICONS, mdBreaks,
+  STATUS_LABELS, TRIGGER_LABELS, getTaskStatus, triggerLabel, getMessageContent,
+} from '../util'
 import History from './History'
 
-const STATUS_LABELS = {
-  pending: 'Pending',
-  queued: 'Queued',
-  pending_approval: 'Needs Approval',
-  running: 'Running',
-  completed: 'Completed',
-  error: 'Error',
-  cancelled: 'Cancelled',
-  timed_out: 'Timed Out',
-  rejected: 'Rejected',
-}
-
-const TRIGGER_LABELS = {
-  manual: 'User',
-  commit: 'Commit',
-  resume: 'Resume',
-  retry: 'Retry',
-  dependency: 'Dependency',
-  schedule: 'Schedule',
-}
-
-function getStatus(item) {
-  if (item.error) {
-    if (item.error === 'cancelled') return 'cancelled'
-    if (item.error === 'timed out') return 'timed_out'
-    if (item.error === 'rejected') return 'rejected'
-    return 'error'
-  }
-  if (item.completed_at) return 'completed'
-  if (item.started_at) return 'running'
-  if (item.approval === 'pending') return 'pending_approval'
-  if (item.queued_at) return 'queued'
-  return 'pending'
-}
+const getStatus = getTaskStatus
 
 function isPreExecution(item) {
   const s = getStatus(item)
   return s === 'pending' || s === 'queued' || s === 'pending_approval'
-}
-
-function triggerLabel(item) {
-  const base = TRIGGER_LABELS[item.trigger] || item.trigger
-  if (item.trigger === 'commit' && item.trigger_detail) return `${base} (${item.trigger_detail.slice(0, 8)})`
-  if (item.trigger === 'dependency' && item.trigger_detail) return `${base} (${item.trigger_detail})`
-  if (item.trigger === 'manual' && item.trigger_detail) return `${base} @ ${item.trigger_detail.slice(0, 8)}`
-  if (item.trigger === 'schedule' && item.trigger_detail) return `${base} (${item.trigger_detail})`
-  return base
-}
-
-function getMessageContent(msg) {
-  if (typeof msg.content === 'string') return msg.content
-  if (Array.isArray(msg.content)) return msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
-  return String(msg.content ?? '')
 }
 
 /** Sort pre-execution tasks: sort_order first, then created_at */
@@ -77,6 +32,7 @@ function sortPreExecution(items) {
 
 export default function Queue() {
   const [tab, setTab] = useState('queue')
+  const historyRef = useRef(null)
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -306,8 +262,12 @@ export default function Queue() {
             <button className="dispatch-tab" onClick={() => setTab('queue')}>Queue</button>
             <button className="dispatch-tab active">History</button>
           </div>
+          <div className="spacer" />
+          <button className="small" onClick={() => historyRef.current?.refresh()} disabled={historyRef.current?.refreshing}>
+            {historyRef.current?.refreshing ? <span className="tool-spinner" /> : '↻'}
+          </button>
         </div>
-        <History />
+        <History ref={historyRef} />
       </>
     )
   }

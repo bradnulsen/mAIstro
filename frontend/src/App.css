@@ -130,10 +130,10 @@ body {
   cursor: pointer;
   border-radius: 3px;
 }
-.dispatch-tab:hover { color: var(--text); background: var(--surface-hover); }
+.dispatch-tab:hover { color: var(--text); background: var(--hover-bg); }
 .dispatch-tab.active {
   color: var(--text);
-  background: var(--surface-hover);
+  background: var(--hover-bg);
   border-color: var(--text-muted);
 }
 

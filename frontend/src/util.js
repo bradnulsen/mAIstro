@@ -67,3 +67,60 @@ export function formatDuration(startStr, endStr) {
   const remMins = mins % 60
   return `${hrs}h ${remMins}m`
 }
+
+/* ── Task status derivation and labels ── */
+
+export const STATUS_LABELS = {
+  pending: 'Pending',
+  queued: 'Queued',
+  pending_approval: 'Needs Approval',
+  running: 'Running',
+  completed: 'Completed',
+  error: 'Error',
+  cancelled: 'Cancelled',
+  timed_out: 'Timed Out',
+  interrupted: 'Interrupted',
+  rejected: 'Rejected',
+}
+
+export const TRIGGER_LABELS = {
+  manual: 'User',
+  commit: 'Commit',
+  resume: 'Resume',
+  retry: 'Retry',
+  dependency: 'Dependency',
+  schedule: 'Schedule',
+}
+
+/** Derive task status from lifecycle fields */
+export function getTaskStatus(item) {
+  if (item.error) {
+    if (item.error === 'cancelled') return 'cancelled'
+    if (item.error === 'timed out') return 'timed_out'
+    if (item.error === 'interrupted') return 'interrupted'
+    if (item.error === 'rejected') return 'rejected'
+    return 'error'
+  }
+  if (item.completed_at) return 'completed'
+  if (item.started_at) return 'running'
+  if (item.approval === 'pending') return 'pending_approval'
+  if (item.queued_at) return 'queued'
+  return 'pending'
+}
+
+/** Format trigger type with detail suffix */
+export function triggerLabel(item) {
+  const base = TRIGGER_LABELS[item.trigger] || item.trigger
+  if (item.trigger === 'commit' && item.trigger_detail) return `${base} (${item.trigger_detail.slice(0, 8)})`
+  if (item.trigger === 'dependency' && item.trigger_detail) return `${base} (${item.trigger_detail})`
+  if (item.trigger === 'manual' && item.trigger_detail) return `${base} @ ${item.trigger_detail.slice(0, 8)}`
+  if (item.trigger === 'schedule' && item.trigger_detail) return `${base} (${item.trigger_detail})`
+  return base
+}
+
+/** Extract text content from a chat message */
+export function getMessageContent(msg) {
+  if (typeof msg.content === 'string') return msg.content
+  if (Array.isArray(msg.content)) return msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
+  return String(msg.content ?? '')
+}

@@ -1,55 +1,17 @@
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useImperativeHandle, forwardRef } from 'react'
 import Markdown from 'react-markdown'
 import {
   getTaskQueue, getTaskOutput, getTaskDiff, getTaskOutcome,
   resumeTask, retryTask, getSubordinates, rateTask,
 } from '../api'
-import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
+import {
+  formatDate, formatDuration, TRIGGER_ICONS, mdBreaks,
+  STATUS_LABELS, TRIGGER_LABELS, getTaskStatus, triggerLabel, getMessageContent,
+} from '../util'
 
-const STATUS_LABELS = {
-  completed: 'Completed',
-  error: 'Error',
-  cancelled: 'Cancelled',
-  timed_out: 'Timed Out',
-  rejected: 'Rejected',
-}
+const getStatus = getTaskStatus
 
-const TRIGGER_LABELS = {
-  manual: 'User',
-  commit: 'Commit',
-  resume: 'Resume',
-  retry: 'Retry',
-  dependency: 'Dependency',
-  schedule: 'Schedule',
-}
-
-function getStatus(item) {
-  if (item.error) {
-    if (item.error === 'cancelled') return 'cancelled'
-    if (item.error === 'timed out') return 'timed_out'
-    if (item.error === 'rejected') return 'rejected'
-    return 'error'
-  }
-  if (item.completed_at) return 'completed'
-  return null
-}
-
-function triggerLabel(item) {
-  const base = TRIGGER_LABELS[item.trigger] || item.trigger
-  if (item.trigger === 'commit' && item.trigger_detail) return `${base} (${item.trigger_detail.slice(0, 8)})`
-  if (item.trigger === 'dependency' && item.trigger_detail) return `${base} (${item.trigger_detail})`
-  if (item.trigger === 'manual' && item.trigger_detail) return `${base} @ ${item.trigger_detail.slice(0, 8)}`
-  if (item.trigger === 'schedule' && item.trigger_detail) return `${base} (${item.trigger_detail})`
-  return base
-}
-
-function getMessageContent(msg) {
-  if (typeof msg.content === 'string') return msg.content
-  if (Array.isArray(msg.content)) return msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
-  return String(msg.content ?? '')
-}
-
-export default function History() {
+export default forwardRef(function History(props, ref) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -83,6 +45,8 @@ export default function History() {
     await refresh()
     setRefreshing(false)
   }, [refresh])
+
+  useImperativeHandle(ref, () => ({ refresh: handleRefresh, refreshing }), [handleRefresh, refreshing])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -240,7 +204,7 @@ export default function History() {
       </div>
     </>
   )
-}
+})
 
 
 function ContextEditor({ value, onChange, autoFocus = false }) {
