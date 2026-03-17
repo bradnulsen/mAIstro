@@ -523,6 +523,35 @@ function KanbanColumn({
         {items.length === 0 && !activeItems?.length && (
           <div className="empty-state">No {title.toLowerCase()} tasks</div>
         )}
+        {/* Active tasks appear above queued items */}
+        {activeItems && activeItems.length > 0 && (
+          <>
+            {activeItems.map(item => (
+              <div
+                key={item.id}
+                className={`feed-item running ${selected?.id === item.id ? 'active' : ''}`}
+                onClick={() => onSelect(item)}
+              >
+                <div className="feed-avatar">
+                  {(item.job_name || '?')[0].toUpperCase()}
+                </div>
+                <div className="feed-body">
+                  <div className="feed-meta">
+                    <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
+                    <span className="feed-author">{item.job_name}</span>
+                    <span className="queue-status running">{STATUS_LABELS.running}</span>
+                    <span>{formatDate(item.started_at, true)}</span>
+                  </div>
+                  <div className="feed-message">
+                    {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {items.length > 0 && <div className="kanban-section-divider">Queued</div>}
+          </>
+        )}
+
         {items.map((item, i) => {
           const status = getStatus(item)
           const isDropTarget = dragOverIdx === i && dragIdx !== null && dragIdx !== i
@@ -569,35 +598,6 @@ function KanbanColumn({
             </div>
           )
         })}
-
-        {/* Active tasks appear below queued items */}
-        {activeItems && activeItems.length > 0 && (
-          <>
-            <div className="kanban-section-divider">Active</div>
-            {activeItems.map(item => (
-              <div
-                key={item.id}
-                className={`feed-item running ${selected?.id === item.id ? 'active' : ''}`}
-                onClick={() => onSelect(item)}
-              >
-                <div className="feed-avatar">
-                  {(item.job_name || '?')[0].toUpperCase()}
-                </div>
-                <div className="feed-body">
-                  <div className="feed-meta">
-                    <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
-                    <span className="feed-author">{item.job_name}</span>
-                    <span className="queue-status running">{STATUS_LABELS.running}</span>
-                    <span>{formatDate(item.started_at, true)}</span>
-                  </div>
-                  <div className="feed-message">
-                    {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
       </div>
     </div>
   )
