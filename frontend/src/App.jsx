@@ -118,7 +118,6 @@ export default function App() {
               className="status-chip running"
               onClick={() => setView(VIEWS.queue)}
               title="View in Dispatch"
-              style={{ cursor: 'pointer' }}
             >
               <span className="status-dot running" />
               {j.name}
@@ -237,10 +236,9 @@ function ProjectOpener({ onOpen }) {
                 <div className="recent-project-path">{r.path}</div>
               </div>
               <button
-                className="small"
+                className="small recent-project-remove"
                 onClick={(e) => handleRemoveRecent(e, r.path)}
                 title="Remove from recent"
-                style={{ opacity: 0.5, fontSize: 10 }}
               >✕</button>
             </div>
           ))}

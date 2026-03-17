@@ -350,10 +350,7 @@ function HistoryDetail({ item, output }) {
 
       <div className="detail-section">
         <label>Context</label>
-        <pre className="context-display" style={{
-          color: ctx ? 'inherit' : 'var(--text-muted)',
-          fontStyle: ctx ? 'normal' : 'italic',
-        }}>
+        <pre className={`context-display${ctx ? '' : ' empty'}`}>
           {ctx || 'not provided'}
         </pre>
       </div>

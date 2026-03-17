@@ -364,9 +364,8 @@ export default function Queue() {
                     {selectedStatus === 'pending' && (
                       <button
                         className="small"
-                        onClick={() => handleProcessOne(selected.id)}
-                        disabled={anyRunning}
-                        title={anyRunning ? 'Another task is running' : 'Activate this task'}
+                        onClick={() => handleTransfer(selected.id, true)}
+                        title="Queue this task for processing"
                       >
                         ▶ Activate
                       </button>
@@ -732,21 +731,14 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
           <div className="context-pending-wrap">
             <pre
               onClick={() => setEditingContext(ctx)}
-              className="context-pending"
-              style={{
-                color: ctx ? 'inherit' : 'var(--text-muted)',
-                fontStyle: ctx ? 'normal' : 'italic',
-              }}
+              className={`context-pending${ctx ? '' : ' empty'}`}
             >
               {ctx || 'click to add context...'}
             </pre>
             <span className="context-edit-hint">✎</span>
           </div>
         ) : (
-          <pre className="context-display" style={{
-            color: ctx ? 'inherit' : 'var(--text-muted)',
-            fontStyle: ctx ? 'normal' : 'italic',
-          }}>
+          <pre className={`context-display${ctx ? '' : ' empty'}`}>
             {ctx || 'not provided'}
           </pre>
         )}
