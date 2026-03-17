@@ -415,7 +415,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
 
           <div className="field-group trigger-options">
             <div className="label-row">
-              <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+              <label className="checkbox-label">
                 <input
                   type="checkbox"
                   checked={getVal('require_approval') || false}
@@ -426,7 +426,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
               <HelpTip text={TIPS.requireApproval} />
             </div>
             <div className="label-row">
-              <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+              <label className="checkbox-label">
                 <input
                   type="checkbox"
                   checked={getVal('coalesce_tasks') || false}
@@ -440,7 +440,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
 
           <div className="field-group">
             <div className="label-row">
-              <label>Dependencies (runs after these jobs complete)</label>
+              <label>Dependencies (run these after this job completes a task)</label>
               <HelpTip text={TIPS.dependencies} />
             </div>
             <div className="checkbox-list">
@@ -448,7 +448,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
                 const deps = getVal('depends_on') || []
                 const checked = deps.includes(j.id)
                 return (
-                  <label key={j.id} className="checkbox-label" style={{ fontSize: 12 }}>
+                  <label key={j.id} className="checkbox-label">
                     <input
                       type="checkbox"
                       checked={checked}

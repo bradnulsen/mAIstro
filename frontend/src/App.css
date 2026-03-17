@@ -1419,10 +1419,15 @@ label.muted-text {
   opacity: 0.6;
 }
 
+/* Keep trigger option labels from wrapping internally when flex container wraps rows */
+.trigger-options .label-row .checkbox-label {
+  white-space: nowrap;
+}
+
 .trigger-chip-remove:hover {
   opacity: 1 !important;
   background: var(--danger);
-  color: white;
+  color: #fff;
 }
 
 .empty-state {
