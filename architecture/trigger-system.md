@@ -53,7 +53,7 @@ When a job's task completes successfully, the worker scans for jobs that declare
 
 **Context**: includes the upstream job name, task ID, result commit, and commit range (start..result).
 
-**Not triggered by**: timed-out tasks, failed tasks, cancelled tasks — only clean completions.
+**Not triggered by**: failed, timed-out, cancelled, interrupted, or rejected tasks — only successful completions (no error).
 
 ### Resume
 

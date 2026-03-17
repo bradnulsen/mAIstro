@@ -40,10 +40,24 @@ Task state is derived from lifecycle timestamps, not stored as a separate field:
 | **Pending** | `queued_at IS NULL AND started_at IS NULL` |
 | **Queued** | `queued_at IS NOT NULL AND started_at IS NULL` |
 | **Active** | `started_at IS NOT NULL AND completed_at IS NULL` |
-| **Completed** | `completed_at IS NOT NULL AND error IS NULL` |
-| **Failed** | `completed_at IS NOT NULL AND error IS NOT NULL` |
+| **Terminal** | `completed_at IS NOT NULL` |
 
 A task may move backward from queued to pending (via manual transfer), but once started, progression is forward-only.
+
+### Terminal States
+
+A task reaches a terminal state when `completed_at` is set. The `error` field distinguishes the outcome:
+
+| Terminal State | `error` value | Meaning |
+|----------------|---------------|---------|
+| **Completed** | `NULL` | Success — the agent finished its work. Only this state triggers downstream dependencies. |
+| **Failed** | error message | The agent encountered an unrecoverable error. |
+| **Timed out** | `"timed out"` | The watchdog terminated the agent after exceeding the configured timeout. Partial commits may exist. |
+| **Cancelled** | `"cancelled"` | The user explicitly stopped the task while it was running. |
+| **Interrupted** | `"interrupted"` | The platform process died while the task was active. Detected by the stale sweep on startup. |
+| **Rejected** | `"rejected"` | The user rejected a task awaiting approval. The task never executed. |
+
+**Completed is success; everything else is non-success.** Each non-success state implies a different user response — retry a failure, resume a timeout, re-dispatch after an interruption — so the UI must make the distinction immediately visible via distinct status labels.
 
 ## Worker
 
@@ -102,7 +116,7 @@ After successful completion (no error, no timeout), the worker scans all jobs fo
 
 Circular dependency chains are safe: coalescing absorbs redundant triggers, and sequential execution ensures no concurrent amplification. A cycle produces at most one pending task per job at any time.
 
-Timed-out and failed tasks explicitly do not trigger dependents.
+Only successful completion (no error) triggers dependents — failed, timed-out, cancelled, interrupted, and rejected tasks do not.
 
 ## Approval Gates
 
