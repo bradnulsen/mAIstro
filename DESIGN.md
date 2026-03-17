@@ -49,8 +49,21 @@ A job is a template. A task is an instance. One job produces many tasks over tim
   - **Queued** — the execution runway. Tasks here are committed to run. The worker pulls the highest-priority queued task when ready. The user reorders queued tasks to control execution sequence.
 - **Auto-queueing** — a global setting that controls the routing of newly created tasks. When enabled, new tasks skip pending and go directly to the queued state. When disabled, new tasks always enter pending. This replaces the former auto-dispatch concept. The distinction: auto-queueing controls *where tasks land on creation*, not whether the worker runs. The worker always runs — it simply has nothing to do when no queued tasks exist.
 - The user can override auto-queueing for any individual task by dragging it back from queued to pending. The routing decision happens only at initial trigger time — once a task exists, the user has full manual control over its state.
-- Each task records its full lifecycle: `created_at`, `queued_at`, `started_at`, `completed_at`, `error`. A task that has started but not completed is "active." A task with an error is "failed."
+- Each task records its full lifecycle: `created_at`, `queued_at`, `started_at`, `completed_at`, `error`. A task that has started but not completed is "active."
 - On startup, the worker sweeps any tasks that were active when the process died and marks them as interrupted.
+
+#### Terminal States
+
+A task reaches a terminal state when `completed_at` is set. The `error` field distinguishes the outcome:
+
+- **Completed** (`error` is NULL) — the task ran to completion and the agent finished its work. This is the success state. Only completed tasks trigger downstream dependencies.
+- **Failed** (`error` contains a message) — the task started but the agent encountered an unrecoverable error. The error field carries the diagnostic message.
+- **Timed out** (`error` = `"timed out"`) — the watchdog terminated the agent after exceeding the configured timeout. Partial commits may exist between `start_commit` and `result_commit`.
+- **Cancelled** (`error` = `"cancelled"`) — the user explicitly stopped the task while it was running.
+- **Interrupted** (`error` = `"interrupted"`) — the platform process died while the task was active. Detected and marked on startup by the stale sweep.
+- **Rejected** (`error` = `"rejected"`) — the user rejected a task awaiting approval. The task never executed.
+
+The distinction matters: **completed is success; everything else is a form of non-success.** Each non-success state implies a different user response — retry a failure, resume a timeout, re-dispatch after an interruption — so the UI must make the distinction immediately visible, not require the user to inspect error fields.
 
 ### Task Ordering
 
@@ -66,7 +79,7 @@ Four trigger types cause tasks to be enqueued:
 - **Manual** — the user explicitly dispatches a job. Always creates a new task. Never coalesces. Bypasses approval gates.
 - **Commit (watch)** — a git post-commit hook notifies the platform. Jobs whose subscription glob patterns match changed files are enqueued as tasks. Coalesces with other pending commit-triggered tasks for the same job.
 - **Schedule** — cron expressions evaluated by a background scheduler. Enqueues a task when the expression fires. Always coalesces globally (repeated fires while a task is pending produce one run, not many). The first evaluation after a schedule is set establishes a baseline without firing — a newly configured schedule does not immediately dispatch.
-- **Dependency** — when a task completes successfully, jobs declaring its job as an upstream dependency are enqueued. Coalesces with other pending dependency-triggered tasks for the same job. Timed-out, failed, or cancelled tasks do not trigger dependents.
+- **Dependency** — when a task completes successfully, jobs declaring its job as an upstream dependency are enqueued. Coalesces with other pending dependency-triggered tasks for the same job. Only successful completion (no error) triggers dependents — failed, timed-out, cancelled, interrupted, and rejected tasks do not.
 
 Two continuation triggers operate on existing tasks:
 
@@ -230,7 +243,7 @@ The product presents seven views and a persistent chat surface:
 
 - **Dispatch** — the operational center. Contains two mutually exclusive tabs that divide the task lifecycle:
   - **Queue tab** (default) — two-column kanban layout: **Pending** (left) and **Queued** (right). Pending is the staging area where new tasks land for review and curation — coalescing (merge and split) happens here. Queued is the execution runway — sorting (reorder) happens here, and the worker pulls from here. The currently active task (if any) appears prominently, showing its live streamed output. This tab shows only pre-execution and active tasks — the workspace for what is upcoming and what is running right now. Provides controls for cancelling and approving/rejecting. Tasks can be dragged between columns to promote (pending → queued) or demote (queued → pending). Selecting a task shows its streamed output.
-  - **History tab** — the record of completed work. Shows all post-execution tasks: completed, failed, timed out, cancelled, and interrupted. Displays outcome summaries, commit ranges, and task ratings. Provides controls for resuming, retrying, and rating completed tasks. Tasks flow from the Queue tab to the History tab when they finish.
+  - **History tab** — the record of completed work. Shows all post-execution tasks in terminal states. The primary visual distinction is between **success** (completed without error) and **non-success** (failed, timed out, cancelled, interrupted, rejected). Successfully completed tasks are the default, expected outcome — they display outcome summaries, commit ranges, and task ratings prominently. Non-success tasks are visually distinct: each terminal state carries its own label (failed, timed out, cancelled, interrupted, rejected) displayed as a status badge, so the user can scan the list and immediately identify what succeeded and what didn't without opening individual tasks. Non-success tasks surface the error context inline — the user sees *why* it failed at a glance, not just *that* it failed. Provides controls for resuming, retrying, and rating completed tasks. Tasks flow from the Queue tab to the History tab when they finish.
 
   The two tabs are parallel views of the same domain — one shows what's happening, the other shows what happened. They share the Dispatch navigation item; the user switches between them within the view, not via the main navigation rail.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.
@@ -303,7 +316,7 @@ MCP server configuration is a first-class surface with its own rail item. It is 
 ### Data Integrity
 
 - **Job identity is immutable**: a job's slug ID, once derived from its initial name, stays constant. All references (tasks, properties, dependencies) use the slug. Renaming changes only the display label.
-- **Task lifecycle is monotonic**: a task progresses from created → queued → started → completed. A task may skip pending (via auto-queueing) or move back from queued to pending (via manual transfer), but once started, progression is forward-only. Retry creates a new cycle by resetting lifecycle fields on the same record, preserving task identity.
+- **Task lifecycle is monotonic**: a task progresses from created → queued → started → terminal. Terminal states are: completed (success), failed, timed out, cancelled, interrupted, or rejected. A task may skip pending (via auto-queueing) or move back from queued to pending (via manual transfer), but once started, progression is forward-only. Retry creates a new cycle by resetting lifecycle fields on the same record, preserving task identity.
 - **Trigger context is immutable at enqueue time**: each trigger entry's context string is built when the trigger fires. This preserves the causal record — the prompt reflects what was true when the trigger occurred.
 - **Job deletion cascades**: removing a job removes all associated data (properties, tasks, sessions). This prevents orphaned records.
 - **Running state is derived**: whether a task is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL). Whether a task is queued is computed from `queued_at` (queued_at IS NOT NULL AND started_at IS NULL). Whether a task is pending is the absence of both. State is not persisted as a separate status field — it is derived from the presence of lifecycle timestamps.
