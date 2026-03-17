@@ -12,12 +12,18 @@
   --rail-bg: #fafaf5;
   --hover-bg: #eee;
   --bg-active: rgba(0, 0, 0, 0.06);
+  --surface-subtle: rgba(0, 0, 0, 0.03);
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 6px;
   --danger: #c44;
   --success: #4a4;
   --running: #e90;
   --warning: #e6a117;
   --code-bg: #1a1a1a;
   --code-text: #e0e0e0;
+  /* --font: UI typeface; --font-mono: code/command output. Both monospace now;
+     --font can be overridden independently if a sans body font is adopted. */
   --font: 'Courier New', monospace;
   --font-mono: 'Courier New', monospace;
   /* Diff viewer — lighter tones suited for dark code background */
@@ -75,7 +81,7 @@ body {
   justify-content: center;
   font-size: 14px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--text-muted);
   border: none;
   background: transparent;
@@ -129,7 +135,7 @@ body {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .dispatch-tab:hover { color: var(--text); background: var(--hover-bg); }
 .dispatch-tab.active {
@@ -155,7 +161,7 @@ body {
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-light);
   background: var(--surface);
 }
@@ -203,7 +209,7 @@ button, .btn {
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 button:hover, .btn:hover {
@@ -249,7 +255,7 @@ input, textarea, select {
   border: 1.5px solid var(--border-light);
   background: var(--surface);
   color: var(--text);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   width: 100%;
 }
 
@@ -368,7 +374,7 @@ label.muted-text {
 .kanban-column-count {
   background: var(--hover-bg);
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 10px;
 }
 
@@ -389,7 +395,7 @@ label.muted-text {
 .feed-avatar {
   width: 28px;
   height: 28px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--accent);
   color: #fff;
   display: flex;
@@ -469,7 +475,7 @@ label.muted-text {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .queue-status.large { font-size: 12px; }
@@ -550,7 +556,7 @@ label.muted-text {
   font-size: 11px;
   padding: 4px 22px 4px 6px;
   border: 1px solid var(--border-light);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   box-sizing: border-box;
 }
@@ -622,7 +628,7 @@ label.muted-text {
   padding: 8px 10px;
   background: var(--surface);
   border: 1px solid var(--border-light);
-  border-radius: 4px;
+  border-radius: var(--radius);
   min-height: 200px;
   max-height: 300px;
   overflow-y: auto;
@@ -809,12 +815,12 @@ label.muted-text {
 }
 
 .mode-toggle button:first-child {
-  border-radius: 3px 0 0 3px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   margin-left: 0;
 }
 
 .mode-toggle button:last-child {
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .mode-toggle button.active {
@@ -829,7 +835,7 @@ label.muted-text {
   font-family: var(--font);
   background: var(--bg);
   padding: 8px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
@@ -882,7 +888,7 @@ label.muted-text {
   min-height: 40px;
   max-height: 200px;
   padding: 8px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   border: 1px solid var(--accent);
   font-family: var(--font);
   resize: none;
@@ -930,7 +936,7 @@ label.muted-text {
   cursor: ew-resize;
   background: var(--accent);
   color: #fff;
-  border-radius: 4px 4px 0 0;
+  border-radius: var(--radius) var(--radius) 0 0;
   z-index: 10;
   user-select: none;
 }
@@ -1035,7 +1041,7 @@ label.muted-text {
   display: inline-block;
   max-width: 100%;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   font-size: 12px;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -1170,7 +1176,7 @@ label.muted-text {
   padding: 8px 12px;
   cursor: pointer;
   border: 1px solid var(--border-light);
-  border-radius: 4px;
+  border-radius: var(--radius);
   margin-bottom: 4px;
   width: 400px;
 }
@@ -1235,13 +1241,13 @@ label.muted-text {
   font-size: 11px;
   background: var(--bg-active);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .md-content pre {
   background: var(--code-bg);
   color: var(--code-text);
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   overflow-x: auto;
   font-size: 11px;
   margin: 0.4em 0;
@@ -1274,7 +1280,7 @@ label.muted-text {
 }
 .md-content th {
   font-weight: 600;
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--surface-subtle);
 }
 .md-content thead {
   border-bottom: 2px solid var(--border-light);
@@ -1326,7 +1332,7 @@ label.muted-text {
   padding: 8px 10px;
   background: var(--surface);
   border: 1.5px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   color: var(--text);
   line-height: 1.5;
@@ -1397,7 +1403,7 @@ label.muted-text {
 .trigger-chip {
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   font-size: 12px;
   opacity: 0.6;
   transition: opacity 0.1s;
@@ -1430,7 +1436,7 @@ label.muted-text {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   opacity: 0;
   cursor: pointer;
   color: var(--text-muted);
@@ -1530,7 +1536,7 @@ label.muted-text {
   background: var(--code-bg);
   color: var(--code-text);
   padding: 8px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   overflow: auto;
   flex: 1;
   white-space: pre-wrap;
@@ -1691,7 +1697,7 @@ label.muted-text {
   color: var(--text);
   background: var(--bg);
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-light);
 }
 
@@ -1703,7 +1709,7 @@ label.muted-text {
   gap: 8px;
   padding: 6px 8px;
   border: 1px solid var(--border-light);
-  border-radius: 4px;
+  border-radius: var(--radius);
   margin-bottom: 6px;
 }
 
@@ -1757,7 +1763,7 @@ label.muted-text {
   margin-top: 10px;
   padding: 10px;
   border: 1px dashed var(--border-light);
-  border-radius: 4px;
+  border-radius: var(--radius);
 }
 
 .mcp-add-form > button {
@@ -1853,7 +1859,7 @@ label.muted-text {
   font-size: 11px;
   padding: 4px 6px;
   border: 1px solid var(--border-light);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-family: var(--font);
   background: var(--surface);
 }
@@ -2030,7 +2036,7 @@ label.muted-text {
   padding: 8px 10px;
   background: var(--surface);
   border: 1px solid var(--border-light);
-  border-radius: 4px;
+  border-radius: var(--radius);
 }
 
 /* ── Tool Badge (streaming tool name chips) ── */
@@ -2039,7 +2045,7 @@ label.muted-text {
   display: inline-block;
   background: var(--surface);
   border: 1px solid var(--border-light);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
   margin-right: 4px;
   margin-bottom: 2px;
