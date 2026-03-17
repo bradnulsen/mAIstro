@@ -228,6 +228,9 @@ def outcome_summary(cwd: str, from_hash: str, to_hash: str) -> str | None:
     if result.returncode != 0 or not result.stdout.strip():
         return None
     messages = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+    # Single commit in range — already captured by commit_oneline, skip
+    if len(messages) <= 1:
+        return None
     # Get overall stat line
     stat_result = run_git("diff", "--shortstat", f"{from_hash}..{to_hash}", cwd=cwd)
     stat_line = stat_result.stdout.strip() if stat_result.returncode == 0 else ""
