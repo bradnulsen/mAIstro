@@ -97,6 +97,126 @@ async def _migrate(db: aiosqlite.Connection):
     )
     await db.commit()
 
+    # Add ON DELETE CASCADE to tasks.job_id and chat_sessions.job_id.
+    # These FKs were missing CASCADE — inconsistent with job_properties which has it.
+    # Gate on schema version so this runs exactly once.
+    rows = await db.execute_fetchall(
+        "SELECT value FROM config WHERE key = 'schema_version'"
+    )
+    schema_version = int(rows[0]["value"]) if rows else 0
+
+    if schema_version < 1:
+        await _migrate_cascade_fks(db)
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '1')"
+        )
+        await db.commit()
+
+
+async def _migrate_cascade_fks(db: aiosqlite.Connection):
+    """Add ON DELETE CASCADE to tasks.job_id and chat_sessions.job_id.
+
+    SQLite doesn't support ALTER CONSTRAINT — recreate the tables.
+    Runs inside a single transaction with foreign_keys temporarily OFF
+    (required because SQLite enforces FKs during the copy step).
+    """
+    await db.execute("PRAGMA foreign_keys=OFF")
+
+    # -- tasks table --
+    await db.execute("ALTER TABLE tasks RENAME TO _tasks_old")
+    await db.execute("""
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            trigger TEXT NOT NULL,
+            trigger_detail TEXT,
+            context TEXT,
+            session_id TEXT,
+            resume_session_id TEXT,
+            approval TEXT,
+            start_commit TEXT,
+            created_at DATETIME DEFAULT (datetime('now')),
+            started_at DATETIME,
+            completed_at DATETIME,
+            result_commit TEXT,
+            error TEXT,
+            queued_at DATETIME,
+            sort_order INTEGER,
+            coalesced_id INTEGER REFERENCES tasks(id)
+        )
+    """)
+    await db.execute("""
+        INSERT INTO tasks SELECT * FROM _tasks_old
+    """)
+    await db.execute("DROP TABLE _tasks_old")
+
+    # Recreate all tasks indexes
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_pending "
+        "ON tasks (started_at, error, sort_order, created_at)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_job_coalesce "
+        "ON tasks (job_id, started_at, error)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_running "
+        "ON tasks (started_at, completed_at)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_coalesced "
+        "ON tasks (coalesced_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_job_running "
+        "ON tasks (job_id, started_at, completed_at)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_coalesce_lookup "
+        "ON tasks (job_id, started_at, error, coalesced_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_queued "
+        "ON tasks (queued_at, started_at, error, coalesced_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_queued_worker "
+        "ON tasks (queued_at, started_at, error, coalesced_id, approval)"
+    )
+
+    # -- chat_sessions table --
+    await db.execute("ALTER TABLE chat_sessions RENAME TO _chat_sessions_old")
+    await db.execute("""
+        CREATE TABLE chat_sessions (
+            id TEXT PRIMARY KEY,
+            job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+            task_id INTEGER REFERENCES tasks(id),
+            title TEXT,
+            cli_session_id TEXT,
+            created_at DATETIME DEFAULT (datetime('now'))
+        )
+    """)
+    await db.execute("""
+        INSERT INTO chat_sessions SELECT * FROM _chat_sessions_old
+    """)
+    await db.execute("DROP TABLE _chat_sessions_old")
+
+    # Recreate chat_sessions indexes
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_cli_session "
+        "ON chat_sessions (cli_session_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_task "
+        "ON chat_sessions (task_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_job "
+        "ON chat_sessions (job_id)"
+    )
+
+    await db.execute("PRAGMA foreign_keys=ON")
+
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -120,7 +240,7 @@ CREATE TABLE IF NOT EXISTS job_properties (
 
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id TEXT NOT NULL REFERENCES jobs(id),
+    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     trigger TEXT NOT NULL,
     trigger_detail TEXT,
     context TEXT,
@@ -140,7 +260,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id TEXT PRIMARY KEY,
-    job_id TEXT REFERENCES jobs(id),
+    job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
     task_id INTEGER REFERENCES tasks(id),
     title TEXT,
     cli_session_id TEXT,
@@ -373,25 +493,38 @@ async def reorder_jobs(job_ids: list[str]):
 
 
 async def delete_job(job_id: str) -> bool:
+    """Delete a job. CASCADE FKs on tasks, chat_sessions, and job_properties
+    automatically remove dependent rows."""
     db = await get_db()
-    await db.execute("DELETE FROM chat_sessions WHERE job_id = ?", (job_id,))
-    await db.execute("DELETE FROM tasks WHERE job_id = ?", (job_id,))
     cursor = await db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
     await db.commit()
     return cursor.rowcount > 0
 
 
 async def get_jobs_depending_on(job_id: str) -> list[dict]:
-    """Return jobs whose depends_on property includes job_id."""
+    """Return jobs whose depends_on property includes job_id.
+
+    Fetches all depends_on values, parses JSON, and checks exact list
+    membership — no LIKE/substring matching.
+    """
     conn = await get_db()
     rows = await conn.execute_fetchall(
-        'SELECT job_id FROM job_properties WHERE key = "depends_on" AND value LIKE ?',
-        (f'%"{job_id}"%',)
+        "SELECT job_id, value FROM job_properties WHERE key = 'depends_on'"
     )
-    if not rows:
+
+    # Parse JSON and filter to exact membership
+    candidate_ids = []
+    for r in rows:
+        try:
+            deps = json.loads(r["value"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(deps, list) and job_id in deps:
+            candidate_ids.append(r["job_id"])
+
+    if not candidate_ids:
         return []
 
-    candidate_ids = [r["job_id"] for r in rows]
     placeholders = ",".join("?" * len(candidate_ids))
 
     job_rows = await conn.execute_fetchall(
@@ -427,8 +560,7 @@ async def get_jobs_depending_on(job_id: str) -> list[dict]:
             props[key] = _cast_property(value, def_types.get(key, "string"))
         props["running"] = job["id"] in running_ids
         job["properties"] = props
-        if job_id in (props.get("depends_on") or []):
-            jobs.append(job)
+        jobs.append(job)
     return jobs
 
 

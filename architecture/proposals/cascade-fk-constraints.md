@@ -2,7 +2,7 @@
 name: cascade-fk-constraints
 description: Schema proposal — add ON DELETE CASCADE to tasks and chat_sessions job foreign keys
 type: proposal
-status: accepted
+status: implemented
 raised_by: Backend
 reviewed-by: Architect
 ---
