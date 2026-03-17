@@ -45,6 +45,10 @@ Both pipes are read because the CLI writes NDJSON to stderr when using `--resume
 
 Sentinel: each thread pushes `None` when its pipe closes. The main loop counts two `None` values (one per pipe) before considering the process done.
 
+### Windows Encoding
+
+On Windows, the default encoding for subprocess pipes is the system codepage (typically cp1252), not UTF-8. The CLI bridge reads pipes in binary mode and decodes with `errors="replace"` to handle arbitrary byte sequences safely. Any other subprocess call in the platform that reads text output (including the git subprocess abstraction in `git.py`) must also use explicit `encoding="utf-8"` to avoid `UnicodeDecodeError` when output contains non-ASCII content.
+
 ## Event Translation
 
 Raw NDJSON lines are parsed and translated through `_translate_event()`. Every valid JSON line yields two things:

@@ -14,18 +14,24 @@ The internal server runs as part of the backend process and is connected to the 
 
 The server reads the dispatching job's configuration (properties, subscriptions) and presents only relevant tools. Different jobs get different tool surfaces based on:
 
-- **Job properties**: `allowed_tools` and `mcp_servers` shape the available tool set
+- **Job properties**: `allowed_tools`, `allowed_internal_tools`, and `mcp_servers` shape the available tool set
 - **Subscriptions**: glob patterns scope which files and paths are relevant to the job
 
 This means two jobs dispatched in sequence may see entirely different tool inventories from the same internal server.
 
 ### Opt-In Tool Scoping
 
-Tool configuration is opt-in only. The user defines what a job *can* do via `allowed_tools` — one concept, one property. There is no complementary "disallowed" property.
+Tool configuration is opt-in only. Three independent properties define what a job *can* do:
 
-The platform computes the inverse internally: tools not in the allowed set are passed to the CLI via `--disallowedTools`, which removes them from the agent's environment entirely. The agent never sees excluded tools, never reasons about them, never attempts to work around restrictions.
+- **`allowed_tools`** — selects CLI tools (e.g. `Read`, `Edit`, `Bash`)
+- **`allowed_internal_tools`** — selects which internal MCP tools are presented (e.g. `git_commit`, `list_files`)
+- **`mcp_servers`** — selects which external MCP servers are connected
 
-This matters because the platform runs with `--dangerously-skip-permissions`. In this mode, `--allowedTools` alone does not restrict tool access — all permission checks are bypassed. `--disallowedTools` is the only mechanism that actually removes tools from the agent's view, regardless of permission mode.
+There are no complementary "disallowed" properties. The platform computes the inverse internally.
+
+For CLI tools, the platform passes tools not in the allowed set via `--disallowedTools`, which removes them from the agent's environment entirely. For internal MCP tools, the server simply omits tools not in the `allowed_internal_tools` set from its tool list. When a property is empty (no selection), all tools of that type are available — backward compatible.
+
+This matters because the platform runs with `--dangerously-skip-permissions`. In this mode, `--allowedTools` alone does not restrict tool access — all permission checks are bypassed. `--disallowedTools` is the only mechanism that actually removes CLI tools from the agent's view, regardless of permission mode.
 
 This is not a stylistic choice — it follows from headless execution. A headless agent cannot ask for permissions, cannot negotiate tool access, cannot meaningfully be told what it cannot do. The only coherent model is to present exactly the tools the agent can use and nothing else. The platform owns the restriction surface; the agent owns only its allowed capabilities.
 
@@ -42,6 +48,16 @@ Structured tools for git interaction with enforced conventions:
 
 These replace unmediated shell-based git access. The key difference is enforcement: an agent using `git_commit` through the MCP server cannot bypass authorship conventions or commit message formatting that the platform requires.
 
+### Git Branch Operations
+
+Structured tools for branch management:
+
+- **`git_branch_create`** — creates a new branch from a specified base. Enforces naming conventions (e.g. `<job-id>/<description>`) to prevent namespace collisions between jobs.
+- **`git_branch_switch`** — switches the working directory to a named branch. The platform tracks which branch a task operates on for audit purposes.
+- **`git_branch_merge`** — merges a source branch into the current branch. Merge conflicts surface as structured tool output rather than silent failures.
+
+Branch operations are logged identically to other MCP tool calls — the platform can reconstruct which branches a task created, switched to, and merged.
+
 ### Read-Only Project Context
 
 Tools for querying project state, scoped by the job's subscriptions and configuration:
@@ -51,6 +67,15 @@ Tools for querying project state, scoped by the job's subscriptions and configur
 - **Job information** — retrieve information about other jobs in the project (names, descriptions, states)
 
 These tools provide structured access to the same information agents could get through shell commands, but with consistent formatting and subscription-aware scoping.
+
+### Inter-Agent Coordination
+
+Tools for cross-agent awareness and imperative dispatch:
+
+- **`dispatch_task`** — enqueues a task for another job with a message explaining why, creating an `agent` trigger (see [Trigger System — Agent](trigger-system.md)). The dispatching task's identity is tagged on the new task for provenance. Subject to the job's `allowed_dispatch_targets` — the agent can only dispatch jobs explicitly listed in its configuration. Self-dispatch is prohibited.
+- **`get_queue_status`** — read-only view of current queue state: what's pending, running, and backed up. Gives agents situational awareness beyond their own execution context.
+
+These tools give agents imperative coordination beyond the declarative trigger system (dependencies, subscriptions). Agent dispatch is the only mechanism where one agent can directly cause another to run — all other cross-agent triggers flow through git commits or configuration.
 
 ## Tool Invocation Logging
 
@@ -70,20 +95,22 @@ The platform makes the full tool inventory visible and selectable so users confi
 Three tool sources, each with a discovery mechanism:
 
 - **Built-in CLI tools** — the platform maintains a canonical set of CLI tool names (`CLI_NATIVE_TOOLS` in `cli.py`). These are the tools that `allowed_tools` selects from. The configuration surface presents them as a selectable inventory — the user picks from what exists rather than typing free-text names.
-- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_jobs`). They are always available during dispatch and not subject to per-job selection. Their presence is informational — the user can see them but does not need to configure them.
+- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `git_branch_create`, `git_branch_switch`, `git_branch_merge`, `list_files`, `read_file`, `list_jobs`, `dispatch_task`, `get_queue_status`). The internal server is always connected, but individual internal tools are subject to per-job selection via `allowed_internal_tools`. When no selection is made, all internal tools are available. The configuration surface presents these as a selectable inventory.
 - **External MCP server tools** — when a registered external server is connected, the platform can discover its tool list via the MCP protocol. Discovered tools become visible alongside built-in tools in the per-job configuration surface.
 
 The configuration surfaces for `allowed_tools` and `mcp_servers` present selectable options drawn from these inventories. Users select from what exists; they do not enter arbitrary text that may not correspond to real tools.
 
 ### Tool Surface Composition
 
-During dispatch, the agent's available tools are the union of three sources:
+During dispatch, the agent's available tools are the union of three independently filtered sources:
 
 1. **CLI tools** selected via `allowed_tools` (or the full default set if none are selected)
-2. **Internal MCP tools** (always present — the internal server is always connected)
+2. **Internal MCP tools** selected via `allowed_internal_tools` (or all internal tools if none are selected)
 3. **External MCP tools** from servers enabled for the job via `mcp_servers`
 
-The user can see this composed surface when configuring a job — what the agent will actually have access to.
+Each dimension is independently configurable, and the default for each is "everything available." The user can see this composed surface when configuring a job — what the agent will actually have access to.
+
+The `allowed_internal_tools` property enables fine-grained control over internal capabilities. A read-only job can be restricted to `list_files`, `read_file`, `git_log`, `git_diff` — excluding `git_commit`, branch operations, and dispatch tools. An orchestrator job might get `dispatch_task` and `get_queue_status` while a leaf job does not.
 
 ## External MCP Servers
 

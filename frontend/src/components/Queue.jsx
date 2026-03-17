@@ -212,7 +212,6 @@ export default function Queue() {
     setActionError('')
     try {
       await uncoalesceTask(taskId)
-      setSubordinates(prev => prev.filter(s => s.id !== taskId))
       await refresh()
     } catch (err) {
       setActionError(err.message)
@@ -338,7 +337,8 @@ export default function Queue() {
 
             <div ref={detailScrollRef} className="detail-scroll">
               <TaskDetail item={selected} output={output} onUpdate={refresh}
-                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming} />
+                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming}
+                onUncoalesce={handleUncoalesce} />
             </div>
 
             {(selectedIsPreExec || selectedStatus === 'running') && (
@@ -607,7 +607,7 @@ function ContextEditor({ value, onChange, autoFocus = false }) {
   )
 }
 
-function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }) {
+function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, onUncoalesce }) {
   const status = getStatus(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
   const isPending = status === 'pending' || status === 'queued'
@@ -705,10 +705,10 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }
               title={`Task #${t.id}`}
             >
               {TRIGGER_ICONS[t.trigger] || ''} {triggerLabel(t)}
-              {isPending && !t.isRoot && allTriggers.length > 1 && (
+              {status === 'pending' && !t.isRoot && allTriggers.length > 1 && (
                 <button
                   className="trigger-chip-remove"
-                  onClick={(e) => handleUncoalesce(t.id, e)}
+                  onClick={(e) => onUncoalesce(t.id, e)}
                   title="Split this trigger out"
                 >×</button>
               )}

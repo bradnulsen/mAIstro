@@ -1,6 +1,6 @@
 # Trigger System
 
-The trigger system determines when and why tasks are created. Six trigger types exist, each with distinct coalescing behavior, approval interaction, and context generation.
+The trigger system determines when and why tasks are created. Seven trigger types exist, each with distinct coalescing behavior, approval interaction, and context generation.
 
 ## Trigger Types
 
@@ -55,6 +55,26 @@ When a job's task completes successfully, the worker scans for jobs that declare
 
 **Not triggered by**: failed, timed-out, cancelled, interrupted, or rejected tasks — only successful completions (no error).
 
+### Agent
+
+Another agent's task programmatically dispatches a job via the `dispatch_task` MCP tool (see [Tool Mediation — Inter-Agent Coordination](tool-mediation.md#inter-agent-coordination)). The dispatching agent provides a message explaining why the target job should run.
+
+**Flow**:
+1. An executing agent calls `dispatch_task` through the internal MCP server
+2. The platform verifies the target job is in the dispatching job's `allowed_dispatch_targets`
+3. A new task is enqueued with `agent` trigger, the dispatching task's identity as `trigger_detail`, and the agent's message as context
+4. Self-dispatch (dispatching one's own job) is prohibited
+
+**Coalescing**: coalesces with other pre-execution (pending or queued) `agent`-triggered tasks for the same job.
+
+**Approval**: respects `require_approval` — agent dispatch is automated, not explicit human intent. A job with approval gates will hold agent-dispatched tasks for human review.
+
+**Context**: includes the dispatching task's identity (job name, task ID) and the agent's message.
+
+**Provenance**: the new task's `trigger_detail` references the originating task, creating a traceable chain. The user can trace any agent-dispatched task back to the task that requested it.
+
+**Depth limiting**: a configurable depth limit on agent-initiated dispatch chains prevents runaway cascades where agents recursively dispatch each other.
+
 ### Resume
 
 Continues a previous task using the CLI's session resume capability. Creates a new task record with `resume_session_id`. Never coalesces — each resume is distinct intent.
@@ -74,7 +94,7 @@ Coalescing prevents redundant pre-execution tasks. It checks both pending and qu
 1. Determine coalescing mode:
    - `schedule` trigger → coalesce globally (any pre-execution task for the job)
    - `coalesce_tasks=true` on the job → coalesce globally regardless of trigger type
-   - `commit` or `dependency` trigger → coalesce with same-type pre-execution tasks
+   - `commit`, `dependency`, or `agent` trigger → coalesce with same-type pre-execution tasks
    - All others → no coalescing
 
 2. If coalescing: query for an existing pre-execution task (not started, no error, `queued_at IS NULL OR started_at IS NULL`). If found, the new trigger is absorbed and the existing task ID is returned.

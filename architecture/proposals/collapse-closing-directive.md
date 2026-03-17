@@ -1,5 +1,7 @@
 # Proposal: Collapse Closing Directive into Trigger Context
 
+**Status**: accepted — implemented in prompt-assembly.md. Code changes pending in dispatch.py (remove `_build_closing_directive`, remove `task_meta` dispatch mode label).
+
 ## Problem
 
 The user prompt currently communicates trigger-type awareness through three redundant layers, each restating the same information with decreasing specificity:

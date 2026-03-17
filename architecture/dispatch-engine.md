@@ -4,9 +4,11 @@ The dispatch engine is the execution core of mAistro. It enforces the queue-firs
 
 ## Queue-First Invariant
 
-No task may execute without passing through the queue. Every code path — manual dispatch, watch trigger, schedule fire, dependency completion, resume, retry — writes a record to `tasks` first. The worker is the only code path that reads from the queue and invokes execution.
+No task may execute without passing through the queue. Every code path — manual dispatch, watch trigger, schedule fire, dependency completion, agent dispatch, resume, retry — writes a record to `tasks` first. The worker is the only code path that reads from the queue and invokes execution.
 
 This invariant decouples trigger sources from execution. A trigger's responsibility is to write a queue record with appropriate context; it never needs to know about CLI invocation, streaming, or session management.
+
+**Corollary**: a job's running state never blocks enqueue. A user can dispatch a job that is currently executing — the new task enters the queue and waits. The worker processes it when the current task completes. Blocking dispatch based on running state would violate the queue-first invariant by making the enqueue path aware of execution state.
 
 ## Task Record
 

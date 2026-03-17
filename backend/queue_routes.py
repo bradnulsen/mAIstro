@@ -192,20 +192,20 @@ async def resume_task(task_id: int):
     if not cli_session_id:
         raise HTTPException(409, "No CLI session ID available — cannot resume")
 
-    head = git.head_hash(state.PROJECT_DIR)
     new_id = await db.enqueue_task(
         task["job_id"], "resume",
-        trigger_detail=head,
+        trigger_detail=str(task_id),
         context=f"**Resume** — continuing from task #{task_id}",
     )
     await db.update_task(new_id, resume_session_id=cli_session_id)
+    await db.update_task(task_id, coalesced_id=new_id)
     worker.notify()
     return {"task_id": new_id, "resuming_from": task_id}
 
 
 @router.post("/api/tasks/{task_id}/retry")
 async def retry_task(task_id: int, req: RetryRequest | None = None):
-    """Retry a completed task — resurrects the original record in-place."""
+    """Retry a completed task — creates a new task preserving original trigger info."""
     require_project()
     task = await db.get_task(task_id)
     if not task:
@@ -213,8 +213,8 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     if not task.get("completed_at"):
         raise HTTPException(409, "Task is not completed")
 
-    # Build retry context from the previous run's outcome
-    parts = []
+    # Build retry context preserving the original trigger and context
+    parts = [f"**Retry** of task #{task_id}"]
     error = task.get("error")
     if error:
         parts.append(f"previous run failed: {error}")
@@ -225,31 +225,18 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     user_notes = req.context if req and req.context else None
     if user_notes:
         parts.append(user_notes)
-    retry_summary = " — ".join(parts) if parts else "fresh re-dispatch"
-    retry_context = f"**Retry** of task #{task_id}: {retry_summary}"
+    original_context = task.get("context")
+    if original_context:
+        parts.append(f"original context: {original_context}")
 
-    # Resurrect in-place: reset lifecycle fields, update trigger, reset created_at
-    # Retried tasks land in pending or queued based on auto-queueing setting
-    now = utcnow()
-    auto_queue = await db.get_config("queue_auto_dispatch")
-    queued_at = now if auto_queue == "true" else None
-    await db.update_task(
-        task_id,
-        trigger="retry",
+    new_id = await db.enqueue_task(
+        task["job_id"], "retry",
         trigger_detail=str(task_id),
-        context=retry_context,
-        started_at=None,
-        completed_at=None,
-        error=None,
-        start_commit=None,
-        result_commit=None,
-        session_id=None,
-        resume_session_id=None,
-        created_at=now,
-        queued_at=queued_at,
+        context=" — ".join(parts),
     )
+    await db.update_task(task_id, coalesced_id=new_id)
     worker.notify()
-    return {"task_id": task_id}
+    return {"task_id": new_id, "retrying": task_id}
 
 
 @router.post("/api/tasks/merge")

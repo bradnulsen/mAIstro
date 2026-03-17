@@ -741,11 +741,14 @@ async def uncoalesce_task(task_id: int) -> int:
         raise ValueError("Can only uncoalesce pre-execution tasks")
 
     # Verify root is in pending (uncoalesce is a pending-column operation)
+    # Pending = not yet queued, not started, not errored
     root_rows = await db.execute_fetchall(
-        "SELECT queued_at FROM tasks WHERE id = ?", (task["coalesced_id"],)
+        "SELECT queued_at, started_at, error FROM tasks WHERE id = ?", (task["coalesced_id"],)
     )
-    if root_rows and root_rows[0]["queued_at"] is not None:
-        raise ValueError("Can only uncoalesce from a pending root — split is a pending-column operation")
+    if root_rows:
+        root = root_rows[0]
+        if root["started_at"] is not None or root["error"] is not None or root["queued_at"] is not None:
+            raise ValueError("Can only uncoalesce from a pending root — split is a pending-column operation")
 
     # Look up the job's current require_approval setting
     prop_rows = await db.execute_fetchall(

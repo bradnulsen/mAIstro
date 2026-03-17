@@ -10,6 +10,8 @@ All git operations use a single `run_git()` function wrapping `subprocess.run` w
 
 No git library is used. The abstraction is thin and deliberate — subprocess calls are predictable, debuggable, and have no dependency beyond git itself.
 
+**Encoding**: `run_git()` must pass `encoding="utf-8"` explicitly. On Windows, `text=True` without an explicit encoding uses the system codepage (cp1252), which fails on non-ASCII content in commit messages, filenames, or diff output. Git itself outputs UTF-8; the subprocess call must match.
+
 ## Project Initialization
 
 Three operations run when a project is opened:

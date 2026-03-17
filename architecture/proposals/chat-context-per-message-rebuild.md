@@ -1,7 +1,8 @@
 ---
 title: Cache chat system prompt context instead of rebuilding per message
-status: proposed
+status: accepted
 author: Backend
+reviewed-by: Architect
 ---
 
 ## Problem

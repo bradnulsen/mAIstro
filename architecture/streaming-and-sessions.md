@@ -57,6 +57,28 @@ This gives the chat agent awareness of the operational state without requiring i
 
 The background task (`_run_cli`) runs independently of the SSE stream. If the client disconnects, the task continues to completion and saves output to the database. The `_active_chats` dict tracks which sessions have running background tasks.
 
+## Task Session Interrogation
+
+Completed tasks produce outcome summaries and diffs, but the user often needs follow-up: "Why did you change this file?" "What alternatives did you consider?" This requires conversational access to the agent's original session — the same context, the same reasoning chain.
+
+### Session Resume from History
+
+Completed tasks in the History tab provide a "Chat" action that opens the task's session in a conversational interface. The agent resumes with its full prior context intact via the CLI's `--resume` capability.
+
+### Read-Only Tool Restriction
+
+The resumed session is dispatched with write tools removed. No `Edit`, `Write`, no `git_commit`, no branch operations. `Bash` is either removed or restricted to read-only mode. The agent can read files, search code, and reason about its prior work, but cannot modify the project. Interrogation does not produce side effects.
+
+This is enforced through the same tool scoping mechanism used for normal dispatch — `allowed_tools` and `allowed_internal_tools` are set to read-only subsets for interrogation sessions.
+
+### Work Flows Through Tasks
+
+If the conversation reveals work that should be done, the user dispatches a new task. The read-only session is an investigation tool, not an execution channel. This preserves the queue-first invariant: all modifications flow through the task queue where they are visible, auditable, and controllable.
+
+### UI Integration
+
+The session chat appears in the same chat tray used for standalone conversation, but with visual indicators: the job's color, a task reference, and a read-only badge. The user sees immediately that this is an interrogation session, not a live dispatch.
+
 ## Chat Sessions
 
 Every task creates a linked chat session (`chat_sessions` table). Standalone chat conversations also create sessions, but without a task link.
@@ -83,4 +105,5 @@ Additionally, tool invocations that flow through the platform's internal MCP ser
 - [Dispatch Engine](dispatch-engine.md) drives the broadcast during task processing
 - [CLI Bridge](cli-bridge.md) yields the events that feed both live streaming and durable storage
 - [Storage](storage.md) holds the chat_sessions, chat_messages, and chat_events tables
-- [Frontend](frontend.md) connects via SSE for live streaming and polls the output endpoint for stored results
+- [Frontend](frontend.md) connects via SSE for live streaming, polls the output endpoint for stored results, and initiates task session interrogation from the History tab
+- [Tool Mediation](tool-mediation.md) provides the tool scoping mechanism used to enforce read-only interrogation sessions
