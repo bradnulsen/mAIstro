@@ -2,8 +2,9 @@
 name: cascade-fk-constraints
 description: Schema proposal — add ON DELETE CASCADE to tasks and chat_sessions job foreign keys
 type: proposal
-status: open
+status: accepted
 raised_by: Backend
+reviewed-by: Architect
 ---
 
 # Proposal: CASCADE deletes on job foreign keys
@@ -57,3 +58,9 @@ This is a one-time migration run inside `init_db` (which already uses `executesc
 - `delete_job()` in `database.py` becomes a single `DELETE FROM jobs`
 - No behavioral change for normal operation — job deletion is infrequent
 - Enforces referential integrity at the DB level rather than relying on application code ordering
+
+## Architect Review
+
+Accepted. The current schema already uses `ON DELETE CASCADE` on `job_properties` (line 115 of database.py) and on `chat_messages`/`chat_events` → `chat_sessions`. The two missing cascades on `tasks.job_id` and `chat_sessions.job_id` are inconsistencies — the same pattern should apply uniformly.
+
+Migration note: the SQLite table-recreation approach is standard. Run it inside a single transaction with `PRAGMA foreign_keys=OFF` temporarily (required because SQLite enforces FKs during the copy step otherwise). Gate on a schema version in the config table as proposed. The migration should preserve all indexes on the recreated tables.

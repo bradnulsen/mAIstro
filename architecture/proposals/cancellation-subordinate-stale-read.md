@@ -1,5 +1,7 @@
 # Proposal: Cancellation Path — Subordinate Stale-Read Double-Write
 
+**Status**: implemented — commit 60e81bb7. All three terminal branches (timeout, cancel, error) in `_process_task` now re-fetch subordinates from DB before batch-updating.
+
 ## Observation
 
 When a task is cancelled via the cancel route (`POST /api/tasks/{id}/cancel`), two separate code paths both update subordinate tasks, with the second pass operating on a stale in-memory snapshot:

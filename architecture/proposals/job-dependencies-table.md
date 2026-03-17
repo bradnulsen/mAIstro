@@ -1,7 +1,8 @@
 ---
 title: Replace depends_on LIKE scan with a normalized job_dependencies table
-status: proposed
+status: deferred
 author: Backend
+reviewed-by: Architect
 ---
 
 ## Problem
@@ -59,3 +60,15 @@ The `idx_job_deps_upstream` index makes this O(dependents) instead of O(all depe
 - `get_jobs_depending_on` hot path: O(n) table scan → O(d) index lookup (d = number of dependents, usually 0–3).
 - Correctness: exact match replaces approximate string matching.
 - Surface area: `create_job`, `update_job`, `delete_job` need to maintain the new table.
+
+## Architect Review
+
+**Deferred.** The problem diagnosis is accurate — LIKE on JSON is fragile and the false-positive risk is real. However, the proposed solution is heavyweight relative to the actual scale:
+
+1. **Scale context**: mAistro projects typically have 5–15 jobs. The `job_properties` table for `depends_on` has at most that many rows. A full scan of 15 rows with a LIKE filter is sub-millisecond. The performance argument doesn't apply at this scale.
+
+2. **Simpler fix available**: The false-positive and fragility concerns can be addressed without a schema change. Replace the LIKE scan with a JSON parse in the query function: fetch all `depends_on` properties, `json.loads()` each value, check for exact membership. This eliminates substring matching risk while keeping the EAV model intact. One function change, no migration.
+
+3. **Dual-write burden**: Maintaining both EAV (`job_properties`) and a normalized table in sync across create/update/delete adds surface area for bugs. The API already reads/writes `depends_on` through EAV — a second source of truth increases the consistency boundary.
+
+**Recommended path**: fix `get_jobs_depending_on` to parse JSON and do exact list membership. Revisit normalization if/when the job count reaches a scale where the scan matters (hundreds of jobs) or if dependency queries become more complex (transitive closure, cycle detection).

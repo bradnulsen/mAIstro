@@ -53,6 +53,8 @@ The chat system prompt is dynamically built with live project state:
 
 This gives the chat agent awareness of the operational state without requiring it to query for basic information.
 
+**TTL cache**: The rendered system prompt is cached for 8 seconds (`time.monotonic`-based). Within the TTL window, repeated chat messages reuse the cached prompt — eliminating 3 SQL queries and 1 subprocess per cache hit. The underlying state (jobs, queue, git log) changes at most every few seconds, so brief staleness is acceptable. The cache is explicitly invalidated on project close/switch.
+
 ### Decoupling from Client
 
 The background task (`_run_cli`) runs independently of the SSE stream. If the client disconnects, the task continues to completion and saves output to the database. The `_active_chats` dict tracks which sessions have running background tasks.
