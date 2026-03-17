@@ -28,7 +28,9 @@ async def run_task(
 
     ``task`` may be supplied by the worker (already loaded) to avoid a
     redundant DB round-trip.  Falls back to fetching from DB when absent.
-    ``subordinates`` are coalesced tasks whose context is unified into the prompt.
+
+    ``subordinates`` — coalesced tasks whose context is merged into the
+    invocation section so the agent addresses all triggers in one pass.
     """
     props = job["properties"]
 
@@ -175,6 +177,16 @@ def _build_closing_directive(trigger: str | None = None) -> str:
             "This is a retry of a previous task that failed or produced insufficient results. "
             "Review context above, adjust your approach, and try again."
         )
+    if trigger == "schedule":
+        return (
+            "This is a scheduled run. Check your subscribed files and project state "
+            "for anything that needs attention. If nothing needs updating, say so briefly."
+        )
+    if trigger == "resume":
+        return (
+            "This is a resumed session — you are continuing previous work that was interrupted. "
+            "Pick up where you left off."
+        )
     return (
         "Review the project state — your instructions, subscriptions, and context above. "
         "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
@@ -235,7 +247,11 @@ def _build_queue_context(task: dict | None, subordinates: list[dict] | None = No
             deduped.append(r)
     reasons = [f"{r} ×{counts[r]}" if counts[r] > 1 else r for r in deduped]
 
-    return "## Invocation\n" + "\n".join(reasons)
+    header = "## Invocation"
+    if subordinates and len(reasons) > 1:
+        header += f"\nMultiple triggers have been coalesced into this task ({len(reasons)} items). Address them together."
+
+    return header + "\n" + "\n".join(reasons)
 
 
 # ── Watch pattern matching ──────────────────────────────────
