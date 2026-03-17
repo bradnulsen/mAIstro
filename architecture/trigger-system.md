@@ -20,7 +20,7 @@ A git post-commit hook fires an HTTP callback to the backend. The platform check
 3. Pattern matching uses `pathlib.PurePath.match()` — supports `**` recursive globbing
 4. For each matched job, a task is enqueued with `commit` trigger
 
-**Coalescing**: coalesces with other pending `commit`-triggered tasks for the same job. Multiple commits while a job is busy or pending → one catch-up run with all triggers accumulated.
+**Coalescing**: coalesces with other pre-execution (pending or queued) `commit`-triggered tasks for the same job. Multiple commits while a job is busy or has a pre-execution task → one catch-up run with all triggers accumulated.
 
 **Context**: includes the commit hash and one-line summary.
 
@@ -37,7 +37,7 @@ A background scheduler evaluates cron expressions. When a job's schedule fires, 
 4. If overdue, enqueues with `schedule` trigger and updates the last-fire timestamp
 5. First encounter of a schedule sets the baseline to now without firing — prevents immediate fire on job creation
 
-**Coalescing**: always coalesces globally — any pending task for the same job absorbs the new trigger. Repeated cron fires while a task is pending produce one run, not many.
+**Coalescing**: always coalesces globally — any pre-execution task (pending or queued) for the same job absorbs the new trigger. Repeated cron fires while a task is pre-execution produce one run, not many.
 
 **Persistence**: last-fire timestamps are stored in the `config` table (key: `schedule_last_fire_{job_id}`), surviving process restarts.
 
@@ -47,9 +47,9 @@ When a job's task completes successfully, the worker scans for jobs that declare
 
 **Flow**: `_enqueue_dependents()` in `worker.py` — runs after every successful task completion.
 
-**Coalescing**: coalesces with other pending `dependency`-triggered tasks for the same job. Multiple upstream completions while a dependent is pending → one run.
+**Coalescing**: coalesces with other pre-execution (pending or queued) `dependency`-triggered tasks for the same job. Multiple upstream completions while a dependent has a pre-execution task → one run.
 
-**Circular chains**: circular dependency chains are permitted. Coalescing absorbs the redundant triggers — a job that already has a pending task absorbs the new dependency trigger rather than creating unbounded queue growth.
+**Circular chains**: circular dependency chains are permitted. Coalescing absorbs the redundant triggers — a job that already has a pre-execution task absorbs the new dependency trigger rather than creating unbounded queue growth.
 
 **Context**: includes the upstream job name, task ID, result commit, and commit range (start..result).
 
@@ -69,46 +69,50 @@ Re-enqueues a failed or timed-out task. Unlike resume, retry resurrects the orig
 
 ## Coalescing
 
-Coalescing prevents redundant pending tasks. The mechanism is unified in `enqueue_task()`:
+Coalescing prevents redundant pre-execution tasks. It checks both pending and queued columns — a new trigger coalesces into whichever matching task exists, regardless of state. The mechanism is unified in `enqueue_task()`:
 
 1. Determine coalescing mode:
-   - `schedule` trigger → coalesce globally (any pending task for the job)
+   - `schedule` trigger → coalesce globally (any pre-execution task for the job)
    - `coalesce_tasks=true` on the job → coalesce globally regardless of trigger type
-   - `commit` or `dependency` trigger → coalesce with same-type pending tasks
+   - `commit` or `dependency` trigger → coalesce with same-type pre-execution tasks
    - All others → no coalescing
 
-2. If coalescing: query for an existing pending task (not started, no error). If found, the new trigger is absorbed and the existing task ID is returned.
+2. If coalescing: query for an existing pre-execution task (not started, no error, `queued_at IS NULL OR started_at IS NULL`). If found, the new trigger is absorbed and the existing task ID is returned.
 
-3. If not coalescing (or no compatible pending task found): insert a new record.
+3. If not coalescing (or no compatible pre-execution task found): insert a new record. The new task enters pending or queued based on the auto-queueing setting.
 
 The `context` column stores pre-formatted text built at the enqueue site. Context is immutable once written — it captures the state at trigger time, not execution time.
 
 ### Coalesced ID Mechanism
 
-Automatic coalescing uses the same `coalesced_id` mechanism as manual merge (see [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition)). Rather than modifying an existing task's record, the system always creates a new atomic task record first (preserving trigger provenance), then sets its `coalesced_id` to point to the existing pending root task. Each trigger retains its own task record — coalescing links them, it does not merge data.
+Automatic coalescing uses the same `coalesced_id` mechanism as manual merge (see [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition)). Rather than modifying an existing task's record, the system always creates a new atomic task record first (preserving trigger provenance), then sets its `coalesced_id` to point to the existing pre-execution root task. Each trigger retains its own task record — coalescing links them, it does not merge data.
 
 The flow in `enqueue_task()`:
 1. Insert the new task record unconditionally (trigger, context, approval all set)
-2. If coalescing applies: query for an existing pending root (`coalesced_id IS NULL`, same job, not started, no error)
+2. If coalescing applies: query for an existing pre-execution root (`coalesced_id IS NULL`, same job, not started, no error) — searches both pending and queued tasks
 3. If a root exists: set the new task's `coalesced_id` to the root's ID — the new task becomes a subordinate
 
 The queue-level view filters on `coalesced_id IS NULL`, so subordinate tasks are invisible in the queue. At dispatch time, the worker collects all tasks linked to the root and unifies their context into the prompt.
 
 ## Manual Queue Composition
 
-Two user-initiated operations complement automatic coalescing — merge and split. These operate on pending tasks from the Dispatch view.
+Three user-initiated operations complement automatic coalescing — merge, split, and transfer. These operate on pre-execution tasks (pending or queued) from the Dispatch view. Merge and split are **same-state** operations (within a single column); transfer moves tasks between columns.
 
 ### Merge
 
-Combines two or more pending tasks for the same job. The oldest task becomes the root; all others get `coalesced_id` set to the root's task ID. Trigger history is preserved — no entries are lost or rewritten.
+Combines two pre-execution tasks in the same column for the same job. The oldest task becomes the root; all others get `coalesced_id` set to the root's task ID. Trigger history is preserved — no entries are lost or rewritten.
 
-Constraints: pending tasks only, same job only. Cross-job merge would violate the one-task-one-job invariant.
+Constraints: pre-execution tasks only, same column (both pending or both queued), same job only. Cross-job merge would violate the one-task-one-job invariant. Cross-column drag is always a transfer, never a merge.
 
 ### Split (Uncoalesce)
 
-Reverses a merge or automatic coalescing. All tasks subordinate to a root (those with `coalesced_id` pointing to it) get `coalesced_id` cleared back to NULL, becoming independent queue entries. Split-off tasks get `sort_order` cleared and `created_at` reset, placing them at the end of the queue. They inherit the job's current `require_approval` setting.
+Reverses a merge or automatic coalescing. All tasks subordinate to a root (those with `coalesced_id` pointing to it) get `coalesced_id` cleared back to NULL, becoming independent queue entries. Split-off tasks get `sort_order` cleared and `created_at` reset, placing them at the end of the same column as the root. They inherit the job's current `require_approval` setting. Split tasks remain in the same state as the original.
 
 Constraints: only root tasks with subordinates, pre-execution only (not started, no error).
+
+### Transfer
+
+Moves a task between pending and queued columns. Sets or clears `queued_at` accordingly. The transferred task is appended to the end of the target column. Transfer does not merge with or reorder against existing tasks in the target.
 
 See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition) for implementation details.
 

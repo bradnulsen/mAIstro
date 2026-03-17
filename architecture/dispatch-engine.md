@@ -23,6 +23,7 @@ Each `tasks` row tracks:
 | `approval` | Gate status: `null` (no gate), `pending`, `approved`, `rejected` |
 | `start_commit` | HEAD hash when execution began |
 | `created_at` | When the task was enqueued |
+| `queued_at` | When the task was promoted to queued state (NULL = still pending) |
 | `started_at` | When the worker began processing |
 | `completed_at` | When execution finished (success, failure, or cancellation) |
 | `result_commit` | HEAD hash after execution completed |
@@ -30,24 +31,48 @@ Each `tasks` row tracks:
 | `rating` | User-assigned binary rating (positive/negative), null by default |
 | `coalesced_id` | Links subordinate tasks to a root task for merge; NULL = standalone/root |
 
+### Task State Derivation
+
+Task state is derived from lifecycle timestamps, not stored as a separate field:
+
+| State | Condition |
+|-------|-----------|
+| **Pending** | `queued_at IS NULL AND started_at IS NULL` |
+| **Queued** | `queued_at IS NOT NULL AND started_at IS NULL` |
+| **Active** | `started_at IS NOT NULL AND completed_at IS NULL` |
+| **Completed** | `completed_at IS NOT NULL AND error IS NULL` |
+| **Failed** | `completed_at IS NOT NULL AND error IS NOT NULL` |
+
+A task may move backward from queued to pending (via manual transfer), but once started, progression is forward-only.
+
 ## Worker
 
 **Module**: `backend/worker.py`
 
 The worker is a single `asyncio.Task` running a poll loop. It wakes on notification (via `asyncio.Event`) or every 2 seconds, whichever comes first.
 
-### Processing Modes
+### Two-Stage Queue
 
-The queue operates in two modes controlled by the `queue_auto_dispatch` config:
+Tasks progress through two pre-execution states before the worker picks them up:
 
-- **Auto-processing** (`true`): the worker loop continuously pulls the oldest pending task and processes it in order
-- **Paused** (`false`): tasks accumulate as pending. The user reorders them via drag-to-reorder in the Dispatch view, then toggles auto-processing when ready
+- **Pending** — the staging area. Newly created tasks land here by default. The user reviews, reorders, coalesces, and curates pending tasks before promoting them to queued. Pending tasks are invisible to the worker.
+- **Queued** — the execution runway. Tasks here are committed to run. The worker pulls the highest-priority queued task when ready.
+
+**Auto-queueing** (`queue_auto_dispatch` config) controls the initial routing of newly created tasks. When enabled, new tasks skip pending and go directly to queued (`queued_at` set at creation). When disabled, new tasks enter pending (`queued_at` remains NULL). The worker always runs — auto-queueing only controls where tasks land on creation, not whether the worker processes.
+
+The user can override auto-queueing for any individual task by transferring it between columns (dragging from queued to pending or vice versa). The transfer sets or clears `queued_at` accordingly.
 
 ### Sequential Execution
 
 An `asyncio.Lock` guards task processing. Exactly one task runs at a time. The lock is held for the full duration of CLI execution — from session creation through final DB update.
 
 The `_active_task_id` global tracks which task is currently running, enabling cancellation and the "active task blocks project switch" safety invariant.
+
+The worker only queries for tasks in the **queued** state (`queued_at IS NOT NULL AND started_at IS NULL`). Pending tasks are invisible to the worker regardless of their queue position.
+
+### Task Ordering
+
+Both pending and queued columns maintain independent sort orders via `sort_order`. Each column has its own ordering — transferring a task between columns does not affect ordering within the other column. The worker pulls the highest-priority queued task (lowest `sort_order` in the queued set). Newly created tasks are appended to the end of their target column.
 
 ### Execution Flow
 
@@ -77,7 +102,7 @@ Timed-out and failed tasks explicitly do not trigger dependents.
 
 ## Approval Gates
 
-Jobs with `require_approval=true` get `approval='pending'` on task enqueue — except manual dispatches, which bypass the gate (manual = explicit human intent). The worker's pending task query (`get_oldest_pending_task`) skips rows where `approval='pending'`.
+Jobs with `require_approval=true` get `approval='pending'` on task enqueue — except manual dispatches, which bypass the gate (manual = explicit human intent). The worker's queued task query skips rows where `approval='pending'`.
 
 Approval and rejection are API operations that propagate to the full coalesce group:
 - **Approve**: sets `approval='approved'` on the root task and all subordinates with `approval='pending'`, then wakes the worker
@@ -118,7 +143,7 @@ The rating dataset can later be correlated with job instructions, model choices,
 
 ## Manual Queue Composition
 
-The user can merge and split pending tasks directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly.
+The user can merge and split pre-execution tasks (pending or queued) directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly. All composition operations are **same-state** — they operate within a single column only.
 
 ### Implementation: Coalesced ID
 
@@ -129,15 +154,15 @@ Rather than destructively removing task records during merge (losing individual 
 | `NULL` | Standalone task — visible in queue, dispatched independently |
 | `<task_id>` | Subordinate task — linked to the root task identified by this ID |
 
-**Queue rendering**: the queue shows all tasks where `coalesced_id IS NULL`. These are either standalone tasks or root tasks that have subordinates linked to them.
+**Queue rendering**: the queue shows all tasks where `coalesced_id IS NULL`. These are either standalone tasks or root tasks that have subordinates linked to them. Both pending and queued columns filter on this condition independently.
 
-**Dispatch collection**: when the worker pulls a task for execution, it collects all tasks whose `coalesced_id` equals the dispatched task's ID. The context from all collected tasks is unified into the prompt. Each subordinate task's context is preserved verbatim — merge does not rewrite history.
+**Dispatch collection**: when the worker pulls a queued task for execution, it collects all tasks whose `coalesced_id` equals the dispatched task's ID. The context from all collected tasks is unified into the prompt. Each subordinate task's context is preserved verbatim — merge does not rewrite history.
 
 **Route behavior**: API routes that act on a specific task ID automatically consider all tasks with `coalesced_id` equal to that ID. This means cancellation, approval, and other lifecycle operations propagate to the full group.
 
 ### Merge
 
-Combines two pending tasks for the same job into a single logical unit. Triggered by dragging one pending task onto another in the Dispatch view (see [Frontend — Drag Interaction Model](frontend.md)).
+Combines two pre-execution tasks in the same column for the same job into a single logical unit. Triggered by dragging one task onto another within the same column in the Dispatch view (see [Frontend — Drag Interaction Model](frontend.md)).
 
 1. The older task (by `created_at`) becomes the root — its `coalesced_id` remains NULL
 2. The dragged task gets `coalesced_id` set to the root task's ID
@@ -146,6 +171,7 @@ Combines two pending tasks for the same job into a single logical unit. Triggere
 
 **Constraints**:
 - Only pre-execution tasks (not started, not completed, not pending-approval)
+- **Same-state required**: both tasks must be in the same column (both pending or both queued). Cross-column drag is always a transfer, never a merge
 - Same job only — a task's identity is bound to one job; cross-job merge would break prompt assembly, tool configuration, and commit authorship. The UI enforces this structurally by suppressing the merge affordance when tasks belong to different jobs
 - Tasks that are already subordinates (have a non-null `coalesced_id`) cannot be merge targets — they must be split from their current root first
 
@@ -154,13 +180,23 @@ Combines two pending tasks for the same job into a single logical unit. Triggere
 Reverses a merge or automatic coalescing. Takes a root task that has subordinate tasks and makes them independent again.
 
 1. All tasks with `coalesced_id` equal to the root task's ID get `coalesced_id` set back to NULL
-2. Split-off tasks get `sort_order` cleared to NULL and `created_at` reset to the current time — they appear at the end of the queue as if newly created
+2. Split-off tasks get `sort_order` cleared to NULL and `created_at` reset to the current time — they appear at the end of the same column as the root task
 3. Split-off tasks inherit the job's current `require_approval` setting — if the gate is now enabled, they enter pending-approval state even if the original merge happened before the gate was set
+4. **Same-state preservation**: split tasks remain in the same state as the root — splitting a queued task produces queued tasks, splitting a pending task produces pending tasks
 
 **Constraints**:
 - Only root tasks (coalesced_id IS NULL) that have at least one subordinate can be split
 - Only pre-execution tasks (started_at IS NULL and no error)
 - The root task itself is unchanged — it retains its position, trigger, and context. Only subordinates are released
+
+### Transfer
+
+Moves a task between pending and queued columns. This is the mechanism for promoting tasks to the execution runway or demoting them back to staging.
+
+- **Pending → Queued**: sets `queued_at` to current time. The task becomes eligible for the worker.
+- **Queued → Pending**: clears `queued_at` back to NULL. The task is no longer eligible for the worker.
+- Transferred tasks are appended to the end of the target column.
+- Transfer is always a state-change operation — it does not merge with or reorder against existing tasks in the target column.
 
 ### Why Coalesced ID Over Record Deletion
 
@@ -169,7 +205,7 @@ The coalesced_id approach has structural advantages:
 - **Atomic provenance**: every trigger that created a task retains its own record. Audit trails remain complete without relying on JSON array archaeology
 - **Reversibility**: split is a column update, not record reconstruction. No information is lost during merge that must be recreated during split
 - **Route simplicity**: "act on all tasks with this coalesced_id" is a single WHERE clause, uniformly applied across all endpoints
-- **Automatic coalescing alignment**: the same mechanism can back automatic coalescing — instead of appending to a JSON array, create a new record with `coalesced_id` pointing to the existing pending task
+- **Automatic coalescing alignment**: the same mechanism can back automatic coalescing — instead of appending to a JSON array, create a new record with `coalesced_id` pointing to the existing pre-execution task
 
 ## Retry and Resume
 

@@ -18,13 +18,15 @@ The app polls job status every 5 seconds to keep the status bar current.
 ## Views
 
 ### Dispatch (`Queue.jsx`)
-The primary operational view. Shows pending, active, and completed tasks with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Dragging pending tasks serves dual purpose — reorder or merge — distinguished by drop position. Split breaks a multi-trigger pending task into individual tasks. Displays task output with streaming text, tool use events, and diff views.
+The primary operational view. Two-column kanban layout: **Pending** (left) and **Queued** (right). Pending is the staging area where new tasks land for review and curation. Queued is the execution runway — the worker pulls from here. Active and completed tasks appear below the queued column with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Split breaks a multi-trigger pre-execution task into individual tasks. Displays task output with streaming text, tool use events, and diff views.
 
-**Drag Interaction Model** — reorder and merge share a single drag gesture, disambiguated by where the task is dropped:
+**Drag Interaction Model** — three drag operations share a single drag gesture, disambiguated by drop target:
 
-- **Reorder zone**: the upper and lower edges of each task row (the gaps between tasks). Dropping here inserts the dragged task at that position. Visual feedback: an insertion line between tasks.
-- **Merge zone**: the central area of a task row. Dropping here merges the dragged task into the drop target. Visual feedback: the target task highlights with a merge indicator. The merge zone activates only when the drop target is a pending task belonging to the same job as the dragged task. When the same-job condition is not met, the central zone falls back to reorder behavior.
-- The tolerance split (how much of the row is merge zone vs. reorder zone) is a UI tuning parameter. The essential contract: the user's spatial intent — "place between" vs. "place onto" — determines whether the operation is reorder or merge.
+- **Reorder** (within same column) — drop between tasks in the same column. Visual feedback: an insertion line between tasks. The dragged task moves to that position.
+- **Merge** (within same column) — drop onto a task's central zone in the same column. Visual feedback: the target task highlights with a merge indicator. The merge zone activates only when the drop target belongs to the same job as the dragged task and both are in the same state. When these conditions are not met, the central zone falls back to reorder behavior.
+- **Transfer** (between columns) — drop into the other column. Moves the task from pending to queued or from queued to pending. The transferred task is appended to the end of the target column. Visual feedback: the target column highlights as a drop zone.
+
+The tolerance split between reorder and merge zones is a UI tuning parameter. The essential contract: the user's spatial intent — "place between" vs. "place onto" vs. "move across" — determines which operation occurs. Ordering and coalescing are same-state operations; cross-column drag is exclusively a transfer.
 
 ### Activity Feed (`Feed.jsx`)
 Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked job and trigger type.
@@ -39,7 +41,7 @@ A project file browser providing read-only access to project content. The user s
 A dedicated surface for managing external tool servers. MCP servers extend what agents can do — they are a primary capability concern, not a secondary platform setting. The view manages the global server registry: registration, health monitoring, enable/disable, and removal. Per-job server assignment remains on the Jobs configuration surface. See [Tool Mediation — External MCP Servers](tool-mediation.md#external-mcp-servers) for lifecycle details.
 
 ### Settings (`Settings.jsx`)
-Platform configuration: queue processing mode (auto-dispatch toggle), default model, default timeout.
+Platform configuration: auto-queueing toggle, default model, default timeout. Auto-queueing controls where newly created tasks land — when enabled, tasks skip pending and go directly to queued; when disabled, all new tasks enter pending.
 
 ### Chat (`Chat.jsx`)
 Interactive conversation interface in the side tray. Manages chat sessions, displays message history, and streams responses via SSE.
@@ -48,7 +50,7 @@ Interactive conversation interface in the side tray. Manages chat sessions, disp
 
 Configuration fields that involve syntax rules, non-obvious behavior, or domain concepts surface hover tooltips. The tooltip attaches to a help indicator adjacent to the field label — not on the input itself — preserving normal interaction.
 
-Tooltips explain rules and behavior, not just labels. They answer "what do I type here?" and "what will this do?" Required surfaces include: subscription glob syntax, cron expression format, allowed tools, approval gates, coalescing, dependencies, timeout, auto-dispatch, MCP servers, and model selection.
+Tooltips explain rules and behavior, not just labels. They answer "what do I type here?" and "what will this do?" Required surfaces include: subscription glob syntax, cron expression format, allowed tools, approval gates, coalescing, dependencies, timeout, auto-queueing, MCP servers, and model selection.
 
 This is a frontend-only concern — tooltip content is static, derived from the domain rules documented in DESIGN.md. No backend involvement.
 
