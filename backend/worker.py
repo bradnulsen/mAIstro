@@ -249,7 +249,7 @@ async def _process_task(task: dict):
         if _timed_out:
             head = git.head_hash(state.PROJECT_DIR)
             now = utcnow()
-            await db.update_task(task_id, completed_at=now,
+            await db.update_task(task_id, _commit=False, completed_at=now,
                                  result_commit=head, error="timed out")
             sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
             await db.update_tasks_batch(sub_ids, completed_at=now,
@@ -258,7 +258,7 @@ async def _process_task(task: dict):
         else:
             head = git.head_hash(state.PROJECT_DIR)
             now = utcnow()
-            await db.update_task(task_id, completed_at=now, result_commit=head)
+            await db.update_task(task_id, _commit=False, completed_at=now, result_commit=head)
             sub_ids = [s["id"] for s in subordinates]
             await db.update_tasks_batch(sub_ids, completed_at=now, result_commit=head)
             log.info("[worker] Task #%d completed (commit=%s)", task_id, head[:8])
@@ -279,7 +279,7 @@ async def _process_task(task: dict):
             await db.add_chat_message(session_id, "assistant", response_text)
         await db.add_chat_message(session_id, "system", f"Error: {e}")
         now = utcnow()
-        await db.update_task(task_id, completed_at=now, error=str(e))
+        await db.update_task(task_id, _commit=False, completed_at=now, error=str(e))
         sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
         await db.update_tasks_batch(sub_ids, completed_at=now, error=str(e))
     finally:

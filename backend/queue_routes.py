@@ -170,7 +170,7 @@ async def cancel_task(task_id: int):
     require_project()
     was_running = worker.cancel(task_id)
     now = utcnow()
-    await db.update_task(task_id, completed_at=now, error="cancelled")
+    await db.update_task(task_id, _commit=False, completed_at=now, error="cancelled")
     subs = await db.get_subordinate_tasks(task_id)
     sub_ids = [s["id"] for s in subs if not s.get("completed_at")]
     await db.update_tasks_batch(sub_ids, completed_at=now, error="cancelled")

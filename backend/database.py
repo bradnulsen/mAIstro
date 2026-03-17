@@ -522,23 +522,28 @@ async def get_oldest_queued_task() -> dict | None:
     return dict(rows[0]) if rows else None
 
 
-async def update_task(task_id: int, **kwargs):
+async def update_task(task_id: int, _commit: bool = True, **kwargs):
     db = await get_db()
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [task_id]
     await db.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
-    await db.commit()
+    if _commit:
+        await db.commit()
 
 
 async def update_tasks_batch(task_ids: list[int], **kwargs):
-    """Update multiple tasks with the same field values in a single statement."""
-    if not task_ids:
-        return
+    """Update multiple tasks with the same field values in a single statement.
+
+    Always commits — even when task_ids is empty — to flush any prior
+    uncommitted writes in the same transaction (e.g. a preceding
+    update_task with _commit=False).
+    """
     db = await get_db()
-    sets = ", ".join(f"{k} = ?" for k in kwargs)
-    placeholders = ",".join("?" * len(task_ids))
-    vals = list(kwargs.values()) + list(task_ids)
-    await db.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
+    if task_ids:
+        sets = ", ".join(f"{k} = ?" for k in kwargs)
+        placeholders = ",".join("?" * len(task_ids))
+        vals = list(kwargs.values()) + list(task_ids)
+        await db.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
     await db.commit()
 
 
