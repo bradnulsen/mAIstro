@@ -163,7 +163,7 @@ async def chat(req: ChatRequest):
         yield {"event": "session_id", "data": json.dumps({"session_id": session_id})}
         while True:
             try:
-                event = await asyncio.wait_for(event_queue.get(), timeout=60)
+                event = await asyncio.wait_for(event_queue.get(), timeout=30)
             except asyncio.TimeoutError:
                 yield {"event": "ping", "data": "{}"}
                 continue

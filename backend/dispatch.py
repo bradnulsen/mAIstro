@@ -141,6 +141,9 @@ def build_user_prompt(job: dict, project_dir: str,
     if instructions:
         sections.append(f"## Instructions\n{instructions}")
 
+    if queue_context:
+        sections.append(queue_context)
+
     if manifest and manifest.strip():
         sections.append(f"## Job Registry\n{manifest}")
 
@@ -150,9 +153,6 @@ def build_user_prompt(job: dict, project_dir: str,
         if sub_files:
             file_list = "\n".join(f"- `{f['path']}` ({f['size']}B)" for f in sub_files)
             sections.append(f"## Subscribed Files\nThese files are relevant to your task. Read them as needed.\n{file_list}")
-
-    if queue_context:
-        sections.append(queue_context)
 
     primary_trigger = task_meta.get("trigger") if task_meta else None
     sections.append("## Your Turn\n" + _build_closing_directive(primary_trigger))

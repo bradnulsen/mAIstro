@@ -13,7 +13,7 @@ import shutil
 log = logging.getLogger("maistro.mcp_probe")
 
 # Timeout for the full probe handshake (seconds)
-PROBE_TIMEOUT = 30
+PROBE_TIMEOUT = 10
 
 
 async def probe_server(command: str, args: list[str], env: dict[str, str] | None = None) -> dict:
