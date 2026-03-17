@@ -44,6 +44,9 @@ class McpEventRequest(BaseModel):
     result: str
     timestamp: str
 
+class TransferRequest(BaseModel):
+    to_queued: bool
+
 class QueueSettingsRequest(BaseModel):
     auto_dispatch: bool = False
 
@@ -229,7 +232,10 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     retry_context = f"**Retry** of task #{task_id}: {retry_summary}"
 
     # Resurrect in-place: reset lifecycle fields, update trigger, reset created_at
+    # Retried tasks land in pending or queued based on auto-queueing setting
     now = utcnow()
+    auto_queue = await db.get_config("queue_auto_dispatch")
+    queued_at = now if auto_queue == "true" else None
     await db.update_task(
         task_id,
         trigger="retry",
@@ -244,6 +250,7 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
         resume_session_id=None,
         rating=None,
         created_at=now,
+        queued_at=queued_at,
     )
     worker.notify()
     return {"task_id": task_id}
@@ -266,6 +273,30 @@ async def get_subordinates(task_id: int):
     require_project()
     subs = await db.get_subordinate_tasks(task_id)
     return subs
+
+
+@router.post("/api/tasks/{task_id}/uncoalesce")
+async def uncoalesce_task_route(task_id: int):
+    """Remove a single subordinate from its coalesce group."""
+    require_project()
+    try:
+        freed_id = await db.uncoalesce_task(task_id)
+        return {"task_id": freed_id}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/api/tasks/{task_id}/transfer")
+async def transfer_task_route(task_id: int, req: TransferRequest):
+    """Move a task between pending and queued columns."""
+    require_project()
+    try:
+        await db.transfer_task(task_id, req.to_queued)
+        if req.to_queued:
+            worker.notify()
+        return {"status": "ok", "to_queued": req.to_queued}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/api/tasks/{task_id}/split")

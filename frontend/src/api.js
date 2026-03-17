@@ -107,6 +107,15 @@ export const mergeTasks = (taskIds) =>
 export const splitTask = (id) =>
   fetchJSON(`/api/tasks/${id}/split`, { method: 'POST' })
 
+export const uncoalesceTask = (id) =>
+  fetchJSON(`/api/tasks/${id}/uncoalesce`, { method: 'POST' })
+
+export const transferTask = (id, toQueued) =>
+  fetchJSON(`/api/tasks/${id}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify({ to_queued: toQueued }),
+  })
+
 export const getSubordinates = (id) =>
   fetchJSON(`/api/tasks/${id}/subordinates`)
 

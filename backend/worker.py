@@ -135,12 +135,10 @@ async def _loop():
                 await _sweep_stale()
                 _swept_project = state.PROJECT_DIR
 
-            auto = await db.get_config("queue_auto_dispatch")
-            if auto != "true":
-                continue
-
+            # Worker always processes queued tasks — auto-queueing only
+            # controls where new tasks land, not whether the worker runs.
             async with _lock:
-                task = await db.get_oldest_pending_task()
+                task = await db.get_oldest_queued_task()
                 if task:
                     await _process_task(task)
 

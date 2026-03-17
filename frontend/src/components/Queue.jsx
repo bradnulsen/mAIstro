@@ -3,13 +3,15 @@ import Markdown from 'react-markdown'
 import {
   getTaskQueue, cancelTask, updateTask, getTaskOutput,
   getTaskDiff, getTaskOutcome, getQueueSettings, setQueueSettings, processOne,
-  streamTask, resumeTask, retryTask, approveTask, rejectTask,
-  reorderTasks, mergeTasks, splitTask, getSubordinates, rateTask,
+  streamTask, approveTask, rejectTask,
+  reorderTasks, mergeTasks, splitTask, getSubordinates,
+  transferTask,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
 
 const STATUS_LABELS = {
   pending: 'Pending',
+  queued: 'Queued',
   pending_approval: 'Needs Approval',
   running: 'Running',
   completed: 'Completed',
@@ -38,12 +40,13 @@ function getStatus(item) {
   if (item.completed_at) return 'completed'
   if (item.started_at) return 'running'
   if (item.approval === 'pending') return 'pending_approval'
+  if (item.queued_at) return 'queued'
   return 'pending'
 }
 
-function isUpcoming(item) {
+function isPreExecution(item) {
   const s = getStatus(item)
-  return s === 'pending' || s === 'running' || s === 'pending_approval'
+  return s === 'pending' || s === 'queued' || s === 'pending_approval'
 }
 
 function triggerLabel(item) {
@@ -61,11 +64,20 @@ function getMessageContent(msg) {
   return String(msg.content ?? '')
 }
 
+/** Sort pre-execution tasks: sort_order first, then created_at */
+function sortPreExecution(items) {
+  return [...items].sort((a, b) => {
+    const aSort = a.sort_order ?? Infinity
+    const bSort = b.sort_order ?? Infinity
+    if (aSort !== bSort) return aSort - bSort
+    return (a.created_at || '').localeCompare(b.created_at || '')
+  })
+}
+
 export default function Queue() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
-  const [filter, setFilter] = useState('upcoming') // 'upcoming' | 'past'
   const [autoDispatch, setAutoDispatch] = useState(false)
   const [output, setOutput] = useState(null)
   const [confirmCancel, setConfirmCancel] = useState(null)
@@ -73,9 +85,6 @@ export default function Queue() {
 
   const [refreshing, setRefreshing] = useState(false)
   const detailScrollRef = useRef(null)
-  const [dragIdx, setDragIdx] = useState(null)
-  const [dragOverIdx, setDragOverIdx] = useState(null)
-  const [dropZone, setDropZone] = useState(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -114,7 +123,7 @@ export default function Queue() {
   const [liveTools, setLiveTools] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
 
-  useEffect(() => { setActionError(''); setRetryContext(null); setConfirmCancel(null) }, [selected?.id])
+  useEffect(() => { setActionError(''); setConfirmCancel(null) }, [selected?.id])
 
   useEffect(() => {
     if (!selected) { setOutput(null); setLiveText(''); setLiveTools([]); setIsStreaming(false); return }
@@ -220,18 +229,6 @@ export default function Queue() {
     } catch {}
   }
 
-  const handleResume = async (id) => {
-    setActionError('')
-    try {
-      const result = await resumeTask(id)
-      const queue = await refresh()
-      const newItem = queue.find(q => q.id === result.task_id)
-      if (newItem) { setSelected(newItem); setFilter('upcoming') }
-    } catch (e) {
-      setActionError(e.message)
-    }
-  }
-
   const handleMergePair = async (draggedId, targetId) => {
     setActionError('')
     try {
@@ -252,27 +249,11 @@ export default function Queue() {
     }
   }
 
-
-  const handleRate = async (id, rating) => {
+  const handleTransfer = async (id, toQueued) => {
     setActionError('')
     try {
-      await rateTask(id, rating)
+      await transferTask(id, toQueued)
       await refresh()
-    } catch (e) {
-      setActionError(e.message)
-    }
-  }
-
-  const [retryContext, setRetryContext] = useState(null)
-
-  const handleRetry = async (id, context) => {
-    setActionError('')
-    try {
-      const result = await retryTask(id, context)
-      setRetryContext(null)
-      const queue = await refresh()
-      const newItem = queue.find(q => q.id === result.task_id)
-      if (newItem) { setSelected(newItem); setFilter('upcoming') }
     } catch (e) {
       setActionError(e.message)
     }
@@ -292,150 +273,67 @@ export default function Queue() {
     const handleKey = (e) => {
       if (e.key !== 'Escape') return
       if (confirmCancel !== null) { setConfirmCancel(null); return }
-      if (retryContext !== null) { setRetryContext(null); return }
       if (selected) setSelected(null)
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [selected, confirmCancel, retryContext])
+  }, [selected, confirmCancel])
 
-  const MERGE_ZONE_RATIO = 0.5
-  const computeDropZone = (e, rowEl, draggedItem, targetItem) => {
-    const rect = rowEl.getBoundingClientRect()
-    const y = e.clientY - rect.top
-    const ratio = y / rect.height
-    const edgeSize = (1 - MERGE_ZONE_RATIO) / 2
-    const canMerge = targetItem && draggedItem &&
-      getStatus(targetItem) === 'pending' && getStatus(draggedItem) === 'pending' &&
-      targetItem.job_id === draggedItem.job_id
-    if (ratio < edgeSize) return 'reorder-before'
-    if (ratio > 1 - edgeSize) return 'reorder-after'
-    return canMerge ? 'merge' : (ratio < 0.5 ? 'reorder-before' : 'reorder-after')
-  }
+  // Partition items into columns — Dispatch shows only pre-execution and active tasks
+  const pendingItems = sortPreExecution(items.filter(i => {
+    const s = getStatus(i)
+    return s === 'pending' || (s === 'pending_approval' && !i.queued_at)
+  }))
+  const queuedItems = sortPreExecution(items.filter(i => {
+    const s = getStatus(i)
+    return s === 'queued' || (s === 'pending_approval' && i.queued_at)
+  }))
+  const activeItems = items.filter(i => getStatus(i) === 'running')
+  const anyRunning = activeItems.length > 0
 
-  const handleDragOver = (e, idx) => {
-    e.preventDefault()
-    if (dragIdx === null || dragIdx === idx) { setDragOverIdx(null); setDropZone(null); return }
-    const draggedItem = filtered[dragIdx]
-    const targetItem = filtered[idx]
-    const zone = computeDropZone(e, e.currentTarget, draggedItem, targetItem)
-    setDragOverIdx(idx)
-    setDropZone(zone)
-  }
-
-  const handleDragEnd = async () => {
-    if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx) {
-      if (dropZone === 'merge') {
-        const draggedItem = filtered[dragIdx]
-        const targetItem = filtered[dragOverIdx]
-        await handleMergePair(draggedItem.id, targetItem.id)
-      } else {
-        const reordered = [...filtered]
-        const [moved] = reordered.splice(dragIdx, 1)
-        const insertIdx = dropZone === 'reorder-before'
-          ? (dragOverIdx > dragIdx ? dragOverIdx - 1 : dragOverIdx)
-          : (dragOverIdx < dragIdx ? dragOverIdx + 1 : dragOverIdx)
-        reordered.splice(insertIdx, 0, moved)
-        const pendingIds = reordered.filter(i => getStatus(i) !== 'running').map(i => i.id)
-        try { await reorderTasks(pendingIds); await refresh() } catch {}
-      }
-    }
-    setDragIdx(null)
-    setDragOverIdx(null)
-    setDropZone(null)
-  }
-
-  const anyRunning = items.some(i => getStatus(i) === 'running')
-  const filtered = items.filter(item =>
-    filter === 'upcoming' ? isUpcoming(item) : !isUpcoming(item)
-  )
-  if (filter === 'past') {
-    filtered.sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
-  } else {
-    filtered.sort((a, b) => {
-      const aRunning = getStatus(a) === 'running' ? 0 : 1
-      const bRunning = getStatus(b) === 'running' ? 0 : 1
-      if (aRunning !== bRunning) return aRunning - bRunning
-      const aSort = a.sort_order ?? Infinity
-      const bSort = b.sort_order ?? Infinity
-      if (aSort !== bSort) return aSort - bSort
-      return (a.created_at || '').localeCompare(b.created_at || '')
-    })
-  }
+  // Determine which status group the selected task belongs to
+  const selectedStatus = selected ? getStatus(selected) : null
+  const selectedIsPreExec = selected && isPreExecution(selected)
 
   return (
     <>
       <div className="header-bar">
-        <h1>Queue</h1>
+        <h1>Dispatch</h1>
         <div className="spacer" />
-        <div className="mode-toggle">
-          <button
-            className={filter === 'upcoming' ? 'active' : ''}
-            onClick={() => { if (filter !== 'upcoming') { setFilter('upcoming'); setSelected(null) } }}
-          >Upcoming</button>
-          <button
-            className={filter === 'past' ? 'active' : ''}
-            onClick={() => { if (filter !== 'past') { setFilter('past'); setSelected(null) } }}
-          >Past</button>
-        </div>
         <button className="small" onClick={handleRefresh} disabled={refreshing}>
           {refreshing ? <span className="tool-spinner" /> : '↻'}
         </button>
         <div className="toolbar-divider" />
         <label className="checkbox-label">
           <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
-          Auto
+          Auto-queue
         </label>
       </div>
 
       <div className="split-body">
-        <div className="feed-list">
-          {loading && <div className="loading">Loading queue...</div>}
-          {!loading && filtered.length === 0 && (
-            <div className="empty-state">
-              {filter === 'upcoming' ? 'No pending or running tasks' : 'No past tasks'}
-            </div>
-          )}
-          {filtered.map((item, i) => {
-            const status = getStatus(item)
-            const draggable = filter === 'upcoming' && status !== 'running'
-            const isDropTarget = dragOverIdx === i && dragIdx !== null && dragIdx !== i
-            const dropClass = isDropTarget
-              ? (dropZone === 'merge' ? ' drop-merge' : dropZone === 'reorder-before' ? ' drop-before' : ' drop-after')
-              : ''
-            return (
-              <div
-                key={item.id}
-                className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'running' ? 'running' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}${dragIdx === i ? ' dragging' : ''}${dropClass}`}
-                onClick={() => setSelected(item)}
-                draggable={draggable}
-                onDragStart={draggable ? (e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }) : undefined}
-                onDragOver={draggable ? (e => handleDragOver(e, i)) : undefined}
-                onDragLeave={draggable ? (() => { setDragOverIdx(null); setDropZone(null) }) : undefined}
-                onDragEnd={draggable ? handleDragEnd : undefined}
-              >
-                <div className="feed-avatar">
-                  {(item.job_name || '?')[0].toUpperCase()}
-                </div>
-                <div className="feed-body">
-                  <div className="feed-meta">
-                    <span className="feed-trigger">
-                      {TRIGGER_ICONS[item.trigger] || ''}
-                      {item.subordinate_count > 0 ? ` (${item.subordinate_count + 1})` : ''}
-                    </span>
-                    <span className="feed-author">{item.job_name}</span>
-                    <span className={`queue-status ${status}`}>
-                      {STATUS_LABELS[status]}
-                    </span>
-                    <span>{formatDate(isUpcoming(item) ? item.created_at : (item.completed_at || item.created_at), true)}</span>
-                  </div>
-                  <div className="feed-message">
-                    {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
-                  </div>
-                </div>
-              </div>
-            )
-          })}
+        <div className="kanban-columns">
+          <KanbanColumn
+            title="Pending"
+            items={pendingItems}
+            column="pending"
+            dragMode="merge"
+            selected={selected}
+            onSelect={setSelected}
+            onMerge={handleMergePair}
+            onTransfer={handleTransfer}
+          />
+          <KanbanColumn
+            title="Queued"
+            items={queuedItems}
+            column="queued"
+            dragMode="reorder"
+            selected={selected}
+            onSelect={setSelected}
+            onReorder={reorderTasks}
+            onTransfer={handleTransfer}
+            onRefresh={refresh}
+            activeItems={activeItems}
+          />
         </div>
 
         {selected && (
@@ -447,11 +345,10 @@ export default function Queue() {
 
             <div ref={detailScrollRef} className="detail-scroll">
               <TaskDetail item={selected} output={output} onUpdate={refresh}
-                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming}
-                onSplit={handleSplit} onRate={handleRate} />
+                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming} />
             </div>
 
-            {isUpcoming(selected) && (
+            {(selectedIsPreExec || selectedStatus === 'running') && (
               <div className="detail-actions">
                 {confirmCancel === selected.id ? (
                   <div className="action-row">
@@ -461,42 +358,52 @@ export default function Queue() {
                   </div>
                 ) : (
                   <div className="action-row">
-                    {getStatus(selected) === 'pending_approval' && (
+                    {selectedStatus === 'pending_approval' && (
                       <>
-                        <button
-                          className="small primary"
-                          onClick={() => handleApprove(selected.id)}
-                        >
+                        <button className="small primary" onClick={() => handleApprove(selected.id)}>
                           ✓ Approve
                         </button>
-                        <button
-                          className="danger small"
-                          onClick={() => handleReject(selected.id)}
-                        >
+                        <button className="danger small" onClick={() => handleReject(selected.id)}>
                           ✕ Reject
                         </button>
                       </>
                     )}
-                    {getStatus(selected) === 'pending' && (
+                    {selectedStatus === 'pending' && (
                       <>
                         <button
                           className="small primary"
+                          onClick={() => handleTransfer(selected.id, true)}
+                          title="Move to queued column"
+                        >
+                          → Queue
+                        </button>
+                        <button
+                          className="small"
                           onClick={() => handleProcessOne(selected.id)}
                           disabled={anyRunning}
                           title={anyRunning ? 'Another task is running' : 'Run this task now'}
                         >
                           ▶ Run Now
                         </button>
-                        {selected.subordinate_count > 0 && (
-                          <button
-                            className="small"
-                            onClick={() => handleSplit(selected.id)}
-                            title="Split merged tasks into individual items"
-                          >
-                            Split ({selected.subordinate_count})
-                          </button>
-                        )}
                       </>
+                    )}
+                    {selectedStatus === 'queued' && (
+                      <button
+                        className="small"
+                        onClick={() => handleTransfer(selected.id, false)}
+                        title="Move back to pending"
+                      >
+                        ← Pending
+                      </button>
+                    )}
+                    {selectedStatus === 'pending' && selected.subordinate_count > 0 && (
+                      <button
+                        className="small"
+                        onClick={() => handleSplit(selected.id)}
+                        title="Split merged tasks into individual items"
+                      >
+                        Split ({selected.subordinate_count})
+                      </button>
                     )}
                     <button className="danger small" onClick={() => setConfirmCancel(selected.id)}>
                       Cancel
@@ -508,50 +415,194 @@ export default function Queue() {
                 )}
               </div>
             )}
-            {!isUpcoming(selected) && (
-              <div className="detail-actions">
-                {retryContext !== null ? (
-                  <>
-                    <label className="muted-text">Edit context before retrying</label>
-                    <ContextEditor value={retryContext} onChange={e => setRetryContext(e.target.value)} autoFocus />
-                    <div className="action-row compact">
-                      <button className="small primary" onClick={() => handleRetry(selected.id, retryContext)}>
-                        ↺ Retry
-                      </button>
-                      <button className="small" onClick={() => setRetryContext(null)}>Cancel</button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="action-row">
-                    {selected.error && selected.error !== 'cancelled' && (
-                      <button
-                        className="small primary"
-                        onClick={() => handleResume(selected.id)}
-                        title="Continue from the last Claude session checkpoint (--resume)"
-                      >
-                        ↻ Resume
-                      </button>
-                    )}
-                    <button
-                      className="small"
-                      onClick={() => setRetryContext('')}
-                      title="Queue a fresh task — edit context first"
-                    >
-                      ↺ Retry
-                    </button>
-                  </div>
-                )}
-                {actionError && (
-                  <div className="error-text" style={{ marginTop: 6 }}>{actionError}</div>
-                )}
-              </div>
-            )}
           </div>
         )}
       </div>
     </>
   )
 }
+
+
+/**
+ * A single kanban column with specialized drag behavior:
+ * - Pending (dragMode="merge"): drop onto same-job task to coalesce
+ * - Queued (dragMode="reorder"): drop between tasks to change priority
+ * Both columns accept cross-column drops as transfers.
+ */
+function KanbanColumn({
+  title, items, column, dragMode, selected, onSelect,
+  onMerge, onReorder, onTransfer, onRefresh,
+  activeItems,
+}) {
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dragOverIdx, setDragOverIdx] = useState(null)
+  const [dropZone, setDropZone] = useState(null)
+  const [columnDropActive, setColumnDropActive] = useState(false)
+  const columnRef = useRef(null)
+
+  const computeDropZone = (e, rowEl, draggedItem, targetItem) => {
+    if (dragMode === 'merge') {
+      // Pending column: merge if same job, otherwise no-op
+      const canMerge = targetItem && draggedItem && targetItem.job_id === draggedItem.job_id
+      return canMerge ? 'merge' : null
+    }
+    // Queued column: reorder only
+    const rect = rowEl.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    return (y / rect.height) < 0.5 ? 'reorder-before' : 'reorder-after'
+  }
+
+  const handleDragOver = (e, idx) => {
+    e.preventDefault()
+    if (dragIdx === null || dragIdx === idx) { setDragOverIdx(null); setDropZone(null); return }
+    const draggedItem = items[dragIdx]
+    const targetItem = items[idx]
+    const zone = computeDropZone(e, e.currentTarget, draggedItem, targetItem)
+    setDragOverIdx(idx)
+    setDropZone(zone)
+  }
+
+  const handleDragEnd = async () => {
+    if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx && dropZone) {
+      if (dropZone === 'merge') {
+        const draggedItem = items[dragIdx]
+        const targetItem = items[dragOverIdx]
+        await onMerge(draggedItem.id, targetItem.id)
+      } else if (dragMode === 'reorder') {
+        const reordered = [...items]
+        const [moved] = reordered.splice(dragIdx, 1)
+        const insertIdx = dropZone === 'reorder-before'
+          ? (dragOverIdx > dragIdx ? dragOverIdx - 1 : dragOverIdx)
+          : (dragOverIdx < dragIdx ? dragOverIdx + 1 : dragOverIdx)
+        reordered.splice(insertIdx, 0, moved)
+        const ids = reordered.map(i => i.id)
+        try { await onReorder(ids); await onRefresh() } catch {}
+      }
+    }
+    setDragIdx(null)
+    setDragOverIdx(null)
+    setDropZone(null)
+  }
+
+  // Handle cross-column drops (transfer)
+  const handleColumnDragOver = (e) => {
+    if (dragIdx !== null) return // Internal drag — handled by row handlers
+    e.preventDefault()
+    setColumnDropActive(true)
+  }
+
+  const handleColumnDragLeave = (e) => {
+    if (columnRef.current && !columnRef.current.contains(e.relatedTarget)) {
+      setColumnDropActive(false)
+    }
+  }
+
+  const handleColumnDrop = async (e) => {
+    e.preventDefault()
+    setColumnDropActive(false)
+    const taskId = e.dataTransfer.getData('text/x-task-id')
+    const sourceColumn = e.dataTransfer.getData('text/x-source-column')
+    if (taskId && sourceColumn && sourceColumn !== column) {
+      await onTransfer(parseInt(taskId), column === 'queued')
+    }
+  }
+
+  return (
+    <div
+      ref={columnRef}
+      className={`kanban-column${columnDropActive ? ' column-drop-active' : ''}`}
+      onDragOver={handleColumnDragOver}
+      onDragLeave={handleColumnDragLeave}
+      onDrop={handleColumnDrop}
+    >
+      <div className="kanban-column-header">
+        <span className="kanban-column-title">{title}</span>
+        <span className="kanban-column-count">{items.length}</span>
+      </div>
+      <div className="kanban-column-body">
+        {items.length === 0 && !activeItems?.length && (
+          <div className="empty-state">No {title.toLowerCase()} tasks</div>
+        )}
+        {items.map((item, i) => {
+          const status = getStatus(item)
+          const isDropTarget = dragOverIdx === i && dragIdx !== null && dragIdx !== i
+          const dropClass = isDropTarget && dropZone
+            ? (dropZone === 'merge' ? ' drop-merge' : dropZone === 'reorder-before' ? ' drop-before' : ' drop-after')
+            : ''
+          return (
+            <div
+              key={item.id}
+              className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status === 'pending_approval' ? 'pending_approval' : ''}${dragIdx === i ? ' dragging' : ''}${dropClass}`}
+              onClick={() => onSelect(item)}
+              draggable
+              onDragStart={(e) => {
+                setDragIdx(i)
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData('text/x-task-id', String(item.id))
+                e.dataTransfer.setData('text/x-source-column', column)
+              }}
+              onDragOver={(e) => handleDragOver(e, i)}
+              onDragLeave={() => { setDragOverIdx(null); setDropZone(null) }}
+              onDragEnd={handleDragEnd}
+            >
+              <div className="feed-avatar">
+                {(item.job_name || '?')[0].toUpperCase()}
+              </div>
+              <div className="feed-body">
+                <div className="feed-meta">
+                  <span className="feed-trigger">
+                    {TRIGGER_ICONS[item.trigger] || ''}
+                    {item.subordinate_count > 0 ? ` (${item.subordinate_count + 1})` : ''}
+                  </span>
+                  <span className="feed-author">{item.job_name}</span>
+                  {status === 'pending_approval' && (
+                    <span className={`queue-status ${status}`}>
+                      {STATUS_LABELS[status]}
+                    </span>
+                  )}
+                  <span>{formatDate(item.created_at, true)}</span>
+                </div>
+                <div className="feed-message">
+                  {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+
+        {/* Active tasks appear below queued items */}
+        {activeItems && activeItems.length > 0 && (
+          <>
+            <div className="kanban-section-divider">Active</div>
+            {activeItems.map(item => (
+              <div
+                key={item.id}
+                className={`feed-item running ${selected?.id === item.id ? 'active' : ''}`}
+                onClick={() => onSelect(item)}
+              >
+                <div className="feed-avatar">
+                  {(item.job_name || '?')[0].toUpperCase()}
+                </div>
+                <div className="feed-body">
+                  <div className="feed-meta">
+                    <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
+                    <span className="feed-author">{item.job_name}</span>
+                    <span className="queue-status running">{STATUS_LABELS.running}</span>
+                    <span>{formatDate(item.started_at, true)}</span>
+                  </div>
+                  <div className="feed-message">
+                    {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 
 function ContextEditor({ value, onChange, autoFocus = false }) {
   const ref = useRef(null)
@@ -572,10 +623,10 @@ function ContextEditor({ value, onChange, autoFocus = false }) {
   )
 }
 
-function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, onSplit, onRate }) {
+function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming }) {
   const status = getStatus(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
-  const isPending = status === 'pending'
+  const isPending = status === 'pending' || status === 'queued'
 
   const [editingContext, setEditingContext] = useState(null)
   const [saveError, setSaveError] = useState('')
@@ -714,6 +765,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
         <label>Timeline</label>
         <div className="detail-meta">
           <div>Created: {formatDate(item.created_at, true)}</div>
+          {item.queued_at && <div>Queued: {formatDate(item.queued_at, true)}</div>}
           {item.started_at && <div>Started: {formatDate(item.started_at, true)}</div>}
           {item.completed_at && <div>Completed: {formatDate(item.completed_at, true)}</div>}
           {item.started_at && item.completed_at && (
@@ -742,24 +794,6 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
         <div className="detail-section">
           <label>Outcome</label>
           <pre className="context-display">{outcomeSummary}</pre>
-        </div>
-      )}
-
-      {item.completed_at && !item.error && (
-        <div className="detail-section">
-          <label>Rating</label>
-          <div className="rating-controls">
-            <button
-              className={`rating-btn ${item.rating === 'positive' ? 'active positive' : ''}`}
-              onClick={() => onRate(item.id, item.rating === 'positive' ? null : 'positive')}
-              title="Good result"
-            >+</button>
-            <button
-              className={`rating-btn ${item.rating === 'negative' ? 'active negative' : ''}`}
-              onClick={() => onRate(item.id, item.rating === 'negative' ? null : 'negative')}
-              title="Poor result"
-            >−</button>
-          </div>
         </div>
       )}
 

@@ -3,7 +3,7 @@ import { getProject, getConfig, setConfig, getQueueSettings, setQueueSettings } 
 import HelpTip from './HelpTip'
 
 const TIPS = {
-  autoDispatch: 'When enabled, the background worker automatically pulls and executes pending tasks in order. When disabled (paused), tasks accumulate as pending. Reorder them via drag-and-drop in the Dispatch view, then toggle auto-processing when ready.',
+  autoDispatch: 'When enabled, new tasks skip the Pending column and go directly to Queued — the worker processes them automatically. When disabled, new tasks land in Pending for review. Drag tasks between columns to promote or demote them.',
   model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
   timeout: 'Maximum execution time in seconds applied to tasks that have no task-level override. Set to 0 or leave blank for no limit.',
 }
@@ -93,7 +93,7 @@ export default function Settings() {
                   checked={queueSettings.auto_dispatch}
                   onChange={e => handleAutoDispatch(e.target.checked)}
                 />
-                Auto-dispatch queued items
+                Auto-queue new tasks
               </label>
               <HelpTip text={TIPS.autoDispatch} />
             </div>
