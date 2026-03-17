@@ -119,9 +119,6 @@ export const transferTask = (id, toQueued) =>
 export const getSubordinates = (id) =>
   fetchJSON(`/api/tasks/${id}/subordinates`)
 
-export const rateTask = (id, rating) =>
-  fetchJSON(`/api/tasks/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) })
-
 // ── Feed ──
 
 export const getFeed = (params = {}) => {

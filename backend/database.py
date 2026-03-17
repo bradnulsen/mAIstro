@@ -80,6 +80,12 @@ async def _migrate(db: aiosqlite.Connection):
     )
     await db.commit()
 
+    # Drop rating column (removed from architecture — no longer tracked)
+    try:
+        await db.execute("ALTER TABLE tasks DROP COLUMN rating")
+        await db.commit()
+    except Exception:
+        pass  # Column already removed or never existed
 
 
 SCHEMA_SQL = """
@@ -119,7 +125,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     error TEXT,
     queued_at DATETIME,
     sort_order INTEGER,
-    rating TEXT,
     coalesced_id INTEGER REFERENCES tasks(id)
 );
 
@@ -749,19 +754,6 @@ async def uncoalesce_task(task_id: int) -> int:
     )
     await db.commit()
     return task_id
-
-
-async def rate_task(task_id: int, rating: str | None) -> bool:
-    """Set or clear a rating on a completed task."""
-    if rating is not None and rating not in ("positive", "negative"):
-        raise ValueError("Rating must be 'positive', 'negative', or null")
-    db = await get_db()
-    cursor = await db.execute(
-        "UPDATE tasks SET rating = ? WHERE id = ? AND completed_at IS NOT NULL",
-        (rating, task_id),
-    )
-    await db.commit()
-    return cursor.rowcount > 0
 
 
 async def sweep_stale_tasks(now: str):

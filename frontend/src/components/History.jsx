@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect, useImperativ
 import Markdown from 'react-markdown'
 import {
   getTaskQueue, getTaskOutput, getTaskDiff, getTaskOutcome,
-  resumeTask, retryTask, getSubordinates, rateTask,
+  resumeTask, retryTask, getSubordinates,
 } from '../api'
 import {
   formatDate, formatDuration, TRIGGER_ICONS, mdBreaks,
@@ -101,16 +101,6 @@ export default forwardRef(function History(props, ref) {
     }
   }
 
-  const handleRate = async (id, rating) => {
-    setActionError('')
-    try {
-      await rateTask(id, rating)
-      await refresh()
-    } catch (e) {
-      setActionError(e.message)
-    }
-  }
-
   useLayoutEffect(() => {
     if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0
   }, [selected?.id])
@@ -158,7 +148,7 @@ export default forwardRef(function History(props, ref) {
             </div>
 
             <div ref={detailScrollRef} className="detail-scroll">
-              <HistoryDetail item={selected} output={output} onRate={handleRate} />
+              <HistoryDetail item={selected} output={output} />
             </div>
 
             <div className="detail-actions">
@@ -257,11 +247,6 @@ function HistoryColumn({ title, items, loading, emptyLabel, selected, onSelect }
                   <span className={`queue-status ${status}`}>
                     {STATUS_LABELS[status] || status}
                   </span>
-                  {item.rating && (
-                    <span className={`card-rating ${item.rating}`}>
-                      {item.rating === 'positive' ? '+' : '−'}
-                    </span>
-                  )}
                   <span>{formatDate(item.completed_at, true)}</span>
                 </div>
                 {reason ? (
@@ -290,7 +275,7 @@ function HistoryColumn({ title, items, loading, emptyLabel, selected, onSelect }
 }
 
 
-function HistoryDetail({ item, output, onRate }) {
+function HistoryDetail({ item, output }) {
   const status = getStatus(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
 
@@ -401,24 +386,6 @@ function HistoryDetail({ item, output, onRate }) {
         <div className="detail-section">
           <label>Outcome</label>
           <pre className="context-display">{outcomeSummary}</pre>
-        </div>
-      )}
-
-      {!item.error && (
-        <div className="detail-section">
-          <label>Rating</label>
-          <div className="rating-controls">
-            <button
-              className={`rating-btn ${item.rating === 'positive' ? 'active positive' : ''}`}
-              onClick={() => onRate(item.id, item.rating === 'positive' ? null : 'positive')}
-              title="Good result"
-            >+</button>
-            <button
-              className={`rating-btn ${item.rating === 'negative' ? 'active negative' : ''}`}
-              onClick={() => onRate(item.id, item.rating === 'negative' ? null : 'negative')}
-              title="Poor result"
-            >−</button>
-          </div>
         </div>
       )}
 

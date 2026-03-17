@@ -440,14 +440,6 @@ label.muted-text {
   margin-top: 1px;
 }
 
-.card-rating {
-  font-weight: 700;
-  font-size: 12px;
-  line-height: 1;
-}
-.card-rating.positive { color: var(--accent-green, #4caf50); }
-.card-rating.negative { color: var(--accent-red, #f44336); }
-
 .feed-stats {
   flex-shrink: 0;
   display: flex;
@@ -500,42 +492,6 @@ label.muted-text {
 .queue-status.rejected { color: var(--text-muted); text-decoration: line-through; }
 
 
-/* ── Rating Controls ── */
-
-.rating-controls {
-  display: flex;
-  gap: 6px;
-}
-
-.rating-btn {
-  width: 28px;
-  height: 28px;
-  border: 1.5px solid var(--border-light);
-  background: var(--surface);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font);
-}
-
-.rating-btn:hover {
-  background: var(--hover-bg);
-}
-
-.rating-btn.active.positive {
-  background: var(--success);
-  color: #fff;
-  border-color: var(--success);
-}
-
-.rating-btn.active.negative {
-  background: var(--danger);
-  color: #fff;
-  border-color: var(--danger);
-}
 
 /* ── Task List + Detail ── */
 

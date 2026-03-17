@@ -35,9 +35,6 @@ class ReorderTasksRequest(BaseModel):
 class MergeRequest(BaseModel):
     task_ids: list[int]
 
-class RateRequest(BaseModel):
-    rating: str | None = None
-
 class McpEventRequest(BaseModel):
     tool: str
     input: dict
@@ -248,7 +245,6 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
         result_commit=None,
         session_id=None,
         resume_session_id=None,
-        rating=None,
         created_at=now,
         queued_at=queued_at,
     )
@@ -306,19 +302,6 @@ async def split_task_route(task_id: int):
     try:
         split_ids = await db.split_task(task_id)
         return {"split_ids": split_ids}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@router.post("/api/tasks/{task_id}/rate")
-async def rate_task_route(task_id: int, req: RateRequest):
-    """Rate a completed task (positive/negative/null)."""
-    require_project()
-    try:
-        ok = await db.rate_task(task_id, req.rating)
-        if not ok:
-            raise HTTPException(404, "Task not found or not completed")
-        return {"status": "ok"}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
