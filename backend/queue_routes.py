@@ -13,6 +13,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from backend import database as db, git, worker
 from backend import state
+from backend.dispatch import build_trigger_context
 from backend.state import utcnow, require_project
 
 router = APIRouter(tags=["tasks", "queue"])
@@ -195,7 +196,7 @@ async def resume_task(task_id: int):
     new_id = await db.enqueue_task(
         task["job_id"], "resume",
         trigger_detail=str(task_id),
-        context=f"**Resume** — continuing from task #{task_id}",
+        context=build_trigger_context("resume", original_task_id=task_id),
     )
     await db.update_task(new_id, resume_session_id=cli_session_id)
     await db.update_task(task_id, coalesced_id=new_id)
@@ -213,26 +214,19 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     if not task.get("completed_at"):
         raise HTTPException(409, "Task is not completed")
 
-    # Build retry context preserving the original trigger and context
-    parts = [f"**Retry** of task #{task_id}"]
-    error = task.get("error")
-    if error:
-        parts.append(f"previous run failed: {error}")
-    start = task.get("start_commit")
-    end = task.get("result_commit")
-    if start and end and start != end:
-        parts.append(f"commits {start[:8]}..{end[:8]}")
     user_notes = req.context if req and req.context else None
-    if user_notes:
-        parts.append(user_notes)
-    original_context = task.get("context")
-    if original_context:
-        parts.append(f"original context: {original_context}")
 
     new_id = await db.enqueue_task(
         task["job_id"], "retry",
         trigger_detail=str(task_id),
-        context=" — ".join(parts),
+        context=build_trigger_context(
+            "retry",
+            project_dir=state.PROJECT_DIR,
+            original_task_id=task_id,
+            start_commit=task.get("start_commit"),
+            result_commit=task.get("result_commit"),
+            user_context=user_notes,
+        ),
     )
     await db.update_task(task_id, coalesced_id=new_id)
     worker.notify()
@@ -379,11 +373,9 @@ async def enqueue_job(job_id: str, req: DispatchRequest | None = None):
 
     user_context = req.context if req else None
     head = git.head_hash(state.PROJECT_DIR)
-    ref = f" @ `{head[:8]}`" if head else ""
-    if user_context:
-        context = f"**Manual**{ref}: {user_context}"
-    else:
-        context = f"**Manual**{ref}"
+    context = build_trigger_context(
+        "manual", commit_hash=head, user_context=user_context,
+    )
     task_id = await db.enqueue_task(job_id, "manual", trigger_detail=head, context=context)
     worker.notify()
     return {"task_id": task_id}

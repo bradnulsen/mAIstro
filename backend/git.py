@@ -242,6 +242,43 @@ def outcome_summary(cwd: str, from_hash: str, to_hash: str) -> str | None:
     return "\n".join(parts)
 
 
+def build_commit_context(cwd: str, start_commit: str | None, result_commit: str | None) -> str | None:
+    """Build a formatted git context string from a commit range.
+
+    This is the singular function for describing what happened between two
+    commits.  It replaces ad-hoc combinations of commit_oneline + outcome_summary
+    in trigger context building.
+
+    Single commit in range: ``<hash>: <subject> (<stats>)``
+    Multiple commits: listed messages with aggregate stats.
+    Returns None when there are no commits (same hash or missing).
+    """
+    if not result_commit or not start_commit or start_commit == result_commit:
+        return None
+
+    log_result = run_git("log", "--format=%s", f"{start_commit}..{result_commit}", cwd=cwd)
+    if log_result.returncode != 0 or not log_result.stdout.strip():
+        return None
+    messages = [l.strip() for l in log_result.stdout.strip().split("\n") if l.strip()]
+
+    stat_result = run_git("diff", "--shortstat", f"{start_commit}..{result_commit}", cwd=cwd)
+    stat_line = stat_result.stdout.strip() if stat_result.returncode == 0 else ""
+
+    if len(messages) == 1:
+        line = f"`{result_commit[:8]}`: {messages[0]}"
+        if stat_line:
+            line += f" ({stat_line})"
+        return line
+
+    # Multiple commits — list messages then aggregate stats
+    parts = []
+    for msg in messages:
+        parts.append(f"- {msg}")
+    if stat_line:
+        parts.append(f"({stat_line})")
+    return "\n".join(parts)
+
+
 def head_hash(cwd: str) -> str | None:
     """Get current HEAD commit hash."""
     result = run_git("rev-parse", "HEAD", cwd=cwd)

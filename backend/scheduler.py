@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from croniter import croniter
 
 from backend import database as db, git, state, worker
+from backend.dispatch import build_trigger_context
 
 log = logging.getLogger("maistro.scheduler")
 
@@ -92,14 +93,15 @@ async def _loop():
 
                 if next_fire <= now:
                     head = git.head_hash(state.PROJECT_DIR)
-                    head_note = f" at {head[:8]}" if head else ""
 
                     log.info("[scheduler] Firing %s (schedule: %s)", job["id"], schedule)
                     await db.enqueue_task(
                         job["id"],
                         "schedule",
                         trigger_detail=schedule,
-                        context=f"**Schedule** (`{schedule}`){head_note}",
+                        context=build_trigger_context(
+                            "schedule", schedule_expr=schedule, commit_hash=head,
+                        ),
                     )
                     await _set_last_fire(job["id"], now)
 

@@ -26,7 +26,7 @@ from backend.cli import CLI_NATIVE_TOOLS
 from backend.mcp_probe import probe_server
 from backend.queue_routes import router as queue_router
 from backend.job_routes import router as job_router
-from backend.dispatch import check_watch_triggers
+from backend.dispatch import check_watch_triggers, build_trigger_context
 from backend.state import require_project
 from backend import state
 
@@ -283,9 +283,10 @@ async def post_commit_hook(req: PostCommitRequest):
     triggered = await check_watch_triggers(req.commit_hash, state.PROJECT_DIR)
     dispatched = []
 
-    summary = git.commit_oneline(state.PROJECT_DIR, req.commit_hash) or req.commit_hash[:8]
     for job in triggered:
-        context = f"**Commit** `{req.commit_hash[:8]}`: {summary}"
+        context = build_trigger_context(
+            "commit", project_dir=state.PROJECT_DIR, commit_hash=req.commit_hash,
+        )
         await db.enqueue_task(
             job["id"], "commit", trigger_detail=req.commit_hash, context=context
         )

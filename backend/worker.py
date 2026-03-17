@@ -8,7 +8,7 @@ import asyncio
 import logging
 
 from backend import database as db, git, state
-from backend.dispatch import run_task, _build_queue_context
+from backend.dispatch import run_task, build_trigger_context
 from backend.state import utcnow
 
 log = logging.getLogger("maistro.worker")
@@ -313,18 +313,15 @@ async def _enqueue_dependents(completed_job_id: str, task_id: int,
 
     upstream_name = job_name or completed_job_id
 
-    commit_context = ""
-    if result_commit and state.PROJECT_DIR:
-        summary = git.commit_oneline(state.PROJECT_DIR, result_commit) or result_commit[:8]
-        commit_context = f"\n  Upstream result commit `{result_commit[:8]}`: {summary}"
-        if start_commit and start_commit != result_commit:
-            commit_context += f"\n  Upstream commit range: `{start_commit[:8]}..{result_commit[:8]}`"
-            outcome = git.outcome_summary(state.PROJECT_DIR, start_commit, result_commit)
-            if outcome:
-                commit_context += f"\n  Outcome:\n{outcome}"
-
     for job in dependent_jobs:
-        context = f"**Dependency** — triggered by completion of {upstream_name} (task #{task_id}){commit_context}"
+        context = build_trigger_context(
+            "dependency",
+            project_dir=state.PROJECT_DIR,
+            upstream_name=upstream_name,
+            upstream_task_id=task_id,
+            start_commit=start_commit,
+            result_commit=result_commit,
+        )
 
         new_id = await db.enqueue_task(
             job["id"], "dependency",

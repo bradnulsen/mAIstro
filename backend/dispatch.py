@@ -41,15 +41,8 @@ async def run_task(
     manifest = await build_job_manifest()
     resume_session_id = task_record.get("resume_session_id") if task_record else None
 
-    # Build task metadata for prompt injection
-    task_meta = None
-    if task_record:
-        task_meta = {
-            "trigger": task_record.get("trigger", "manual"),
-        }
-
     system_prompt = build_dispatch_system_prompt(job, project_dir)
-    user_prompt = build_user_prompt(job, project_dir, queue_context, manifest, task_meta=task_meta)
+    user_prompt = build_user_prompt(job, project_dir, queue_context, manifest)
 
     log.info("[task:%d] System: %d chars, User: %d chars%s",
              task_id, len(system_prompt), len(user_prompt),
@@ -121,8 +114,7 @@ def build_dispatch_system_prompt(job: dict, project_dir: str) -> str:
 
 
 def build_user_prompt(job: dict, project_dir: str,
-                      queue_context: str | None = None, manifest: str | None = None,
-                      task_meta: dict | None = None) -> str:
+                      queue_context: str | None = None, manifest: str | None = None) -> str:
     props = job["properties"]
     sections = []
 
@@ -133,10 +125,6 @@ def build_user_prompt(job: dict, project_dir: str,
     identity_parts = [f"# Job: {name}"]
     if description:
         identity_parts.append(description)
-    if task_meta:
-        trigger = task_meta.get("trigger", "manual")
-        mode = "manually dispatched" if trigger == "manual" else f"auto-dispatched ({trigger})"
-        identity_parts.append(f"**Dispatch:** {mode}")
     sections.append("\n".join(identity_parts))
 
     if instructions:
@@ -155,43 +143,13 @@ def build_user_prompt(job: dict, project_dir: str,
             file_list = "\n".join(f"- `{f['path']}` ({f['size']}B)" for f in sub_files)
             sections.append(f"## Subscribed Files\nThese files are relevant to your task. Read them as needed.\n{file_list}")
 
-    primary_trigger = task_meta.get("trigger") if task_meta else None
-    sections.append("## Your Turn\n" + _build_closing_directive(primary_trigger))
-
-    return "\n\n".join(sections)
-
-
-def _build_closing_directive(trigger: str | None = None) -> str:
-    """Build the action directive tailored to the task trigger type."""
-    if trigger == "commit":
-        return (
-            "Changes in your subscribed files triggered this dispatch. "
-            "Review the triggering commits above and respond accordingly."
-        )
-    if trigger == "dependency":
-        return (
-            "An upstream job has completed — the Invocation section above has commit details. "
-            "Use the commit range to inspect what changed, then respond accordingly."
-        )
-    if trigger == "retry":
-        return (
-            "This is a retry of a previous task that failed or produced insufficient results. "
-            "Review context above, adjust your approach, and try again."
-        )
-    if trigger == "schedule":
-        return (
-            "This is a scheduled run. Check your subscribed files and project state "
-            "for anything that needs attention. If nothing needs updating, say so briefly."
-        )
-    if trigger == "resume":
-        return (
-            "This is a resumed session — you are continuing previous work that was interrupted. "
-            "Pick up where you left off."
-        )
-    return (
+    sections.append(
+        "## Your Turn\n"
         "Review the project state — your instructions, subscriptions, and context above. "
         "Identify what needs to be done and do it. If nothing needs updating, say so briefly."
     )
+
+    return "\n\n".join(sections)
 
 
 # ── Job manifest ──────────────────────────────────────────
@@ -253,6 +211,81 @@ def _build_queue_context(task: dict | None, subordinates: list[dict] | None = No
         header += f"\nMultiple triggers have been coalesced into this task ({len(reasons)} items). Address them together."
 
     return header + "\n" + "\n".join(reasons)
+
+
+# ── Trigger context ─────────────────────────────────────────
+
+def build_trigger_context(
+    trigger: str,
+    *,
+    project_dir: str | None = None,
+    commit_hash: str | None = None,
+    start_commit: str | None = None,
+    result_commit: str | None = None,
+    upstream_name: str | None = None,
+    upstream_task_id: int | None = None,
+    original_task_id: int | None = None,
+    schedule_expr: str | None = None,
+    user_context: str | None = None,
+) -> str:
+    """Build the pre-formatted context string for a task trigger.
+
+    Single entry point for all trigger context formatting.  Each enqueue site
+    calls this with trigger-specific parameters; this function resolves git
+    context through ``git.build_commit_context`` and applies consistent
+    formatting.
+    """
+    if trigger == "manual":
+        ref = f" @ `{commit_hash[:8]}`" if commit_hash else ""
+        if user_context:
+            return f"**Manual**{ref}: {user_context}"
+        return f"**Manual**{ref}"
+
+    if trigger == "commit":
+        summary = ""
+        if project_dir and commit_hash:
+            summary = git.commit_oneline(project_dir, commit_hash) or commit_hash[:8]
+        return f"**Commit** `{commit_hash[:8]}`: {summary}"
+
+    if trigger == "schedule":
+        head_note = f" at {commit_hash[:8]}" if commit_hash else ""
+        return f"**Schedule** (`{schedule_expr}`){head_note}"
+
+    if trigger == "dependency":
+        header = f"**Dependency** — triggered by completion of {upstream_name} (task #{upstream_task_id})"
+        git_ctx = None
+        if project_dir and start_commit and result_commit:
+            git_ctx = git.build_commit_context(project_dir, start_commit, result_commit)
+        if git_ctx:
+            # Indent multi-line git context under the header
+            indented = git_ctx.replace("\n", "\n  ")
+            header += f"\n  {indented}"
+        elif result_commit:
+            header += f", commit `{result_commit[:8]}`"
+        return header
+
+    if trigger == "resume":
+        return f"**Resume** — continuing from task #{original_task_id}"
+
+    if trigger == "retry":
+        parts = [f"**Retry** of task #{original_task_id}"]
+        git_ctx = None
+        if project_dir and start_commit and result_commit:
+            git_ctx = git.build_commit_context(project_dir, start_commit, result_commit)
+        if git_ctx:
+            parts[0] += f" — commits {start_commit[:8]}..{result_commit[:8]}"
+        if user_context:
+            parts.append(user_context)
+        return " — ".join(parts) if len(parts) == 1 else "\n".join(parts)
+
+    if trigger == "agent":
+        parts = [f"**Agent** — dispatched by {upstream_name} (task #{upstream_task_id})"]
+        if user_context:
+            parts.append(user_context)
+        return "\n".join(parts)
+
+    # Fallback — unknown trigger type
+    return user_context or f"**{trigger.title()}**"
 
 
 # ── Watch pattern matching ──────────────────────────────────
