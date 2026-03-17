@@ -7,6 +7,7 @@ the conversational chat feature (distinct from task dispatches).
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -17,6 +18,18 @@ from backend import state
 from backend.state import require_project
 
 log = logging.getLogger("maistro.chat")
+
+# ── Chat context cache (TTL-based) ───────────────────────
+_chat_context_cache: str | None = None
+_chat_context_ts: float = 0.0
+_CHAT_CONTEXT_TTL = 8.0  # seconds
+
+def invalidate_chat_context_cache():
+    """Clear the cached system prompt. Call on project close/switch."""
+    global _chat_context_cache, _chat_context_ts
+    _chat_context_cache = None
+    _chat_context_ts = 0.0
+
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -56,7 +69,17 @@ You are NOT running a task dispatch — you are having a conversation with the h
 
 
 async def _build_chat_context() -> str:
-    """Build the mAistro executive assistant system prompt with live state."""
+    """Build the mAistro executive assistant system prompt with live state.
+
+    Uses a short TTL cache to avoid rebuilding on every chat message —
+    the underlying state (jobs, queue, git log) changes at most every
+    few seconds.
+    """
+    global _chat_context_cache, _chat_context_ts
+    now = time.monotonic()
+    if _chat_context_cache is not None and (now - _chat_context_ts) < _CHAT_CONTEXT_TTL:
+        return _chat_context_cache
+
     jobs = await db.list_jobs()
     job_lines = []
     for j in jobs:
@@ -76,12 +99,15 @@ async def _build_chat_context() -> str:
 
     git_summary = git.log_oneline(state.PROJECT_DIR) or "(no commits)"
 
-    return CHAT_SYSTEM_PROMPT.format(
+    result = CHAT_SYSTEM_PROMPT.format(
         project_dir=state.PROJECT_DIR,
         job_summary=job_summary,
         task_summary=task_summary,
         git_summary=git_summary,
     )
+    _chat_context_cache = result
+    _chat_context_ts = now
+    return result
 
 
 # Active chat streams — background tasks push events here, SSE reads from here.

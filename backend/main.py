@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend import appstate, database as db, git, scheduler, worker
-from backend.chat import router as chat_router
+from backend.chat import router as chat_router, invalidate_chat_context_cache
 from backend.cli import CLI_NATIVE_TOOLS
 from backend.mcp_probe import probe_server
 from backend.queue_routes import router as queue_router
@@ -194,6 +194,7 @@ async def close_project():
     if active is not None:
         raise HTTPException(409, f"Cannot close project while task #{active} is running. Cancel it first or wait for completion.")
     state.PROJECT_DIR = None
+    invalidate_chat_context_cache()
     await db.close_db()
     return {"status": "ok"}
 

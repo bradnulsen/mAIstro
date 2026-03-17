@@ -253,16 +253,19 @@ async def _process_task(task: dict):
             now = utcnow()
             await db.update_task(task_id, _commit=False, completed_at=now,
                                  result_commit=head, error="timed out")
-            sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
+            # Re-fetch subordinates to capture any coalesced after task start
+            fresh_subs = await db.get_subordinate_tasks(task_id)
+            sub_ids = [s["id"] for s in fresh_subs if not s.get("completed_at")]
             await db.update_tasks_batch(sub_ids, completed_at=now,
                                         result_commit=head, error="timed out")
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
         elif _cancelled:
-            # Cancel route already set error="cancelled" — just record result_commit
             head = git.head_hash(state.PROJECT_DIR)
             now = utcnow()
             await db.update_task(task_id, _commit=False, completed_at=now, result_commit=head)
-            sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
+            # Re-fetch to avoid double-writing tasks the cancel route already resolved
+            fresh_subs = await db.get_subordinate_tasks(task_id)
+            sub_ids = [s["id"] for s in fresh_subs if not s.get("completed_at")]
             await db.update_tasks_batch(sub_ids, completed_at=now, error="cancelled")
             log.info("[worker] Task #%d cancelled (dependents skipped)", task_id)
         else:
@@ -291,7 +294,8 @@ async def _process_task(task: dict):
         await db.add_chat_message(session_id, "system", f"Error: {e}")
         now = utcnow()
         await db.update_task(task_id, _commit=False, completed_at=now, error=str(e))
-        sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
+        fresh_subs = await db.get_subordinate_tasks(task_id)
+        sub_ids = [s["id"] for s in fresh_subs if not s.get("completed_at")]
         await db.update_tasks_batch(sub_ids, completed_at=now, error=str(e))
     finally:
         if watchdog and not watchdog.done():
