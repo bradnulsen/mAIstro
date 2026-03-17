@@ -284,7 +284,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
         <AutoTextarea
           value={context}
           onChange={e => setContext(e.target.value)}
-          placeholder="Optional context... (↵ to queue)"
+          placeholder="Optional context... (↵ to dispatch)"
           maxHeight={120}
           minRows={1}
           style={{ flex: 1 }}
@@ -302,8 +302,8 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
           style={{ alignSelf: 'flex-end' }}
         >
           {dispatching
-            ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Queuing</>
-            : '▶ Queue'}
+            ? <><span className="tool-spinner" style={{ marginRight: 5 }} />Dispatching</>
+            : '▶ Dispatch'}
         </button>
       </div>
 
