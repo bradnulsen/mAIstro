@@ -8,6 +8,7 @@ import {
   transferTask,
 } from '../api'
 import { formatDate, formatDuration, TRIGGER_ICONS, mdBreaks } from '../util'
+import History from './History'
 
 const STATUS_LABELS = {
   pending: 'Pending',
@@ -75,6 +76,7 @@ function sortPreExecution(items) {
 }
 
 export default function Queue() {
+  const [tab, setTab] = useState('queue')
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -295,10 +297,29 @@ export default function Queue() {
   const selectedStatus = selected ? getStatus(selected) : null
   const selectedIsPreExec = selected && isPreExecution(selected)
 
+  if (tab === 'history') {
+    return (
+      <>
+        <div className="header-bar">
+          <h1>Dispatch</h1>
+          <div className="dispatch-tabs">
+            <button className="dispatch-tab" onClick={() => setTab('queue')}>Queue</button>
+            <button className="dispatch-tab active">History</button>
+          </div>
+        </div>
+        <History />
+      </>
+    )
+  }
+
   return (
     <>
       <div className="header-bar">
         <h1>Dispatch</h1>
+        <div className="dispatch-tabs">
+          <button className="dispatch-tab active">Queue</button>
+          <button className="dispatch-tab" onClick={() => setTab('history')}>History</button>
+        </div>
         <div className="spacer" />
         <button className="small" onClick={handleRefresh} disabled={refreshing}>
           {refreshing ? <span className="tool-spinner" /> : '↻'}

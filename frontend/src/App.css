@@ -116,6 +116,27 @@ body {
 .header-bar label { margin-bottom: 0; }
 .header-bar .checkbox-label { font-size: 11px; }
 
+.dispatch-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 8px;
+}
+.dispatch-tab {
+  font-size: 11px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.dispatch-tab:hover { color: var(--text); background: var(--surface-hover); }
+.dispatch-tab.active {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--text-muted);
+}
+
 /* ── Status Chips ── */
 
 .status-bar {

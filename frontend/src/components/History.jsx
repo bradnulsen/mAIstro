@@ -153,14 +153,6 @@ export default function History() {
 
   return (
     <>
-      <div className="header-bar">
-        <h1>History</h1>
-        <div className="spacer" />
-        <button className="small" onClick={handleRefresh} disabled={refreshing}>
-          {refreshing ? <span className="tool-spinner" /> : '↻'}
-        </button>
-      </div>
-
       <div className="split-body">
         <div className="feed-list">
           {loading && <div className="loading">Loading history...</div>}

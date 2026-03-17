@@ -5,11 +5,10 @@ import Tasks from './components/Tasks'
 import Queue from './components/Queue'
 import Chat from './components/Chat'
 import Files from './components/Files'
-import History from './components/History'
 import Settings from './components/Settings'
 import McpServers from './components/McpServers'
 
-const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', history: 'history', files: 'files', mcp: 'mcp', settings: 'settings' }
+const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', mcp: 'mcp', settings: 'settings' }
 
 export default function App() {
   const [project, setProject] = useState(null)
@@ -84,11 +83,6 @@ export default function App() {
           title="Dispatch"
         >▶</button>
         <button
-          className={`rail-icon ${view === VIEWS.history ? 'active' : ''}`}
-          onClick={() => setView(VIEWS.history)}
-          title="History"
-        >◷</button>
-        <button
           className={`rail-icon ${view === VIEWS.feed ? 'active' : ''}`}
           onClick={() => setView(VIEWS.feed)}
           title="Activity"
@@ -138,7 +132,6 @@ export default function App() {
         {view === VIEWS.feed && <Feed />}
         {view === VIEWS.tasks && <Tasks jobs={jobs} onRefresh={refreshJobs} onNavigate={setView} />}
         {view === VIEWS.queue && <Queue />}
-        {view === VIEWS.history && <History />}
         {view === VIEWS.files && <Files />}
         {view === VIEWS.mcp && <McpServers />}
         {view === VIEWS.settings && <Settings />}
