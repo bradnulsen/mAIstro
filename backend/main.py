@@ -79,6 +79,9 @@ class CreateMcpServerRequest(BaseModel):
 
 class UpdateMcpServerRequest(BaseModel):
     enabled: bool | None = None
+    command: str | None = None
+    args: list | None = None
+    env: dict | None = None
 
 class ConfigRequest(BaseModel):
     value: str
@@ -302,12 +305,20 @@ async def post_commit_hook(req: PostCommitRequest):
 
 INTERNAL_MCP_TOOLS = [
     "git_status", "git_log", "git_diff", "git_commit",
+    "git_branch_create", "git_branch_switch", "git_branch_merge",
     "list_files", "read_file", "list_jobs",
+    "dispatch_task", "get_queue_status",
 ]
 
 @app.get("/api/tools/inventory")
-async def get_tool_inventory():
-    """Return the full tool inventory: CLI native, internal MCP, and external server tools."""
+async def get_tool_inventory(probe: bool = False):
+    """Return the full tool inventory: CLI native, internal MCP, and external server tools.
+
+    External server probing is opt-in via ?probe=true to avoid blocking the
+    response on subprocess handshakes. Without probing, external servers are
+    listed with status "unknown" — the frontend can probe individual servers
+    on demand via GET /api/mcp/servers/{name}/tools.
+    """
     result = {
         "cli_native": sorted(CLI_NATIVE_TOOLS),
         "internal_mcp": INTERNAL_MCP_TOOLS,
@@ -315,7 +326,6 @@ async def get_tool_inventory():
     }
 
     if state.PROJECT_DIR:
-        import asyncio
         servers = await db.list_mcp_servers()
         enabled = [s for s in servers if s.get("enabled", True)]
         disabled = [s for s in servers if not s.get("enabled", True)]
@@ -323,7 +333,8 @@ async def get_tool_inventory():
         for s in disabled:
             result["external_servers"][s["name"]] = {"status": "disabled", "tools": []}
 
-        if enabled:
+        if probe and enabled:
+            import asyncio
             probes = await asyncio.gather(*(
                 probe_server(
                     s["command"],
@@ -331,8 +342,11 @@ async def get_tool_inventory():
                     json.loads(s.get("env") or "{}"),
                 ) for s in enabled
             ))
-            for s, probe in zip(enabled, probes):
-                result["external_servers"][s["name"]] = probe
+            for s, p in zip(enabled, probes):
+                result["external_servers"][s["name"]] = p
+        else:
+            for s in enabled:
+                result["external_servers"][s["name"]] = {"status": "unknown", "tools": []}
 
     return result
 
@@ -362,6 +376,8 @@ async def update_mcp_server(name: str, req: UpdateMcpServerRequest):
     require_project()
     if req.enabled is not None:
         await db.update_mcp_server_enabled(name, req.enabled)
+    if req.command is not None or req.args is not None or req.env is not None:
+        await db.update_mcp_server_fields(name, req.command, req.args, req.env)
     return {"status": "updated"}
 
 

@@ -231,7 +231,9 @@ INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
     ('schedule', '', 'string'),
     ('timeout', '900', 'integer'),
     ('depends_on', '[]', 'json'),
-    ('require_approval', 'false', 'boolean');
+    ('require_approval', 'false', 'boolean'),
+    ('allowed_internal_tools', '[]', 'json'),
+    ('allowed_dispatch_targets', '[]', 'json');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 """
@@ -439,7 +441,7 @@ async def enqueue_task(job_id: str, trigger: str,
 
     Coalescing rules:
     - 'schedule' always coalesces globally
-    - 'commit' and 'dependency' coalesce with other pending tasks of the same type
+    - 'commit', 'dependency', and 'agent' coalesce with other pending tasks of the same type
     - coalesce_tasks=true coalesces globally
     - All other triggers (manual, resume, retry) never coalesce
     """
@@ -452,7 +454,7 @@ async def enqueue_task(job_id: str, trigger: str,
     )
     job_props = {r["key"]: r["value"] for r in prop_rows}
     coalesce_global = (trigger == "schedule") or (job_props.get("coalesce_tasks", "").lower() == "true")
-    coalesce_same_type = trigger in ("commit", "dependency")
+    coalesce_same_type = trigger in ("commit", "dependency", "agent")
 
     # Approval gate: manual tasks bypass, others check job property
     approval = None
@@ -930,6 +932,24 @@ async def update_mcp_server_enabled(name: str, enabled: bool):
         (1 if enabled else 0, name),
     )
     await db.commit()
+
+
+async def update_mcp_server_fields(name: str, command: str | None, args: list | None, env: dict | None):
+    db = await get_db()
+    sets, vals = [], []
+    if command is not None:
+        sets.append("command = ?")
+        vals.append(command)
+    if args is not None:
+        sets.append("args = ?")
+        vals.append(json.dumps(args))
+    if env is not None:
+        sets.append("env = ?")
+        vals.append(json.dumps(env))
+    if sets:
+        vals.append(name)
+        await db.execute(f"UPDATE mcp_servers SET {', '.join(sets)} WHERE name = ?", vals)
+        await db.commit()
 
 
 async def delete_mcp_server(name: str):

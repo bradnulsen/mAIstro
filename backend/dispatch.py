@@ -55,6 +55,7 @@ async def run_task(
         project_dir=project_dir,
         session_id=session_id,
         external_servers=external_servers,
+        task_id=task_id,
     )
     log.info("[task:%d] MCP config written to %s", task_id, mcp_config_path)
 

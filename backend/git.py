@@ -7,10 +7,15 @@ from datetime import datetime, timezone
 
 
 def run_git(*args, cwd: str) -> subprocess.CompletedProcess:
-    """Run a git command and return the result."""
+    """Run a git command and return the result.
+
+    Explicit encoding="utf-8" is required — on Windows, text=True without it
+    uses the system codepage (cp1252), which fails on non-ASCII content in
+    commit messages, filenames, or diff output. Git itself outputs UTF-8.
+    """
     return subprocess.run(
         ["git", *args],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True, text=True, encoding="utf-8", cwd=cwd,
     )
 
 

@@ -17,6 +17,7 @@ def build_mcp_config(
     session_id: str,
     external_servers: list[dict],
     backend_port: int = 8420,
+    task_id: int | None = None,
 ) -> dict:
     """Build the mcpServers config dict for a task.
 
@@ -26,6 +27,11 @@ def build_mcp_config(
     server_script = os.path.join(os.path.dirname(__file__), "mcp_server.py")
 
     job_mcp_names = set(job["properties"].get("mcp_servers") or [])
+    props = job["properties"]
+
+    # Serialize list properties for the MCP server environment
+    allowed_internal = json.dumps(props.get("allowed_internal_tools") or [])
+    allowed_dispatch = json.dumps(props.get("allowed_dispatch_targets") or [])
 
     servers = {
         "maistro": {
@@ -38,6 +44,9 @@ def build_mcp_config(
                 "MAISTRO_PROJECT_DIR": project_dir,
                 "MAISTRO_SESSION_ID": session_id,
                 "MAISTRO_BACKEND_PORT": str(backend_port),
+                "MAISTRO_TASK_ID": str(task_id or ""),
+                "MAISTRO_ALLOWED_INTERNAL_TOOLS": allowed_internal,
+                "MAISTRO_ALLOWED_DISPATCH_TARGETS": allowed_dispatch,
             },
         }
     }
@@ -61,12 +70,14 @@ def write_mcp_config(
     session_id: str,
     external_servers: list[dict],
     backend_port: int = 8420,
+    task_id: int | None = None,
 ) -> str:
     """Write an MCP config to a temp file and return its path.
 
     Caller is responsible for deleting the file after the task completes.
     """
-    config = build_mcp_config(job, project_dir, session_id, external_servers, backend_port)
+    config = build_mcp_config(job, project_dir, session_id, external_servers,
+                              backend_port, task_id=task_id)
     fd, path = tempfile.mkstemp(suffix=".json", prefix="maistro-mcp-")
     with os.fdopen(fd, "w") as f:
         json.dump(config, f)

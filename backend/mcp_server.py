@@ -1,14 +1,18 @@
 """Internal MCP stdio server for mAistro task dispatches.
 
-Provides structured git operations and project context tools to dispatched
-agents. Invoked as a subprocess by the Claude CLI via --mcp-config.
+Provides structured git operations, project context tools, and inter-agent
+coordination to dispatched agents. Invoked as a subprocess by the Claude CLI
+via --mcp-config.
 
 Each task gets an instance configured via environment variables:
-    MAISTRO_JOB_ID          job slug (e.g. "engineer")
-    MAISTRO_JOB_NAME        display name (e.g. "Engineer")
-    MAISTRO_PROJECT_DIR     absolute path to project directory
-    MAISTRO_SESSION_ID      chat session ID for audit logging
-    MAISTRO_BACKEND_PORT    backend HTTP port (default 8420)
+    MAISTRO_JOB_ID                  job slug (e.g. "engineer")
+    MAISTRO_JOB_NAME                display name (e.g. "Engineer")
+    MAISTRO_PROJECT_DIR             absolute path to project directory
+    MAISTRO_SESSION_ID              chat session ID for audit logging
+    MAISTRO_BACKEND_PORT            backend HTTP port (default 8420)
+    MAISTRO_TASK_ID                 current task ID (for provenance)
+    MAISTRO_ALLOWED_INTERNAL_TOOLS  JSON list of allowed tool names (empty = all)
+    MAISTRO_ALLOWED_DISPATCH_TARGETS JSON list of job IDs this agent can dispatch
 
 Communication follows the MCP stdio transport (JSON-RPC 2.0, one message per line).
 """
@@ -28,6 +32,14 @@ JOB_NAME = os.environ.get("MAISTRO_JOB_NAME", "Unknown")
 PROJECT_DIR = os.environ.get("MAISTRO_PROJECT_DIR", ".")
 SESSION_ID = os.environ.get("MAISTRO_SESSION_ID", "")
 BACKEND_PORT = int(os.environ.get("MAISTRO_BACKEND_PORT", "8420"))
+TASK_ID = os.environ.get("MAISTRO_TASK_ID", "")
+
+# Tool filtering: empty list = all tools available
+_allowed_raw = os.environ.get("MAISTRO_ALLOWED_INTERNAL_TOOLS", "[]")
+ALLOWED_INTERNAL_TOOLS = set(json.loads(_allowed_raw)) if _allowed_raw else set()
+
+_dispatch_raw = os.environ.get("MAISTRO_ALLOWED_DISPATCH_TARGETS", "[]")
+ALLOWED_DISPATCH_TARGETS = set(json.loads(_dispatch_raw)) if _dispatch_raw else set()
 
 
 # ── Git helpers ──────────────────────────────────────────────
@@ -35,7 +47,7 @@ BACKEND_PORT = int(os.environ.get("MAISTRO_BACKEND_PORT", "8420"))
 def _run_git(*args) -> tuple[bool, str]:
     result = subprocess.run(
         ["git", *args],
-        capture_output=True, text=True, cwd=PROJECT_DIR,
+        capture_output=True, text=True, encoding="utf-8", cwd=PROJECT_DIR,
     )
     ok = result.returncode == 0
     return ok, (result.stdout if ok else result.stderr).strip()
@@ -88,7 +100,7 @@ def tool_git_commit(args: dict) -> str:
     # Stage specified paths
     stage = subprocess.run(
         ["git", "add", "--", *paths],
-        capture_output=True, text=True, cwd=PROJECT_DIR,
+        capture_output=True, text=True, encoding="utf-8", cwd=PROJECT_DIR,
     )
     if stage.returncode != 0:
         return f"Error staging files: {stage.stderr.strip()}"
@@ -99,6 +111,47 @@ def tool_git_commit(args: dict) -> str:
     if not ok:
         return f"Error: {out}"
     return out
+
+
+def tool_git_branch_create(args: dict) -> str:
+    """Create a new branch from a specified base."""
+    name = (args.get("name") or "").strip()
+    base = (args.get("base") or "HEAD").strip()
+    if not name:
+        return "Error: branch name is required"
+
+    # Enforce naming convention: <job-id>/<description>
+    if not name.startswith(f"{JOB_ID}/"):
+        name = f"{JOB_ID}/{name}"
+
+    ok, out = _run_git("branch", name, base)
+    if not ok:
+        return f"Error: {out}"
+    return f"Created branch '{name}' from '{base}'"
+
+
+def tool_git_branch_switch(args: dict) -> str:
+    """Switch the working directory to a named branch."""
+    name = (args.get("name") or "").strip()
+    if not name:
+        return "Error: branch name is required"
+
+    ok, out = _run_git("checkout", name)
+    if not ok:
+        return f"Error: {out}"
+    return f"Switched to branch '{name}'"
+
+
+def tool_git_branch_merge(args: dict) -> str:
+    """Merge a source branch into the current branch."""
+    source = (args.get("source") or "").strip()
+    if not source:
+        return "Error: source branch is required"
+
+    ok, out = _run_git("merge", source)
+    if not ok:
+        return f"Merge conflict or error:\n{out}"
+    return out or f"Merged '{source}' into current branch"
 
 
 def tool_list_files(args: dict) -> str:
@@ -156,6 +209,84 @@ def tool_list_jobs(args: dict) -> str:
         return "\n".join(lines) if lines else "(no jobs configured)"
     except Exception as e:
         return f"Error fetching jobs: {e}"
+
+
+def tool_dispatch_task(args: dict) -> str:
+    """Enqueue a task for another job via agent dispatch."""
+    target_job_id = (args.get("target_job_id") or "").strip()
+    message = (args.get("message") or "").strip()
+
+    if not target_job_id:
+        return "Error: target_job_id is required"
+    if not message:
+        return "Error: message is required"
+    if target_job_id == JOB_ID:
+        return "Error: self-dispatch is prohibited"
+    if not ALLOWED_DISPATCH_TARGETS:
+        return "Error: this job has no allowed dispatch targets"
+    if target_job_id not in ALLOWED_DISPATCH_TARGETS:
+        return f"Error: not allowed to dispatch '{target_job_id}'. Allowed targets: {sorted(ALLOWED_DISPATCH_TARGETS)}"
+
+    try:
+        payload = json.dumps({
+            "target_job_id": target_job_id,
+            "message": message,
+            "source_job_id": JOB_ID,
+            "source_task_id": int(TASK_ID) if TASK_ID else 0,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://localhost:{BACKEND_PORT}/api/tasks/agent-dispatch",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        return f"Dispatched task #{result['task_id']} for job '{target_job_id}'"
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return f"Error dispatching task: {e.code} — {body}"
+    except Exception as e:
+        return f"Error dispatching task: {e}"
+
+
+def tool_get_queue_status(args: dict) -> str:
+    """Get read-only view of current queue state."""
+    try:
+        url = f"http://localhost:{BACKEND_PORT}/api/tasks/queue"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            tasks = json.loads(resp.read())
+
+        pending = []
+        queued = []
+        running = []
+        recent_completed = []
+
+        for t in tasks:
+            task_line = f"#{t['id']} {t.get('job_name', t['job_id'])} [{t['trigger']}]"
+            if t.get("started_at") and not t.get("completed_at"):
+                running.append(task_line)
+            elif t.get("completed_at"):
+                status = "error" if t.get("error") else "ok"
+                recent_completed.append(f"{task_line} ({status})")
+            elif t.get("queued_at"):
+                queued.append(task_line)
+            else:
+                pending.append(task_line)
+
+        parts = []
+        if running:
+            parts.append(f"Running ({len(running)}):\n" + "\n".join(f"  {l}" for l in running))
+        if queued:
+            parts.append(f"Queued ({len(queued)}):\n" + "\n".join(f"  {l}" for l in queued))
+        if pending:
+            parts.append(f"Pending ({len(pending)}):\n" + "\n".join(f"  {l}" for l in pending))
+        if recent_completed:
+            parts.append(f"Recent completed ({len(recent_completed)}):\n" + "\n".join(f"  {l}" for l in recent_completed[:10]))
+
+        return "\n\n".join(parts) if parts else "(queue is empty)"
+    except Exception as e:
+        return f"Error fetching queue status: {e}"
 
 
 # ── Tool registry ────────────────────────────────────────────
@@ -227,6 +358,52 @@ TOOLS = [
         },
     },
     {
+        "name": "git_branch_create",
+        "description": f"Create a new branch. Enforces naming convention: {JOB_ID}/<description>.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Branch name (job-id prefix is added automatically if missing)",
+                },
+                "base": {
+                    "type": "string",
+                    "description": "Base ref to branch from (default: HEAD)",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "git_branch_switch",
+        "description": "Switch the working directory to a named branch.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Branch name to switch to",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "git_branch_merge",
+        "description": "Merge a source branch into the current branch.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "Branch name to merge from",
+                },
+            },
+            "required": ["source"],
+        },
+    },
+    {
         "name": "list_files",
         "description": "List files in the project matching a glob pattern.",
         "inputSchema": {
@@ -265,6 +442,36 @@ TOOLS = [
             "properties": {},
         },
     },
+    {
+        "name": "dispatch_task",
+        "description": (
+            "Enqueue a task for another job, creating an agent trigger. "
+            "The target job will run with your message as context. "
+            "Self-dispatch is prohibited."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target_job_id": {
+                    "type": "string",
+                    "description": "Job ID (slug) to dispatch",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Explanation of why the target job should run",
+                },
+            },
+            "required": ["target_job_id", "message"],
+        },
+    },
+    {
+        "name": "get_queue_status",
+        "description": "Get read-only view of the current task queue: pending, queued, running, and recently completed tasks.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
@@ -272,9 +479,14 @@ TOOL_HANDLERS = {
     "git_log": tool_git_log,
     "git_diff": tool_git_diff,
     "git_commit": tool_git_commit,
+    "git_branch_create": tool_git_branch_create,
+    "git_branch_switch": tool_git_branch_switch,
+    "git_branch_merge": tool_git_branch_merge,
     "list_files": tool_list_files,
     "read_file": tool_read_file,
     "list_jobs": tool_list_jobs,
+    "dispatch_task": tool_dispatch_task,
+    "get_queue_status": tool_get_queue_status,
 }
 
 
@@ -329,12 +541,26 @@ def handle_initialize(req_id, params):
 
 
 def handle_tools_list(req_id, params):
-    _respond(req_id, {"tools": TOOLS})
+    """Return tools filtered by allowed_internal_tools.
+
+    When ALLOWED_INTERNAL_TOOLS is empty, all tools are available.
+    When set, only listed tools are presented.
+    """
+    if ALLOWED_INTERNAL_TOOLS:
+        filtered = [t for t in TOOLS if t["name"] in ALLOWED_INTERNAL_TOOLS]
+    else:
+        filtered = TOOLS
+    _respond(req_id, {"tools": filtered})
 
 
 def handle_tools_call(req_id, params):
     tool_name = params.get("name", "")
     arguments = params.get("arguments") or {}
+
+    # Enforce tool filtering at call time too (defense in depth)
+    if ALLOWED_INTERNAL_TOOLS and tool_name not in ALLOWED_INTERNAL_TOOLS:
+        _error(req_id, -32601, f"Tool not available: {tool_name}")
+        return
 
     handler = TOOL_HANDLERS.get(tool_name)
     if not handler:

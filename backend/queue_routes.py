@@ -48,6 +48,12 @@ class TransferRequest(BaseModel):
 class QueueSettingsRequest(BaseModel):
     auto_dispatch: bool = False
 
+class AgentDispatchRequest(BaseModel):
+    target_job_id: str
+    message: str
+    source_job_id: str
+    source_task_id: int
+
 
 # ── Task Routes ────────────────────────────────────────────
 
@@ -359,6 +365,45 @@ async def log_mcp_event(req: McpEventRequest, x_session_id: str = Header(None)):
     return {"status": "ok"}
 
 
+@router.post("/api/tasks/agent-dispatch")
+async def agent_dispatch(req: AgentDispatchRequest):
+    """Enqueue a task via agent dispatch (dispatch_task MCP tool).
+
+    Validates allowed_dispatch_targets and prohibits self-dispatch.
+    """
+    require_project()
+    target_job = await db.get_job(req.target_job_id)
+    if not target_job:
+        raise HTTPException(404, f"Target job '{req.target_job_id}' not found")
+
+    source_job = await db.get_job(req.source_job_id)
+    if not source_job:
+        raise HTTPException(404, f"Source job '{req.source_job_id}' not found")
+
+    if req.source_job_id == req.target_job_id:
+        raise HTTPException(400, "Self-dispatch is prohibited")
+
+    allowed_targets = source_job["properties"].get("allowed_dispatch_targets") or []
+    if not allowed_targets:
+        raise HTTPException(403, f"Job '{req.source_job_id}' has no allowed dispatch targets")
+    if req.target_job_id not in allowed_targets:
+        raise HTTPException(403, f"Job '{req.source_job_id}' is not allowed to dispatch '{req.target_job_id}'")
+
+    context = build_trigger_context(
+        "agent",
+        upstream_name=source_job["name"],
+        upstream_task_id=req.source_task_id,
+        user_context=req.message,
+    )
+    task_id = await db.enqueue_task(
+        req.target_job_id, "agent",
+        trigger_detail=f"{req.source_job_id}#{req.source_task_id}",
+        context=context,
+    )
+    worker.notify()
+    return {"task_id": task_id}
+
+
 # ── Enqueue (must be last — {job_id} is str and would match static paths) ──
 
 @router.post("/api/tasks/{job_id}")
@@ -368,8 +413,6 @@ async def enqueue_job(job_id: str, req: DispatchRequest | None = None):
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    if job["properties"].get("running"):
-        raise HTTPException(409, "Job is already running")
 
     user_context = req.context if req else None
     head = git.head_hash(state.PROJECT_DIR)
