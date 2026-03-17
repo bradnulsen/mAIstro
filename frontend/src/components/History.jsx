@@ -125,44 +125,29 @@ export default forwardRef(function History(props, ref) {
     return () => document.removeEventListener('keydown', handleKey)
   }, [selected, retryContext])
 
+  const completedItems = items.filter(i => getStatus(i) === 'completed')
+  const nonSuccessItems = items.filter(i => getStatus(i) !== 'completed')
+
   return (
     <>
       <div className="split-body">
-        <div className="feed-list">
-          {loading && <div className="loading">Loading history...</div>}
-          {!loading && items.length === 0 && (
-            <div className="empty-state">No completed tasks</div>
-          )}
-          {items.map(item => {
-            const status = getStatus(item)
-            const reason = errorSummary(item, status)
-            return (
-              <div
-                key={item.id}
-                className={`feed-item ${selected?.id === item.id ? 'active' : ''}`}
-                onClick={() => setSelected(item)}
-              >
-                <div className="feed-avatar">
-                  {(item.job_name || '?')[0].toUpperCase()}
-                </div>
-                <div className="feed-body">
-                  <div className="feed-meta">
-                    <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
-                    <span className="feed-author">{item.job_name}</span>
-                    <span className={`queue-status ${status}`}>
-                      {STATUS_LABELS[status] || status}
-                    </span>
-                    <span>{formatDate(item.completed_at, true)}</span>
-                  </div>
-                  <div className="feed-message">
-                    {reason
-                      ? <span className="history-error-reason">{reason}</span>
-                      : (item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`)}
-                  </div>
-                </div>
-              </div>
-            )
-          })}
+        <div className="kanban-columns">
+          <HistoryColumn
+            title="Completed"
+            items={completedItems}
+            loading={loading}
+            emptyLabel="No completed tasks"
+            selected={selected}
+            onSelect={setSelected}
+          />
+          <HistoryColumn
+            title="Non-Success"
+            items={nonSuccessItems}
+            loading={loading}
+            emptyLabel="No failed tasks"
+            selected={selected}
+            onSelect={setSelected}
+          />
         </div>
 
         {selected && (
@@ -236,6 +221,54 @@ function ContextEditor({ value, onChange, autoFocus = false }) {
       className="context-editor"
       autoFocus={autoFocus}
     />
+  )
+}
+
+
+function HistoryColumn({ title, items, loading, emptyLabel, selected, onSelect }) {
+  return (
+    <div className="kanban-column">
+      <div className="kanban-column-header">
+        <span className="kanban-column-title">{title}</span>
+        <span className="kanban-column-count">{items.length}</span>
+      </div>
+      <div className="kanban-column-body">
+        {loading && <div className="loading">Loading...</div>}
+        {!loading && items.length === 0 && (
+          <div className="empty-state">{emptyLabel}</div>
+        )}
+        {items.map(item => {
+          const status = getStatus(item)
+          const reason = errorSummary(item, status)
+          return (
+            <div
+              key={item.id}
+              className={`feed-item ${selected?.id === item.id ? 'active' : ''}`}
+              onClick={() => onSelect(item)}
+            >
+              <div className="feed-avatar">
+                {(item.job_name || '?')[0].toUpperCase()}
+              </div>
+              <div className="feed-body">
+                <div className="feed-meta">
+                  <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
+                  <span className="feed-author">{item.job_name}</span>
+                  <span className={`queue-status ${status}`}>
+                    {STATUS_LABELS[status] || status}
+                  </span>
+                  <span>{formatDate(item.completed_at, true)}</span>
+                </div>
+                <div className="feed-message">
+                  {reason
+                    ? <span className="history-error-reason">{reason}</span>
+                    : (item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`)}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
