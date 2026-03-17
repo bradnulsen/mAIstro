@@ -1327,10 +1327,6 @@ label.muted-text {
   opacity: 1;
 }
 
-.trigger-chip.selectable {
-  cursor: pointer;
-}
-
 .trigger-chip.selectable:hover {
   opacity: 1;
 }

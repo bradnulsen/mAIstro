@@ -252,6 +252,7 @@ export default function Queue() {
     }
   }
 
+
   const handleRate = async (id, rating) => {
     setActionError('')
     try {
