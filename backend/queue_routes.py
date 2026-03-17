@@ -121,15 +121,11 @@ async def get_task_output(task_id: int):
 
 @router.get("/api/tasks/{task_id}/outcome")
 async def get_task_outcome(task_id: int):
-    """Get the outcome summary for a completed task (stored or derived from git)."""
+    """Get the outcome summary for a completed task (derived from git)."""
     require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    # Prefer stored summary; fall back to git computation for older tasks
-    stored = task.get("outcome_summary")
-    if stored:
-        return {"summary": stored}
     start = task.get("start_commit")
     end = task.get("result_commit")
     if not start or not end or start == end:

@@ -28,7 +28,6 @@ Each `tasks` row tracks:
 | `completed_at` | When execution finished (success, failure, or cancellation) |
 | `result_commit` | HEAD hash after execution completed |
 | `error` | Error message if failed, timed out, cancelled, interrupted, or rejected |
-| `outcome_summary` | Git-derived summary of commits produced (stored at completion time) |
 | `coalesced_id` | Links subordinate tasks to a root task for merge; NULL = standalone/root |
 
 ### Task State Derivation
@@ -150,7 +149,7 @@ When a task completes, the platform derives an outcome summary from git. This se
 The summary is computed from git artifacts — the commits between `start_commit` and `result_commit`. It captures commit messages and change statistics. This is a derived value, not an authored one: the platform reads what the repository records, not what the agent claims.
 
 - If `start_commit == result_commit`, the task produced no commits and has no summary
-- The summary is computed at completion time and stored on the task record (`outcome_summary` column). The API prefers the stored value and falls back to live git computation for older tasks that predate the column
+- The summary is derived on demand from `start_commit` and `result_commit` — not stored. These two columns are the authoritative link between a task and its git changes; the summary is always recoverable from them
 - When this task triggers downstream dependents, the outcome summary is included in the trigger context — downstream agents receive concrete information about what their upstream produced
 
 ## Manual Queue Composition
