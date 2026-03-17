@@ -11,6 +11,16 @@ import {
 
 const getStatus = getTaskStatus
 
+/** Human-readable inline reason for non-success terminal states */
+function errorSummary(item, status) {
+  if (status === 'completed') return null
+  if (status === 'cancelled') return 'Cancelled by user'
+  if (status === 'timed_out') return 'Exceeded timeout limit'
+  if (status === 'interrupted') return 'Process interrupted'
+  if (status === 'rejected') return 'Rejected before execution'
+  return item.error || 'Unknown error'
+}
+
 export default forwardRef(function History(props, ref) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
@@ -125,6 +135,7 @@ export default forwardRef(function History(props, ref) {
           )}
           {items.map(item => {
             const status = getStatus(item)
+            const reason = errorSummary(item, status)
             return (
               <div
                 key={item.id}
@@ -144,7 +155,9 @@ export default forwardRef(function History(props, ref) {
                     <span>{formatDate(item.completed_at, true)}</span>
                   </div>
                   <div className="feed-message">
-                    {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
+                    {reason
+                      ? <span className="history-error-reason">{reason}</span>
+                      : (item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`)}
                   </div>
                 </div>
               </div>
@@ -177,7 +190,7 @@ export default forwardRef(function History(props, ref) {
                 </>
               ) : (
                 <div className="action-row">
-                  {selected.error && selected.error !== 'cancelled' && (
+                  {selected.error && !['cancelled', 'rejected'].includes(selected.error) && (
                     <button
                       className="small primary"
                       onClick={() => handleResume(selected.id)}
@@ -359,11 +372,11 @@ function HistoryDetail({ item, output, onRate }) {
         </div>
       )}
 
-      {item.error && status !== 'cancelled' && (
+      {item.error && (
         <div className="detail-section">
-          <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
-          <div className={`detail-meta ${status === 'timed_out' ? 'warning-text' : 'error-text'}`}>
-            {status === 'timed_out' ? 'Task exceeded timeout limit' : item.error}
+          <label>{STATUS_LABELS[status] || 'Error'}</label>
+          <div className={`detail-meta ${status === 'error' ? 'error-text' : 'warning-text'}`}>
+            {errorSummary(item, status)}
           </div>
         </div>
       )}

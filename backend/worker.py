@@ -246,6 +246,8 @@ async def _process_task(task: dict):
         if response_text:
             await db.add_chat_message(session_id, "assistant", response_text)
 
+        _cancelled = local_cancel.is_set() and not _timed_out
+
         if _timed_out:
             head = git.head_hash(state.PROJECT_DIR)
             now = utcnow()
@@ -255,6 +257,14 @@ async def _process_task(task: dict):
             await db.update_tasks_batch(sub_ids, completed_at=now,
                                         result_commit=head, error="timed out")
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
+        elif _cancelled:
+            # Cancel route already set error="cancelled" — just record result_commit
+            head = git.head_hash(state.PROJECT_DIR)
+            now = utcnow()
+            await db.update_task(task_id, _commit=False, completed_at=now, result_commit=head)
+            sub_ids = [s["id"] for s in subordinates if not s.get("completed_at")]
+            await db.update_tasks_batch(sub_ids, completed_at=now, error="cancelled")
+            log.info("[worker] Task #%d cancelled (dependents skipped)", task_id)
         else:
             head = git.head_hash(state.PROJECT_DIR)
             now = utcnow()

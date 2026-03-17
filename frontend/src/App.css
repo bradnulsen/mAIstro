@@ -428,6 +428,10 @@ label.muted-text {
   text-overflow: ellipsis;
 }
 
+.history-error-reason {
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 .feed-stats {
   flex-shrink: 0;
@@ -477,6 +481,7 @@ label.muted-text {
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
 .queue-status.timed_out { color: var(--warning); }
 .queue-status.pending_approval { color: var(--warning); }
+.queue-status.interrupted { color: var(--warning); }
 .queue-status.rejected { color: var(--text-muted); text-decoration: line-through; }
 
 
