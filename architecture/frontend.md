@@ -24,10 +24,10 @@ The primary operational view. Contains two mutually exclusive tabs:
 
 **History tab** — the record of completed work, presented as a two-column kanban layout that mirrors the Queue tab's structure:
 
-- **Completed** (left column) — tasks that ran to completion without error. These are the expected, successful outcomes. Each card displays the outcome summary, commit range, and task rating. This column answers: "what got done?"
+- **Completed** (left column) — tasks that ran to completion without error. These are the expected, successful outcomes. Each card displays the outcome summary and commit range. This column answers: "what got done?"
 - **Non-Success** (right column) — tasks that reached a terminal state without succeeding: failed, timed out, cancelled, interrupted, rejected. Each card carries a status badge identifying its specific terminal state and surfaces error context inline — the user sees *why* at a glance, not just *that* it didn't succeed. This column answers: "what needs attention?"
 
-Both columns are ordered by completion time (most recent first). The two-column layout makes the success/non-success distinction spatial and immediate — failures are in their own column, visible at a glance rather than interspersed in a single list. Provides controls for resuming, retrying, and rating tasks. Tasks flow from the Queue tab to the History tab when they finish, landing in the appropriate column based on outcome.
+Both columns are ordered by completion time (most recent first). The two-column layout makes the success/non-success distinction spatial and immediate — failures are in their own column, visible at a glance rather than interspersed in a single list. Provides controls for resuming and retrying tasks. Tasks flow from the Queue tab to the History tab when they finish, landing in the appropriate column based on outcome.
 
 The two tabs are parallel views of the same domain — one shows what's happening, the other shows what happened. They share the Dispatch rail item; the user switches between them within the view.
 

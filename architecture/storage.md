@@ -46,10 +46,9 @@ This design means adding a new property requires only a seed SQL insert — no s
 
 ### Task Table Extensions
 
-Three columns extend the `tasks` table beyond the core lifecycle:
+Two columns extend the `tasks` table beyond the core lifecycle:
 
 - **`queued_at`** — nullable timestamp recording when the task was promoted to queued state. NULL means the task is still pending. Task state is derived from lifecycle timestamps: pending (`queued_at IS NULL AND started_at IS NULL`), queued (`queued_at IS NOT NULL AND started_at IS NULL`), active (`started_at IS NOT NULL AND completed_at IS NULL`). When auto-queueing is enabled, `queued_at` is set at creation time (task skips pending). Transfer between columns sets or clears this field.
-- **`rating`** — nullable binary signal (positive/negative) set by the user on completed tasks. Defaults to null (unrated). Stored directly on the task record for efficient query and display.
 - **`coalesced_id`** — nullable foreign key referencing another `tasks` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a task ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
 
 ### Key Invariants
