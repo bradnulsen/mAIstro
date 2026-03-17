@@ -221,20 +221,20 @@ function ProjectOpener({ onOpen }) {
           {browsing ? '...' : 'Browse'}
         </button>
       </div>
-      {error && <p style={{ color: 'var(--danger)', fontSize: 12 }}>{error}</p>}
+      {error && <p className="project-error">{error}</p>}
 
       {recent.length > 0 && (
-        <div style={{ marginTop: 24 }}>
-          <p style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>Recent projects</p>
+        <div className="recent-section">
+          <p className="recent-section-header">Recent projects</p>
           {recent.map(r => (
             <div
               key={r.path}
               className="recent-project"
               onClick={() => handleOpen(r.path)}
             >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 'bold', fontSize: 13 }}>{r.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.path}</div>
+              <div className="recent-project-info">
+                <div className="recent-project-name">{r.name}</div>
+                <div className="recent-project-path">{r.path}</div>
               </div>
               <button
                 className="small"

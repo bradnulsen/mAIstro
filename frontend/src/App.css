@@ -19,6 +19,12 @@
   --code-bg: #1a1a1a;
   --code-text: #e0e0e0;
   --font: 'Courier New', monospace;
+  /* Diff viewer — lighter tones suited for dark code background */
+  --diff-add: #7ec87e;
+  --diff-add-bg: rgba(74, 170, 74, 0.12);
+  --diff-del: #e87272;
+  --diff-del-bg: rgba(204, 68, 68, 0.12);
+  --diff-info: #7ab0d6;
 }
 
 body {
@@ -415,13 +421,13 @@ label.muted-text {
 
 .rating-btn.active.positive {
   background: var(--success);
-  color: white;
+  color: #fff;
   border-color: var(--success);
 }
 
 .rating-btn.active.negative {
   background: var(--danger);
-  color: white;
+  color: #fff;
   border-color: var(--danger);
 }
 
@@ -1106,6 +1112,39 @@ label.muted-text {
   border-color: var(--border);
 }
 
+.recent-section {
+  margin-top: 24px;
+}
+
+.recent-section-header {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.recent-project-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.recent-project-name {
+  font-weight: bold;
+  font-size: 13px;
+}
+
+.recent-project-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
 /* ── Rendered Markdown (shared) ── */
 
 .md-content p { margin: 0.3em 0; }
@@ -1113,7 +1152,7 @@ label.muted-text {
 .md-content p:last-child { margin-bottom: 0; }
 .md-content code {
   font-size: 11px;
-  background: rgba(0,0,0,0.06);
+  background: var(--bg-active);
   padding: 1px 4px;
   border-radius: 3px;
 }
@@ -1154,7 +1193,7 @@ label.muted-text {
 }
 .md-content th {
   font-weight: 600;
-  background: rgba(0,0,0,0.03);
+  background: rgba(0, 0, 0, 0.03);
 }
 .md-content thead {
   border-bottom: 2px solid var(--border-light);
@@ -1288,6 +1327,44 @@ label.muted-text {
   opacity: 1;
 }
 
+.trigger-chip.selectable {
+  cursor: pointer;
+  position: relative;
+  padding-right: 20px;
+}
+
+.trigger-chip.selectable:hover {
+  opacity: 1;
+}
+
+.trigger-chip-remove {
+  all: unset;
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  opacity: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.trigger-chip.selectable:hover .trigger-chip-remove {
+  opacity: 0.6;
+}
+
+.trigger-chip-remove:hover {
+  opacity: 1 !important;
+  background: var(--danger);
+  color: white;
+}
+
 .empty-state {
   display: flex;
   align-items: center;
@@ -1376,17 +1453,17 @@ label.muted-text {
 }
 
 .diff-view .diff-add {
-  color: #7ec87e;
-  background: rgba(74, 170, 74, 0.1);
+  color: var(--diff-add);
+  background: var(--diff-add-bg);
 }
 
 .diff-view .diff-del {
-  color: #e87272;
-  background: rgba(204, 68, 68, 0.1);
+  color: var(--diff-del);
+  background: var(--diff-del-bg);
 }
 
 .diff-view .diff-hunk {
-  color: #7ab0d6;
+  color: var(--diff-info);
   font-weight: bold;
 }
 
