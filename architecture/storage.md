@@ -34,7 +34,7 @@ Seven tables:
 | `mcp_servers` | External tool server registrations |
 | `config` | Key-value configuration store |
 
-Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent, no migration framework. The seed SQL populates `job_property_defs` with core property definitions and sets default config values.
+Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent. A lightweight migration system (`_migrate`) runs after schema creation, gated on a `schema_version` integer in the `config` table. Each migration checks the current version and advances it atomically. This handles changes that `CREATE TABLE IF NOT EXISTS` cannot express (e.g., adding FK constraints to existing tables via table recreation). The seed SQL populates `job_property_defs` with core property definitions and sets default config values.
 
 ### Entity-Attribute-Value Property System
 
@@ -54,7 +54,7 @@ Two columns extend the `tasks` table beyond the core lifecycle:
 ### Key Invariants
 
 - The `tasks.context` column stores pre-formatted context text built at the enqueue site
-- Foreign keys with `ON DELETE CASCADE` handle `job_properties` cleanup; `chat_sessions` and `tasks` are explicitly deleted in `delete_job()` because they reference `jobs` but need cleanup before the cascade fires
+- All foreign keys referencing `jobs(id)` — on `job_properties`, `tasks`, and `chat_sessions` — use `ON DELETE CASCADE`. Deleting a job is a single `DELETE FROM jobs` statement; the database handles dependent row cleanup automatically
 - Task state (pending, queued, active, completed) is derived at query time from lifecycle timestamps (`queued_at`, `started_at`, `completed_at`), never stored as a separate status field
 - Tasks with non-null `coalesced_id` are invisible in queue listings but included when their root task is dispatched or acted upon
 

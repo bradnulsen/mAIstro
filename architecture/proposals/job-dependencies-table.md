@@ -1,6 +1,6 @@
 ---
 title: Replace depends_on LIKE scan with a normalized job_dependencies table
-status: deferred
+status: deferred — LIKE fragility resolved via json.loads fix (66183d1); normalization deferred to scale need
 author: Backend
 reviewed-by: Architect
 ---
