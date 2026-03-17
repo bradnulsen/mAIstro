@@ -55,8 +55,8 @@ The worker is a single `asyncio.Task` running a poll loop. It wakes on notificat
 
 Tasks progress through two pre-execution states before the worker picks them up:
 
-- **Pending** — the staging area. Newly created tasks land here by default. The user reviews, reorders, coalesces, and curates pending tasks before promoting them to queued. Pending tasks are invisible to the worker.
-- **Queued** — the execution runway. Tasks here are committed to run. The worker pulls the highest-priority queued task when ready.
+- **Pending** — the staging area. Newly created tasks land here by default. The user reviews, coalesces, and curates pending tasks before promoting them to queued. Pending tasks are invisible to the worker.
+- **Queued** — the execution runway. Tasks here are committed to run. The worker pulls the highest-priority queued task when ready. The user reorders queued tasks to control execution sequence.
 
 **Auto-queueing** (`queue_auto_dispatch` config) controls the initial routing of newly created tasks. When enabled, new tasks skip pending and go directly to queued (`queued_at` set at creation). When disabled, new tasks enter pending (`queued_at` remains NULL). The worker always runs — auto-queueing only controls where tasks land on creation, not whether the worker processes.
 
@@ -72,7 +72,11 @@ The worker only queries for tasks in the **queued** state (`queued_at IS NOT NUL
 
 ### Task Ordering
 
-Both pending and queued columns maintain independent sort orders via `sort_order`. Each column has its own ordering — transferring a task between columns does not affect ordering within the other column. The worker pulls the highest-priority queued task (lowest `sort_order` in the queued set). Newly created tasks are appended to the end of their target column.
+The queued column maintains a sort order via `sort_order` that determines execution priority. The worker pulls the highest-priority queued task (lowest `sort_order` in the queued set). The user controls execution order by reordering queued tasks via drag-and-drop.
+
+The pending column does not maintain a meaningful sort order — it is a staging area for curation, not a priority queue. Tasks in pending are displayed by creation time.
+
+Newly created tasks are appended to the end of their target column (pending by default, or queued if auto-queueing is enabled). Tasks transferred from pending to queued are appended to the end of the queued column.
 
 ### Execution Flow
 
@@ -132,7 +136,7 @@ When a task completes, the platform derives an outcome summary and supports user
 The summary is computed from git artifacts — the commits between `start_commit` and `result_commit`. It captures commit messages and change statistics. This is a derived value, not an authored one: the platform reads what the repository records, not what the agent claims.
 
 - If `start_commit == result_commit`, the task produced no commits and has no summary
-- The summary is computed at completion time and stored (or derived on read) for display in the Dispatch view
+- The summary is computed at completion time and stored (or derived on read) for display in the History view
 - When this task triggers downstream dependents, the outcome summary is included in the trigger context — downstream agents receive concrete information about what their upstream produced
 
 ### Task Rating
@@ -143,7 +147,7 @@ The rating dataset can later be correlated with job instructions, model choices,
 
 ## Manual Queue Composition
 
-The user can merge and split pre-execution tasks (pending or queued) directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly. All composition operations are **same-state** — they operate within a single column only.
+The user can merge and split tasks in the pending column directly from the Dispatch view. This gives explicit control over the grouping that automatic coalescing performs implicitly. Composition is a pending-column operation — it belongs to the curation stage, not the execution runway.
 
 ### Implementation: Coalesced ID
 
@@ -162,7 +166,7 @@ Rather than destructively removing task records during merge (losing individual 
 
 ### Merge
 
-Combines two pre-execution tasks in the same column for the same job into a single logical unit. Triggered by dragging one task onto another within the same column in the Dispatch view (see [Frontend — Drag Interaction Model](frontend.md)).
+Combines two pending tasks for the same job into a single logical unit. Triggered by dragging one pending task onto another in the Dispatch view (see [Frontend — Drag Interaction Model](frontend.md)).
 
 1. The older task (by `created_at`) becomes the root — its `coalesced_id` remains NULL
 2. The dragged task gets `coalesced_id` set to the root task's ID
@@ -170,22 +174,20 @@ Combines two pre-execution tasks in the same column for the same job into a sing
 4. **Flatten**: if the newly subordinated task had its own subordinates (was itself a root), those subordinates are re-pointed to the new root. This ensures coalesce groups are always flat — depth 1, never nested. Every subordinate points directly to its root.
 
 **Constraints**:
-- Only pre-execution tasks (not started, not completed, not pending-approval)
-- **Same-state required**: both tasks must be in the same column (both pending or both queued). Cross-column drag is always a transfer, never a merge
+- Only pending tasks (not queued, not started, not completed, not pending-approval). Merge is a curation operation that belongs to the staging area
 - Same job only — a task's identity is bound to one job; cross-job merge would break prompt assembly, tool configuration, and commit authorship. The UI enforces this structurally by suppressing the merge affordance when tasks belong to different jobs
 - Tasks that are already subordinates (have a non-null `coalesced_id`) cannot be merge targets — they must be split from their current root first
 
 ### Split (Uncoalesce)
 
-Reverses a merge or automatic coalescing. Takes a root task that has subordinate tasks and makes them independent again.
+Reverses a merge or automatic coalescing. Takes a pending root task that has subordinate tasks and makes them independent again.
 
 1. All tasks with `coalesced_id` equal to the root task's ID get `coalesced_id` set back to NULL
-2. Split-off tasks get `sort_order` cleared to NULL and `created_at` reset to the current time — they appear at the end of the same column as the root task
+2. Split-off tasks get `sort_order` cleared to NULL and `created_at` reset to the current time — they appear at the end of the pending column
 3. Split-off tasks inherit the job's current `require_approval` setting — if the gate is now enabled, they enter pending-approval state even if the original merge happened before the gate was set
-4. **Same-state preservation**: split tasks remain in the same state as the root — splitting a queued task produces queued tasks, splitting a pending task produces pending tasks
 
 **Constraints**:
-- Only root tasks (coalesced_id IS NULL) that have at least one subordinate can be split
+- Only pending root tasks (coalesced_id IS NULL, queued_at IS NULL) that have at least one subordinate can be split. Split is a coalescing operation and coalescing belongs to the pending column
 - Only pre-execution tasks (started_at IS NULL and no error)
 - The root task itself is unchanged — it retains its position, trigger, and context. Only subordinates are released
 

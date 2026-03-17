@@ -8,7 +8,7 @@ The frontend is a single-page React application that provides the operator inter
 
 `App.jsx` provides the outer layout:
 
-- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, MCP Servers, Settings
+- **Rail navigation**: vertical icon bar on the left — Dispatch, History, Activity (Feed), Jobs, Files, MCP Servers, Settings
 - **Status bar**: horizontal strip showing all jobs with running indicators (pulsing dot for active tasks)
 - **Main area**: renders the active view
 - **Chat tray**: a resizable side panel (drag-to-resize, click-to-toggle) housing the interactive chat
@@ -18,15 +18,18 @@ The app polls job status every 5 seconds to keep the status bar current.
 ## Views
 
 ### Dispatch (`Queue.jsx`)
-The primary operational view. Two-column kanban layout: **Pending** (left) and **Queued** (right). Pending is the staging area where new tasks land for review and curation. Queued is the execution runway — the worker pulls from here. Active and completed tasks appear below the queued column with outcome summaries for completed work. Provides controls for cancelling, approving/rejecting, resuming, retrying, and rating completed tasks. Split breaks a multi-trigger pre-execution task into individual tasks. Displays task output with streaming text, tool use events, and diff views.
+The primary operational view. Two-column kanban layout: **Pending** (left) and **Queued** (right). Pending is the staging area where new tasks land for review and curation — coalescing (merge and split) happens here. Queued is the execution runway — sorting (reorder) happens here, and the worker pulls from here. The currently active task (if any) appears prominently, showing its live streamed output. Dispatch shows only pre-execution and active tasks — it is the workspace for what is upcoming and what is running right now. Provides controls for cancelling and approving/rejecting. Selecting a task shows its streamed output.
 
-**Drag Interaction Model** — three drag operations share a single drag gesture, disambiguated by drop target:
+**Drag Interaction Model** — drag operations are specialized by column, reflecting the distinct purpose of each stage:
 
-- **Reorder** (within same column) — drop between tasks in the same column. Visual feedback: an insertion line between tasks. The dragged task moves to that position.
-- **Merge** (within same column) — drop onto a task's central zone in the same column. Visual feedback: the target task highlights with a merge indicator. The merge zone activates only when the drop target belongs to the same job as the dragged task and both are in the same state. When these conditions are not met, the central zone falls back to reorder behavior.
+- **Pending column (coalescing)** — drag operations in pending support **merge** (drop onto a same-job task to coalesce) and **transfer** (drop into the queued column to promote). Reordering within pending is not meaningful — pending is a staging area, not a priority queue. The order tasks leave pending is determined by when the user transfers them to queued.
+- **Queued column (sorting)** — drag operations in queued support **reorder** (drop between tasks to change execution priority) and **transfer** (drop into the pending column to demote). Merge is not available in queued — coalescing decisions are made during staging, not after commitment to run.
 - **Transfer** (between columns) — drop into the other column. Moves the task from pending to queued or from queued to pending. The transferred task is appended to the end of the target column. Visual feedback: the target column highlights as a drop zone.
 
-The tolerance split between reorder and merge zones is a UI tuning parameter. The essential contract: the user's spatial intent — "place between" vs. "place onto" vs. "move across" — determines which operation occurs. Ordering and coalescing are same-state operations; cross-column drag is exclusively a transfer.
+Each column has one primary drag operation plus transfer. Pending owns coalescing (merge); queued owns sorting (reorder). Cross-column drag is exclusively a transfer — it changes state without merging or reordering within the target column.
+
+### History
+The record of completed work. Shows all post-execution tasks: completed, failed, timed out, cancelled, and interrupted. Displays outcome summaries, commit ranges, and task ratings. Provides controls for resuming, retrying, and rating completed tasks. History sits alongside Dispatch as a peer top-level view — same visual weight in the navigation, allowing the user to click between "what's happening" (Dispatch) and "what happened" (History). Tasks flow from Dispatch to History when they finish.
 
 ### Activity Feed (`Feed.jsx`)
 Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked job and trigger type.
