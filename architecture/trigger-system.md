@@ -85,9 +85,14 @@ The `context` column stores pre-formatted text built at the enqueue site. Contex
 
 ### Coalesced ID Mechanism
 
-Automatic coalescing can use the same `coalesced_id` mechanism as manual merge (see [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition)). Instead of modifying an existing task's record, the system creates a new atomic task record with `coalesced_id` pointing to the existing pending task. Both approaches achieve the same result — one execution that addresses multiple triggers — but the coalesced_id approach preserves each trigger as a first-class record.
+Automatic coalescing uses the same `coalesced_id` mechanism as manual merge (see [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition)). Rather than modifying an existing task's record, the system always creates a new atomic task record first (preserving trigger provenance), then sets its `coalesced_id` to point to the existing pending root task. Each trigger retains its own task record — coalescing links them, it does not merge data.
 
-The queue-level view filters on `coalesced_id IS NULL`, so subordinate tasks are invisible in the queue. At dispatch time, the worker collects all tasks linked to the root and unifies their context.
+The flow in `enqueue_task()`:
+1. Insert the new task record unconditionally (trigger, context, approval all set)
+2. If coalescing applies: query for an existing pending root (`coalesced_id IS NULL`, same job, not started, no error)
+3. If a root exists: set the new task's `coalesced_id` to the root's ID — the new task becomes a subordinate
+
+The queue-level view filters on `coalesced_id IS NULL`, so subordinate tasks are invisible in the queue. At dispatch time, the worker collects all tasks linked to the root and unifies their context into the prompt.
 
 ## Manual Queue Composition
 
@@ -99,11 +104,11 @@ Combines two or more pending tasks for the same job. The oldest task becomes the
 
 Constraints: pending tasks only, same job only. Cross-job merge would violate the one-task-one-job invariant.
 
-### Split
+### Split (Uncoalesce)
 
-Reverses a merge. All tasks subordinate to a root (those with `coalesced_id` pointing to it) get `coalesced_id` cleared back to NULL, becoming independent queue entries appended to the end of the pending queue. Split-off tasks inherit the job's current `require_approval` setting.
+Reverses a merge or automatic coalescing. All tasks subordinate to a root (those with `coalesced_id` pointing to it) get `coalesced_id` cleared back to NULL, becoming independent queue entries. Split-off tasks get `sort_order` cleared and `created_at` reset, placing them at the end of the queue. They inherit the job's current `require_approval` setting.
 
-Constraints: only root tasks with subordinates, pending only.
+Constraints: only root tasks with subordinates, pre-execution only (not started, no error).
 
 See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition) for implementation details.
 

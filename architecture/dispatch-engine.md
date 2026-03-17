@@ -79,9 +79,9 @@ Timed-out and failed tasks explicitly do not trigger dependents.
 
 Jobs with `require_approval=true` get `approval='pending'` on task enqueue — except manual dispatches, which bypass the gate (manual = explicit human intent). The worker's pending task query (`get_oldest_pending_task`) skips rows where `approval='pending'`.
 
-Approval and rejection are API operations:
-- **Approve**: sets `approval='approved'`, wakes the worker
-- **Reject**: sets `approval='rejected'`, marks as completed with error "rejected"
+Approval and rejection are API operations that propagate to the full coalesce group:
+- **Approve**: sets `approval='approved'` on the root task and all subordinates with `approval='pending'`, then wakes the worker
+- **Reject**: sets `approval='rejected'` and marks as completed with error "rejected" — on both the root task and all pending-approval subordinates
 
 Processing a specific task via `process_one()` auto-approves pending-approval tasks (explicit intent, same rationale as manual dispatch).
 
@@ -142,22 +142,25 @@ Combines two pending tasks for the same job into a single logical unit. Triggere
 1. The older task (by `created_at`) becomes the root — its `coalesced_id` remains NULL
 2. The dragged task gets `coalesced_id` set to the root task's ID
 3. The root task retains its queue position; the subordinate task becomes invisible in the queue view
+4. **Flatten**: if the newly subordinated task had its own subordinates (was itself a root), those subordinates are re-pointed to the new root. This ensures coalesce groups are always flat — depth 1, never nested. Every subordinate points directly to its root.
 
 **Constraints**:
-- Only pending tasks (not started, not completed, not pending-approval)
+- Only pre-execution tasks (not started, not completed, not pending-approval)
 - Same job only — a task's identity is bound to one job; cross-job merge would break prompt assembly, tool configuration, and commit authorship. The UI enforces this structurally by suppressing the merge affordance when tasks belong to different jobs
+- Tasks that are already subordinates (have a non-null `coalesced_id`) cannot be merge targets — they must be split from their current root first
 
-### Split
+### Split (Uncoalesce)
 
 Reverses a merge or automatic coalescing. Takes a root task that has subordinate tasks and makes them independent again.
 
 1. All tasks with `coalesced_id` equal to the root task's ID get `coalesced_id` set back to NULL
-2. Split-off tasks are appended to the end of the pending queue
-3. New independent tasks inherit the job's current `require_approval` setting
+2. Split-off tasks get `sort_order` cleared to NULL and `created_at` reset to the current time — they appear at the end of the queue as if newly created
+3. Split-off tasks inherit the job's current `require_approval` setting — if the gate is now enabled, they enter pending-approval state even if the original merge happened before the gate was set
 
 **Constraints**:
-- Only root tasks that have at least one subordinate can be split
-- Only pending tasks
+- Only root tasks (coalesced_id IS NULL) that have at least one subordinate can be split
+- Only pre-execution tasks (started_at IS NULL and no error)
+- The root task itself is unchanged — it retains its position, trigger, and context. Only subordinates are released
 
 ### Why Coalesced ID Over Record Deletion
 
