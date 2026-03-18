@@ -97,6 +97,13 @@ async def _migrate(db: aiosqlite.Connection):
     )
     await db.commit()
 
+    # Index for dashboard time-windowed aggregation queries
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_completed_at "
+        "ON tasks (completed_at)"
+    )
+    await db.commit()
+
     # Add ON DELETE CASCADE to tasks.job_id and chat_sessions.job_id.
     # These FKs were missing CASCADE — inconsistent with job_properties which has it.
     # Gate on schema version so this runs exactly once.
@@ -1116,6 +1123,140 @@ async def get_config_prefix(prefix: str) -> dict[str, str]:
         "SELECT key, value FROM config WHERE key LIKE ?", (prefix + "%",)
     )
     return {r["key"]: r["value"] for r in rows}
+
+
+# ── Dashboard Aggregation ──────────────────────────────────
+
+async def dashboard_health(window_days: int) -> list[dict]:
+    """Per-job task counts by terminal state within a time window.
+
+    Returns current window stats and previous-window stats for trend calculation.
+    """
+    db = await get_db()
+    sql = """
+        SELECT
+            t.job_id,
+            j.name AS job_name,
+            COUNT(*) AS total,
+            SUM(CASE WHEN t.error IS NULL THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN t.error IS NOT NULL
+                      AND t.error NOT IN ('timed out','cancelled','interrupted','rejected')
+                 THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN t.error = 'timed out' THEN 1 ELSE 0 END) AS timed_out,
+            SUM(CASE WHEN t.error = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+            SUM(CASE WHEN t.error = 'interrupted' THEN 1 ELSE 0 END) AS interrupted,
+            SUM(CASE WHEN t.error = 'rejected' THEN 1 ELSE 0 END) AS rejected
+        FROM tasks t
+        JOIN jobs j ON j.id = t.job_id
+        WHERE t.completed_at IS NOT NULL
+          AND t.completed_at >= datetime('now', ?)
+        GROUP BY t.job_id, j.name
+    """
+    current = await db.execute_fetchall(sql, (f"-{window_days} days",))
+
+    # Previous equivalent window for trend comparison
+    prev_sql = """
+        SELECT
+            t.job_id,
+            COUNT(*) AS total,
+            SUM(CASE WHEN t.error IS NULL THEN 1 ELSE 0 END) AS completed
+        FROM tasks t
+        WHERE t.completed_at IS NOT NULL
+          AND t.completed_at >= datetime('now', ?)
+          AND t.completed_at < datetime('now', ?)
+        GROUP BY t.job_id
+    """
+    prev = await db.execute_fetchall(
+        prev_sql, (f"-{window_days * 2} days", f"-{window_days} days")
+    )
+    prev_by_job = {r["job_id"]: dict(r) for r in prev}
+
+    results = []
+    for r in current:
+        row = dict(r)
+        p = prev_by_job.get(row["job_id"])
+        if p and p["total"] > 0:
+            row["prev_success_rate"] = p["completed"] / p["total"]
+        else:
+            row["prev_success_rate"] = None
+        results.append(row)
+    return results
+
+
+async def dashboard_timeline(window_days: int) -> list[dict]:
+    """Tasks with start/end times for timeline visualization."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        """SELECT t.id, t.job_id, j.name AS job_name,
+                  t.started_at, t.completed_at, t.error
+           FROM tasks t
+           JOIN jobs j ON j.id = t.job_id
+           WHERE t.started_at IS NOT NULL
+             AND t.started_at >= datetime('now', ?)
+           ORDER BY t.started_at""",
+        (f"-{window_days} days",)
+    )
+    return [dict(r) for r in rows]
+
+
+async def dashboard_chains(window_days: int) -> list[dict]:
+    """Agent-triggered tasks for dispatch chain visualization."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        """SELECT t.id, t.job_id, j.name AS job_name,
+                  t.trigger_detail, t.error, t.completed_at
+           FROM tasks t
+           JOIN jobs j ON j.id = t.job_id
+           WHERE t.trigger = 'agent'
+             AND t.completed_at IS NOT NULL
+             AND t.completed_at >= datetime('now', ?)""",
+        (f"-{window_days} days",)
+    )
+    return [dict(r) for r in rows]
+
+
+async def dashboard_tool_usage(window_days: int) -> list[dict]:
+    """Per-job tool frequency and error rates from MCP tool use events."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        """SELECT t.job_id, j.name AS job_name, ce.raw_json
+           FROM chat_events ce
+           JOIN chat_sessions cs ON cs.id = ce.session_id
+           JOIN tasks t ON t.id = cs.task_id
+           JOIN jobs j ON j.id = t.job_id
+           WHERE ce.event_type = 'mcp_tool_use'
+             AND ce.created_at >= datetime('now', ?)""",
+        (f"-{window_days} days",)
+    )
+
+    # Aggregate: per-job tool counts and error counts
+    from collections import defaultdict
+    job_tools: dict[str, dict] = {}  # job_id -> {job_name, tools: {tool -> {count, errors}}}
+    for r in rows:
+        jid = r["job_id"]
+        if jid not in job_tools:
+            job_tools[jid] = {"job_id": jid, "job_name": r["job_name"], "tools": defaultdict(lambda: {"count": 0, "errors": 0})}
+        try:
+            data = json.loads(r["raw_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        tool_name = data.get("tool", "unknown")
+        job_tools[jid]["tools"][tool_name]["count"] += 1
+        result = data.get("result")
+        if isinstance(result, str) and ("error" in result.lower() or "Error" in result):
+            job_tools[jid]["tools"][tool_name]["errors"] += 1
+        elif isinstance(result, dict) and result.get("isError"):
+            job_tools[jid]["tools"][tool_name]["errors"] += 1
+
+    # Convert defaultdicts to plain dicts for JSON serialization
+    return [
+        {
+            "job_id": v["job_id"],
+            "job_name": v["job_name"],
+            "tools": {k: dict(c) for k, c in v["tools"].items()},
+        }
+        for v in job_tools.values()
+    ]
 
 
 # ── Helpers ─────────────────────────────────────────────────

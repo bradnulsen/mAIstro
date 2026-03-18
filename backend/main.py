@@ -3,6 +3,7 @@
 Route modules: job_routes.py, queue_routes.py, chat.py.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -414,6 +415,31 @@ async def list_files(pattern: str = "**/*"):
     require_project()
     files = git.resolve_glob_files(state.PROJECT_DIR, [pattern])
     return files
+
+
+# ── Dashboard Routes ────────────────────────────────────────
+
+@app.get("/api/dashboard")
+async def get_dashboard(window: int = 7):
+    """Aggregated operational dashboard — health, timeline, chains, tool usage.
+
+    Window parameter is in days: 1 (today), 7, 30.
+    """
+    require_project()
+    window = max(1, min(window, 90))
+    health, timeline, chains, tools = await asyncio.gather(
+        db.dashboard_health(window),
+        db.dashboard_timeline(window),
+        db.dashboard_chains(window),
+        db.dashboard_tool_usage(window),
+    )
+    return {
+        "window_days": window,
+        "health": health,
+        "timeline": timeline,
+        "chains": chains,
+        "tools": tools,
+    }
 
 
 # ── Config Routes ───────────────────────────────────────────

@@ -148,6 +148,11 @@ export const deleteChatSession = (sessionId) =>
 export const getChatSessionStatus = (sessionId) =>
   fetchJSON(`/api/chat/sessions/${sessionId}/status`)
 
+// ── Dashboard ──
+
+export const getDashboard = (window = 7) =>
+  fetchJSON(`/api/dashboard?window=${window}`)
+
 // ── Config ──
 
 export const getConfig = () => fetchJSON('/api/config/')
