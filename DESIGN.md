@@ -253,7 +253,7 @@ External MCP servers extend the tool surface available to agents beyond the plat
 
 ### User Interface
 
-The product presents seven views and a persistent chat surface:
+The product presents eight views and a persistent chat surface:
 
 - **Dispatch** — the operational center. Contains two mutually exclusive tabs that divide the task lifecycle:
   - **Queue tab** (default) — two-column kanban layout: **Pending** (left) and **Queued** (right). Pending is the staging area where new tasks land for review and curation — coalescing (merge and split) happens here. Queued is the execution runway — sorting (reorder) happens here, and the worker pulls from here. The currently active task (if any) appears prominently, showing its live streamed output. This tab shows only pre-execution and active tasks — the workspace for what is upcoming and what is running right now. Provides controls for cancelling and approving/rejecting. Tasks can be dragged between columns to promote (pending → queued) or demote (queued → pending). Selecting a task shows its streamed output.
@@ -268,6 +268,7 @@ The product presents seven views and a persistent chat surface:
 - **Jobs** — the primary configuration and dispatch surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Properties are organized by concern (definition, triggers). Inline dispatch for immediate execution — the most direct way to trigger work.
 - **Files** — a project file browser. The user searches for files by glob pattern and reads their contents. Markdown files render as formatted documents. Code files render with syntax highlighting for readability. This view provides direct, read-only access to project content without leaving the application.
 - **MCP Servers** — tool server management as a dedicated surface. See MCP Servers View below.
+- **Dashboard** — aggregated operational visibility. Answers "how are my agents doing?" without requiring the user to inspect individual tasks. Shows job health, task timing, and coordination patterns across configurable time windows. Read-only — no actions, no state changes. See Activity Dashboard below.
 - **Settings** — platform configuration: auto-queueing toggle, default model, default timeout.
 - **Chat** — a persistent, resizable tray providing interactive conversation with the LLM in the project context.
 
@@ -320,6 +321,67 @@ MCP server configuration is a first-class surface with its own rail item. It is 
 
 **Relationship to job configuration:** The MCP Servers view is where servers are registered and managed. The job configuration surface (Jobs view) is where servers are assigned to specific jobs via the `mcp_servers` property. The per-job tooltip directs users to the MCP Servers view when they need to register new servers. This separation keeps each surface focused: one place to manage servers, another to assign them.
 
+### Activity Dashboard
+
+The Dispatch view shows individual tasks — what's running, what happened. As task volume grows through automated triggers, scheduled jobs, and agent-initiated dispatches, the user needs aggregated visibility: patterns across tasks, not just the tasks themselves. The Activity Dashboard is this surface.
+
+**What the dashboard answers:**
+
+- "How are my agents doing?" — per-job success and failure rates over time.
+- "What needs attention?" — recurring failures, timeout patterns, jobs that consistently underperform.
+- "When did things run?" — temporal patterns in task execution: scheduling conflicts, long-running outliers, idle gaps.
+- "How do agents coordinate?" — which jobs dispatch other jobs, how deep chains go, where coordination breaks down.
+
+**The dashboard is read-only.** It does not create, modify, or dispatch anything. It aggregates existing data from the `tasks` table and MCP tool call logs. No schema changes, no new data collection — the platform already records everything the dashboard needs. The dashboard is a lens on data that exists.
+
+#### Job Health Summary
+
+Each job shows a health summary across a selectable time window (today, 7 days, 30 days):
+
+- **Task counts** — total tasks completed, failed, timed out, cancelled, interrupted, rejected. The breakdown by terminal state is essential — a job with 10 failures and 10 timeouts has two different problems.
+- **Success rate** — completed tasks as a proportion of all terminal tasks. This is the single number that captures job health. A job running at 70% success needs investigation; one at 95% is healthy.
+- **Trend indicator** — whether the success rate is improving, stable, or degrading compared to the previous equivalent window. The user needs to know not just current health but direction.
+
+Jobs with low success rates or degrading trends are visually prominent — the dashboard surfaces what needs attention without the user hunting for it. The ordering and emphasis are health-driven, not alphabetical.
+
+#### Timeline
+
+A temporal view of task execution: when tasks ran and how long they took.
+
+- **Horizontal bars** per task, positioned by start time and sized by duration. Color-coded by job. The user sees scheduling density, idle gaps, and outliers at a glance.
+- **No chart library.** The timeline is rendered with basic HTML/CSS — positioned elements, not SVG or canvas. This keeps the implementation minimal and the rendering predictable.
+- **Configurable window** — the same time windows as the health summary (today, 7d, 30d). The timeline and health summary share a time selector so the user sees consistent data.
+- **Long-running outliers** are visually distinct. A task that took 10x the job's median duration stands out without the user calculating.
+
+The timeline reveals patterns that individual task inspection cannot: bunching (too many tasks in a window), gaps (periods of no activity when activity was expected), and overlap awareness (even though execution is sequential, queued-at times reveal demand patterns).
+
+#### Agent Dispatch Chains
+
+When agents dispatch other agents, the resulting chains are a new dimension of system behavior that is invisible in the Dispatch view's flat task list.
+
+- **Dispatch graph** — for each agent-initiated task, show the chain: which task dispatched it, which task dispatched that one, back to the original trigger. This is a tree, not a cycle — each task has at most one originating task.
+- **Chain depth** — how many levels deep agent-initiated dispatches go. A chain of depth 1 (agent dispatches one task) is normal coordination. Depth 3+ may indicate emergent behavior worth inspecting.
+- **Job-to-job patterns** — which jobs dispatch which other jobs, aggregated over time. This reveals the coordination topology: "Architect always dispatches Engineer," "Engineer never dispatches anything." The user understands agent relationships without reading individual task histories.
+
+This surface makes the `agent` trigger type legible. Without it, agent coordination is an invisible graph embedded in trigger metadata.
+
+#### Tool Usage Patterns
+
+Each job's agent uses tools differently. The audit trail (MCP tool call logs) already records every tool invocation. The dashboard surfaces patterns:
+
+- **Per-job tool frequency** — which internal MCP tools each job uses most. A job that calls `git_commit` 20 times per task works differently than one that calls it once. A job that never uses `read_file` despite having file subscriptions may have misconfigured instructions.
+- **Tool errors** — tool calls that return errors, aggregated by job and tool. Persistent tool errors indicate a configuration or instruction problem.
+
+Tool patterns are secondary to health and timing — they support investigation, not triage. The user notices a job has low success rates (health summary), checks when it runs (timeline), then looks at what it does (tool patterns) to diagnose the problem.
+
+#### Design Principles
+
+- **Aggregation, not raw data.** The dashboard never shows individual task records — that's what the Dispatch view does. Every element is a summary, a count, a rate, or a pattern derived from multiple tasks.
+- **Time-windowed.** All data is scoped to a configurable time window. The dashboard shows the recent picture, not all-time history. The time selector is global to the view — health summary, timeline, and dispatch chains all respond to the same window.
+- **Health-driven emphasis.** Jobs that need attention are visually prominent. A healthy system fades into the background; problems surface. This is the opposite of a status board that treats everything equally.
+- **Derived from existing data.** The dashboard reads from `tasks` (lifecycle timestamps, trigger metadata, job associations) and MCP tool call session events (tool names, results). It introduces no new data collection, no new tables, no new event types. If the data doesn't already exist, the dashboard doesn't show it.
+- **No actions.** The dashboard is purely informational. The user cannot dispatch, cancel, retry, or configure from the dashboard. Actions belong on the surfaces designed for them (Dispatch, Jobs). The dashboard informs decisions; other views execute them.
+
 ---
 
 ## Constraints
@@ -332,6 +394,7 @@ MCP server configuration is a first-class surface with its own rail item. It is 
 - **Project isolation**: each project has its own SQLite database. The app-level database holds only the recent-projects list.
 - **Git is content source-of-truth**: all project content lives in git. The SQLite database holds only operational state (job configs, task records, chat sessions).
 - **Single active project**: the platform operates on one project at a time. The active project is global state that all operations reference.
+- **Dashboard is read-only**: the Activity Dashboard performs only read queries on existing data. It introduces no new tables, no new event types, and no write operations. All aggregations derive from `tasks` lifecycle columns and MCP tool call session events that already exist.
 
 ### Data Integrity
 
