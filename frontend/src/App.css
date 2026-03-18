@@ -400,7 +400,7 @@ label.muted-text {
 
 .kanban-column-count {
   background: var(--hover-bg);
-  padding: 1px 6px;
+  padding: 1px var(--space-3);
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
 }
@@ -713,7 +713,7 @@ label.muted-text {
   display: flex;
   gap: 0;
   border-bottom: 1px solid var(--border-light);
-  margin-bottom: 14px;
+  margin-bottom: var(--space-7);
 }
 
 .task-tab-btn {
@@ -721,7 +721,7 @@ label.muted-text {
   border: none;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
-  padding: 4px 14px 6px;
+  padding: var(--space-2) var(--space-7) var(--space-3);
   font-size: var(--text-md);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -790,10 +790,10 @@ label.muted-text {
 .dispatch-queued {
   font-size: var(--text-sm);
   color: var(--success);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-4);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .dispatch-queued button {
@@ -1062,7 +1062,7 @@ label.muted-text {
 .chat-message .bubble {
   display: inline-block;
   max-width: 100%;
-  padding: 10px 14px;
+  padding: var(--space-5) var(--space-6);
   border-radius: var(--radius-lg);
   font-size: var(--text-md);
   word-break: break-word;
@@ -1667,8 +1667,8 @@ label.muted-text {
 .label-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-bottom: 2px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 .label-row label {
@@ -1846,7 +1846,7 @@ label.muted-text {
 
 .loading {
   text-align: center;
-  padding: 20px;
+  padding: var(--space-8);
   color: var(--text-muted);
 }
 
@@ -1911,7 +1911,7 @@ label.muted-text {
   font-size: var(--text-sm);
   background: var(--code-bg);
   color: var(--code-text);
-  padding: 8px;
+  padding: var(--space-4);
   border-radius: var(--radius);
   overflow: auto;
   flex: 1;
@@ -1969,7 +1969,7 @@ label.muted-text {
 .section-head {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-2);
   margin-bottom: var(--space-4);
   border-bottom: 1px solid var(--border-light);
   padding-bottom: var(--space-2);
@@ -2047,7 +2047,7 @@ label.muted-text {
 
 .mcp-results-error {
   font-size: var(--text-md);
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .mcp-results-tools-label {
@@ -2055,7 +2055,7 @@ label.muted-text {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
-  margin-top: 4px;
+  margin-top: var(--space-2);
 }
 
 .mcp-results-tools-list {
@@ -2295,13 +2295,13 @@ label.muted-text {
 }
 
 .files-empty {
-  padding: 20px 12px;
+  padding: var(--space-8) var(--space-6);
   color: var(--text-muted);
   font-size: var(--text-sm);
 }
 
 .files-error {
-  padding: 8px 12px;
+  padding: var(--space-4) var(--space-6);
   color: var(--danger);
   font-size: var(--text-sm);
 }
@@ -2409,7 +2409,7 @@ label.muted-text {
 
 .md-output {
   font-size: var(--text-md);
-  padding: 8px 10px;
+  padding: var(--space-4) var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
@@ -2422,7 +2422,7 @@ label.muted-text {
   background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  padding: 1px var(--space-3);
   margin-right: var(--space-2);
   margin-bottom: var(--space-1);
   font-size: var(--text-xs);
@@ -2493,20 +2493,20 @@ label.muted-text {
 .task-create-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .task-create-form-row {
   display: flex;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 /* ── Chat New Session Bar ── */
 
 .chat-new-bar {
-  padding: 6px;
+  padding: var(--space-3);
   display: flex;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
 .chat-new-bar button { flex: 1; }
@@ -2516,7 +2516,7 @@ label.muted-text {
 .job-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .job-header h2 {
@@ -2555,10 +2555,10 @@ label.muted-text {
 .resolved-file-item .file-size { color: var(--text-muted); }
 
 /* Dispatch error message spacing */
-.dispatch-error { margin-bottom: 8px; }
+.dispatch-error { margin-bottom: var(--space-4); }
 
 /* Danger zone sub-errors */
-.task-section.danger .error-text { margin-top: 6px; }
+.task-section.danger .error-text { margin-top: var(--space-3); }
 
 /* ── Confirmation Text ── */
 
@@ -2567,7 +2567,7 @@ label.muted-text {
 
 /* ── Detail Action Errors (Queue + History) ── */
 
-.detail-actions .error-text { margin-top: 6px; }
+.detail-actions .error-text { margin-top: var(--space-3); }
 
 /* ── MCP Server Content Block ── */
 
