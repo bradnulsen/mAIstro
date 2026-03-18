@@ -383,6 +383,17 @@ async def agent_dispatch(req: AgentDispatchRequest):
     if req.source_job_id == req.target_job_id:
         raise HTTPException(400, "Self-dispatch is prohibited")
 
+    # Depth limiting: prevent runaway agent dispatch cascades
+    depth = await db.get_agent_dispatch_depth(req.source_task_id)
+    limit_str = await db.get_config("agent_dispatch_depth_limit")
+    depth_limit = int(limit_str) if limit_str else 5
+    if depth >= depth_limit:
+        raise HTTPException(
+            429,
+            f"Agent dispatch depth limit reached ({depth}/{depth_limit}). "
+            f"Chain from task #{req.source_task_id} is too deep."
+        )
+
     allowed_targets = source_job["properties"].get("allowed_dispatch_targets") or []
     if not allowed_targets:
         raise HTTPException(403, f"Job '{req.source_job_id}' has no allowed dispatch targets")

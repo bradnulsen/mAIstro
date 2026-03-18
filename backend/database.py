@@ -363,6 +363,7 @@ INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
     ('allowed_dispatch_targets', '[]', 'json');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
+INSERT OR IGNORE INTO config (key, value) VALUES ('agent_dispatch_depth_limit', '5');
 """
 
 
@@ -646,6 +647,39 @@ async def get_task(task_id: int) -> dict | None:
         (task_id,)
     )
     return dict(rows[0]) if rows else None
+
+
+async def get_agent_dispatch_depth(task_id: int) -> int:
+    """Trace the agent dispatch chain back from a task and return its depth.
+
+    Each agent-triggered task has trigger_detail of format 'source_job_id#source_task_id'.
+    Follows the chain until a non-agent trigger is found or the chain breaks.
+    Returns the number of agent dispatch hops (0 if the task itself is not agent-triggered).
+    """
+    conn = await get_db()
+    depth = 0
+    current_id = task_id
+    seen = set()
+    while current_id and current_id not in seen:
+        seen.add(current_id)
+        rows = await conn.execute_fetchall(
+            "SELECT trigger, trigger_detail FROM tasks WHERE id = ?",
+            (current_id,)
+        )
+        if not rows:
+            break
+        row = rows[0]
+        if row["trigger"] != "agent":
+            break
+        depth += 1
+        # trigger_detail is 'source_job_id#source_task_id'
+        detail = row["trigger_detail"] or ""
+        parts = detail.rsplit("#", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            current_id = int(parts[1])
+        else:
+            break
+    return depth
 
 
 async def get_task_queue(limit: int = 50) -> list[dict]:
