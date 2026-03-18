@@ -51,6 +51,17 @@ Two columns extend the `tasks` table beyond the core lifecycle:
 - **`queued_at`** — nullable timestamp recording when the task was promoted to queued state. NULL means the task is still pending. Task state is derived from lifecycle timestamps: pending (`queued_at IS NULL AND started_at IS NULL`), queued (`queued_at IS NOT NULL AND started_at IS NULL`), active (`started_at IS NOT NULL AND completed_at IS NULL`). When auto-queueing is enabled, `queued_at` is set at creation time (task skips pending). Transfer between columns sets or clears this field.
 - **`coalesced_id`** — nullable foreign key referencing another `tasks` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a task ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
 
+### Dashboard Aggregation Queries
+
+The Activity Dashboard (see [Frontend — Dashboard](frontend.md#dashboard)) introduces a read-only aggregation workload over existing tables. Unlike queue operations which filter on lifecycle state (pending, queued, active), dashboard queries filter on `completed_at` within a time window and aggregate across jobs. Key patterns:
+
+- **Health**: `tasks` grouped by `job_id`, classified by `error` column value, filtered by `completed_at` range
+- **Timeline**: `tasks` ordered by `started_at`, reading both `started_at` and `completed_at` for duration
+- **Dispatch chains**: `tasks` filtered on `trigger = 'agent'`, following `trigger_detail` references
+- **Tool usage**: `chat_events` (where `event_type = 'mcp_tool_use'`) joined through `chat_sessions.task_id` → `tasks.job_id`
+
+The existing indexes are optimized for queue operations (filtering on `started_at IS NULL`, `completed_at IS NULL`). Time-windowed historical queries may benefit from an additional index on `tasks(completed_at)` — profiling under real workloads will determine if this is needed.
+
 ### Key Invariants
 
 - The `tasks.context` column stores pre-formatted context text built at the enqueue site

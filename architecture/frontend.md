@@ -8,7 +8,7 @@ The frontend is a single-page React application that provides the operator inter
 
 `App.jsx` provides the outer layout:
 
-- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, MCP Servers, Settings
+- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, MCP Servers, Dashboard, Settings
 - **Status bar**: horizontal strip showing all jobs with running indicators (pulsing dot for active tasks)
 - **Main area**: renders the active view
 - **Chat tray**: a resizable side panel (drag-to-resize, click-to-toggle) housing the interactive chat
@@ -50,6 +50,30 @@ A project file browser providing read-only access to project content. The user s
 
 ### MCP Servers
 A dedicated surface for managing external tool servers. MCP servers extend what agents can do — they are a primary capability concern, not a secondary platform setting. The view manages the global server registry: registration, health monitoring, enable/disable, and removal. Per-job server assignment remains on the Jobs configuration surface. See [Tool Mediation — External MCP Servers](tool-mediation.md#external-mcp-servers) for lifecycle details.
+
+### Dashboard
+
+Aggregated operational visibility — a read-only surface that answers "how are my agents doing?" without inspecting individual tasks. All data derives from existing tables (`tasks` lifecycle columns, `chat_events` with `mcp_tool_use` event type, `chat_sessions` linking sessions to tasks). No new data collection, no write operations.
+
+**Time window selector** — a global control (today, 7 days, 30 days) that scopes all dashboard sections to the same window. All queries filter on `completed_at` (or `started_at` for the timeline) within the selected range.
+
+**Four sections:**
+
+- **Job Health Summary** — per-job task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Jobs are ordered by health — low success rates and degrading trends are visually prominent. Terminal state breakdown uses the existing `error` column convention: NULL = completed, specific strings = distinct failure modes (see [Dispatch Engine — Terminal States](dispatch-engine.md#terminal-states)).
+
+- **Timeline** — horizontal bars per task positioned by `started_at` and sized by duration (`completed_at - started_at`), color-coded by job. Rendered with positioned HTML/CSS elements — no chart library. Reveals scheduling density, idle gaps, and duration outliers. Long-running tasks (significantly above the job's median) are visually distinct.
+
+- **Agent Dispatch Chains** — visualizes the `agent` trigger type. For agent-initiated tasks, traces the chain back to the original trigger using `trigger_detail` (which carries the originating task reference). Shows chain depth and job-to-job dispatch patterns aggregated over the time window. This makes the coordination topology legible — which jobs dispatch which, how deep chains go, where coordination breaks down.
+
+- **Tool Usage Patterns** — per-job tool frequency and error rates derived from `chat_events` where `event_type = 'mcp_tool_use'`. Joins through `chat_sessions` (session → task → job) to attribute tool calls to jobs. Surfaces persistent tool errors that indicate configuration or instruction problems. Secondary to health and timing — supports investigation after triage.
+
+**Data access pattern**: the dashboard introduces a new query surface over existing tables but requires no schema changes. The key queries are time-windowed aggregations:
+- `tasks` grouped by `job_id` with terminal state classification (from `error` column), filtered by `completed_at` within the time window
+- `tasks` with `started_at` and `completed_at` for timeline positioning, filtered by time window
+- `tasks` filtered by `trigger = 'agent'` with `trigger_detail` for dispatch chain reconstruction
+- `chat_events` joined through `chat_sessions` → `tasks` for per-job tool attribution, filtered by event timestamp
+
+These queries may benefit from an index on `tasks(completed_at)` for efficient time-window filtering — the current indexes (`idx_tasks_pending`, `idx_tasks_running`) are optimized for queue operations, not historical aggregation. This is an implementation concern for the Engineer.
 
 ### Settings (`Settings.jsx`)
 Platform configuration: auto-queueing toggle, default model, default timeout. Auto-queueing controls where newly created tasks land — when enabled, tasks skip pending and go directly to queued; when disabled, all new tasks enter pending.
