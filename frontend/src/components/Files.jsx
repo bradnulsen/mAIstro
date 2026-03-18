@@ -209,7 +209,7 @@ export default function Files() {
               <SyntaxHighlighter
                 language={lang}
                 style={oneDark}
-                customStyle={{ margin: 0, fontSize: 11, borderRadius: 0, background: 'var(--code-bg)' }}
+                customStyle={{ margin: 0, fontSize: 'var(--text-sm)', borderRadius: 0, background: 'var(--code-bg)' }}
                 codeTagProps={{ style: { fontFamily: 'var(--font)' } }}
               >
                 {content}

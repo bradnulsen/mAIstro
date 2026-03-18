@@ -59,6 +59,21 @@
   --textarea-max-height: 200px;
   /* Status dot size — used by .status-dot; task-list overrides were removed once this was defined */
   --size-dot: 6px;
+  /* Structural layout dimensions */
+  --width-rail: 52px;
+  --size-icon: 36px;
+  --height-header: 42px;
+  /* Job color palette — 10 stable colors for job identity in charts and timelines */
+  --job-color-0: #4a90d9;
+  --job-color-1: #d94a4a;
+  --job-color-2: #4ad97a;
+  --job-color-3: #d9a84a;
+  --job-color-4: #9b59b6;
+  --job-color-5: #1abc9c;
+  --job-color-6: #e67e22;
+  --job-color-7: #3498db;
+  --job-color-8: #e74c3c;
+  --job-color-9: #2ecc71;
 }
 
 body {
@@ -78,8 +93,8 @@ body {
 }
 
 .rail {
-  width: 52px;
-  min-width: 52px;
+  width: var(--width-rail);
+  min-width: var(--width-rail);
   background: var(--rail-bg);
   border-right: 1.5px solid var(--border);
   display: flex;
@@ -101,8 +116,8 @@ body {
 }
 
 .rail-icon {
-  width: 36px;
-  height: 36px;
+  width: var(--size-icon);
+  height: var(--size-icon);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -136,7 +151,7 @@ body {
   border-bottom: 1.5px solid var(--border);
   background: var(--surface);
   gap: var(--space-6);
-  min-height: 42px;
+  min-height: var(--height-header);
 }
 
 .header-bar h1 {

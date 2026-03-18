@@ -7,11 +7,11 @@ const WINDOWS = [
   { label: '30 days', days: 30 },
 ]
 
-// Stable color palette for job assignment
-const JOB_COLORS = [
-  '#4a90d9', '#d94a4a', '#4ad97a', '#d9a84a', '#9b59b6',
-  '#1abc9c', '#e67e22', '#3498db', '#e74c3c', '#2ecc71',
-]
+// Stable color palette for job assignment — values defined as CSS tokens (--job-color-0 … --job-color-9)
+const root = document.documentElement
+const JOB_COLORS = Array.from({ length: 10 }, (_, i) =>
+  getComputedStyle(root).getPropertyValue(`--job-color-${i}`).trim()
+)
 
 function jobColor(jobId, jobMap) {
   if (!jobMap.has(jobId)) jobMap.set(jobId, jobMap.size % JOB_COLORS.length)
