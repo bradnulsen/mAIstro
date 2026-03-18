@@ -10,34 +10,32 @@ What's in place:
 - **Outcome summaries** — auto-derived from commits between `start_commit` and `result_commit`, displayed inline on completed tasks
 - **Outcome in dependency context** — downstream agents receive upstream outcome summaries in their trigger context
 - **Job colors** — visual identifiers distinguishing jobs across all surfaces
-- **Four trigger types** — manual, commit (watch via subscriptions), schedule (cron), dependency (declarative `depends_on`, circular chains permitted)
+- **Five trigger types** — manual, commit (watch via subscriptions), schedule (cron), dependency (declarative `depends_on`, circular chains permitted), agent (imperative cross-job dispatch)
 - **Approval gates** — per-task `require_approval`, pending/approved/rejected lifecycle, manual dispatch bypasses
 - **Dispatch continuity** — resume (CLI `--resume`) and retry for failed/timed-out dispatches
 - **Dispatch diff view** — `start_commit`/`result_commit` tracking with inline diff display
 - **Live dispatch streaming** — SSE with real-time text, tool use, and thinking indicator
 - **Timeout enforcement** — configurable per-task with watchdog, graceful terminate then kill
-- **Coalescing** — trigger-specific and global modes; manual queue composition (merge/split) in pending
-- **Internal MCP server** — platform-hosted, context-aware tool surface with git operations, file access, and task info. Every tool call is observable and auditable
-- **Tool control** — per-task `allowed_tools` and `mcp_servers` with discoverable inventories and full MCP server lifecycle
+- **Coalescing** — trigger-specific and global modes; manual queue composition (merge/split) in pending; agent triggers coalesce like other types
+- **Internal MCP server** — platform-hosted, context-aware tool surface with git operations, file access, task info, branch management, and inter-agent dispatch. Every tool call is observable and auditable
+- **Three-dimensional tool control** — `allowed_tools` (CLI), `allowed_internal_tools` (internal MCP), `mcp_servers` (external MCP) compose independently with discoverable inventories
+- **Branch operations** — agents can create, switch, and merge branches with enforced naming conventions and audit trail
+- **Inter-agent dispatch** — agents can enqueue tasks for other jobs via `dispatch_task`, query queue state via `get_queue_status`, governed by `allowed_dispatch_targets` with loop prevention
 - **Chat, Files, Feed, Settings** — complete supporting surfaces
 
 ## Diagnosis
 
-The platform is operationally complete and the first feedback loop is closed. Agents dispatch, produce outcomes, and those outcomes are summarized and forwarded to downstream agents. The two-stage queue gives users curation control; the history view makes success and failure spatially distinct.
+The platform has crossed a critical capability threshold. Tool governance and inter-agent coordination are now live — agents can manage branches, dispatch work to other agents, query queue state, and be selectively restricted from internal tools. The orchestrating-job pattern is now possible: a coordinator creates a branch, dispatches scoped tasks, monitors completion, and merges results. This is the first time agents can do more than react to predetermined triggers.
 
-A significant milestone: the design specifications for session interrogation, tool governance, branch operations, and inter-agent coordination are now formalized in DESIGN.md. The architecture has absorbed them. Three of the four priorities are now implementation-ready with complete behavioral contracts. This shifts the strategic calculus from "what to design next" to "what to build next" — and implementation readiness matters for ordering.
+Two gaps remain:
 
-Three gaps remain:
+**Outcome interrogation.** When a task completes, the user can see the outcome summary and diff, but cannot ask follow-up questions. The agent's session — its full reasoning, decisions, and context — is locked behind the streamed output log. The user wants to have a conversation with the agent that did the work, not just read what it produced. Critically, this conversation must be read-only: interrogation is not a license to make more changes. All new work flows through new tasks. **Design complete** — session resume via `--resume`, read-only tool stripping, UI integration in chat tray, all specified. Now that tool governance is implemented, the read-only restriction is a natural application of `allowed_internal_tools` — no special-case code needed.
 
-**Outcome interrogation.** When a task completes, the user can see the outcome summary and diff, but cannot ask follow-up questions. The agent's session — its full reasoning, decisions, and context — is locked behind the streamed output log. The user wants to have a conversation with the agent that did the work, not just read what it produced. Critically, this conversation must be read-only: interrogation is not a license to make more changes. All new work flows through new tasks. **Design complete** — session resume via `--resume`, read-only tool stripping, UI integration in chat tray, all specified.
-
-**Agent autonomy and blast radius control.** Agents operate in isolation with a fixed internal tool surface. They cannot manage branches, cannot be selectively restricted from internal tools, and have no imperative coordination channel. The trigger system handles predictable cascades, but agents need richer primitives — particularly git branch management — for cases like orchestrating feature sprints where an upstream job creates a branch, dispatches work on it, and merges results. **Design complete** — `allowed_internal_tools`, three branch tools, `dispatch_task`, `get_queue_status`, `allowed_dispatch_targets`, `agent` trigger type, loop prevention, all specified.
-
-**Operational visibility.** The platform works well when the user is actively watching — dispatching jobs, scanning the queue, reading history. But as task volume grows through automated triggers, the system generates more activity than a single person can track by inspection. There is no aggregated view of system health, no way to spot patterns across tasks. **Not yet designed** — scope is clear but no formal specification exists.
+**Operational visibility.** The platform works well when the user is actively watching — dispatching jobs, scanning the queue, reading history. But as task volume grows through automated triggers and now agent-initiated dispatches, the system generates more activity than a single person can track by inspection. There is no aggregated view of system health, no way to spot patterns across tasks. Agent dispatch chains add a new dimension of activity that is invisible without dedicated tooling. **Not yet designed** — scope is clear but no formal specification exists.
 
 ## Guiding Policy
 
-**Build what's designed, then design what's next.** The design specifications for session interrogation, tool governance, and inter-agent coordination are complete. These are not aspirational — they have behavioral contracts, property definitions, safety constraints, and UI integration points. The strategic imperative shifts from "decide what to do" to "execute in the right order." Implementation readiness now factors into priority ordering alongside leverage. A fully-designed feature with moderate leverage ships before an undesigned feature with high leverage, because the design pipeline is not free — it takes a full cycle through Designer and Architect before implementation can begin.
+**Close the loop on what's designed, then expand the surface.** Tool governance and inter-agent coordination shipped in a single implementation pass. Session interrogation is the last designed-but-unbuilt feature — it completes the operator's ability to understand what agents did and why. After that, the platform needs its first design cycle for operational visibility: the dashboard that turns growing task volume into legible patterns. The guiding constraint: ship the remaining designed feature first, then invest in the design work that unblocks the next wave.
 
 ## Priority 1: Task Session Interrogation
 
@@ -53,58 +51,28 @@ Three gaps remain:
 
 **Second-order effects:** This changes how the operator relates to completed work. Instead of treating outcomes as final artifacts to accept or reject, the user can interrogate the reasoning, build understanding, and make better decisions about what to dispatch next. It also provides a natural feedback channel — the user's questions reveal what information the agent should have surfaced proactively, which directly informs dashboard design when that comes.
 
-## Priority 2: Platform Tool Governance
-
-**The problem:** The internal MCP tool surface is currently all-or-nothing — every agent gets every internal tool. The user can control CLI tools via `allowed_tools` and external MCP servers via `mcp_servers`, but internal tools (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_jobs`) are always present. Meanwhile, the tool surface itself is too narrow for emerging use cases — there are no branch management operations, which blocks the orchestrating-job pattern where a coordinator creates a branch, dispatches work, and merges results.
-
-**Why second:** Design is complete. This is the prerequisite for safe agent autonomy (P3). Before agents can coordinate and manage their own blast radius, the platform needs two things: a richer internal tool surface (branch operations) and per-job control over that surface. Expanding tools without governance is reckless; governance without the tools is academic. They ship together. Also enables P1's read-only restriction to be implemented cleanly — session interrogation's write-tool stripping is a special case of the general tool governance mechanism.
-
-**Specifically:**
-- **Internal tool control** — a new `allowed_internal_tools` job property selects which internal MCP tools the job's agent can access. When set, only the specified tools are presented. When empty, all internal tools are available (backward compatible). A read-only job might be restricted to `list_files`, `read_file`, `git_log`, `git_diff`. A writer job gets the full set.
-- **Git branch tools** — three new internal MCP tools:
-  - `git_branch_create` — create a new branch from a specified base (defaults to current HEAD). Enforced naming conventions (e.g., `<job-id>/<description>`).
-  - `git_branch_switch` — switch the working directory to a named branch. The platform tracks which branch a task is operating on for audit purposes.
-  - `git_branch_merge` — merge a source branch into the current branch. Surfaces merge conflicts as structured tool output rather than silent failures.
-- **Branch audit trail** — branch operations are logged in the task session like all other MCP tool calls. The platform can reconstruct which branches a task created, switched to, and merged.
-- **Three-dimensional tool composition** — `allowed_tools` (CLI), `allowed_internal_tools` (internal MCP), and `mcp_servers` (external MCP) compose into the complete tool surface at dispatch time. Each is independently configurable with "everything available" as default.
-
-**Second-order effects:** These tools are the building blocks for the orchestrating-job pattern. Internal tool control also makes session interrogation's read-only mode a natural configuration rather than a special case — it's just an `allowed_internal_tools` restriction applied to the resumed session.
-
-## Priority 3: Inter-Agent Coordination
-
-**The problem:** Agents operate in isolation. They can trigger downstream work through commits and dependencies, but these are declarative, predetermined channels. There is no way for an agent to say "I found an issue the Engineer should address" or "the queue is backed up, I should skip non-critical work." The trigger system handles predictable cascades; agents need imperative tools for emergent coordination.
-
-**Why third:** Design is complete. Depends on P2 — the orchestrating-job pattern requires both branch tools and dispatch tools, and coordination without governance would allow agents to dispatch unconstrained work on uncontrolled branches. P2 provides the blast-radius containment; P3 provides the coordination primitives that operate within those boundaries.
-
-**Specifically:**
-- **`dispatch_task` MCP tool** — allows an agent to enqueue a task for another job, with a message explaining why. Creates a trigger type `agent` attributed to the dispatching task
-- **`get_queue_status` MCP tool** — read-only view of queue state. Gives agents situational awareness about what's pending, running, and backed up
-- **`allowed_dispatch_targets` job property** — controls which other jobs an agent can dispatch. When empty, the agent cannot dispatch other jobs. Prevents unconstrained cross-agent triggering
-- **Dispatch attribution** — tasks created by agents are tagged with the originating task, creating a provenance chain visible in history
-- **Loop prevention** — no self-dispatch, depth limit on agent-initiated dispatch chains, coalescing absorbs redundant enqueues
-- **Orchestration pattern** — with P2's branch tools and P3's dispatch tools, a coordinator job can: create a feature branch → dispatch scoped tasks on that branch → monitor queue for completion → merge the branch. This is the full vision of containerized feature sprints.
-
-## Priority 4: Activity Dashboard
+## Priority 2: Activity Dashboard
 
 **The problem:** Understanding system behavior requires clicking through individual tasks. No aggregated view of health, performance, or patterns. The user manages agents but cannot see the forest.
 
-**Why fourth:** Highest-leverage operator tool in isolation, but lacks a design specification. P1-P3 are fully designed with behavioral contracts — they can move straight to implementation. The dashboard needs a design pass through Designer and Architect before the Engineer can build it. By the time P1-P3 ship, the dashboard design can be developed in parallel, and the platform will have richer data to aggregate (branch operations, agent dispatch provenance, session interrogation patterns).
+**Why second:** The highest-leverage operator tool remaining. Now that tool governance and agent coordination are live, the system generates significantly more activity — agent-initiated dispatches, branch operations, cross-job coordination chains. This activity is invisible without aggregation. The dashboard needs a design pass through Designer and Architect, but should enter the design pipeline now so it's implementation-ready by the time P1 ships. The platform now has richer data to aggregate: branch operations, agent dispatch provenance, and tool access patterns alongside task success/failure.
 
 **Specifically:**
 - **Summary panel** — success/fail/timeout counts per job over configurable time windows (today, 7d, 30d). Answers "how are my agents doing?" at a glance
 - **Job health indicators** — surface recurring failures, timeout patterns. Highlight jobs that need attention without the user hunting through history
 - **Timeline view** — when tasks ran, how long they took. Simple horizontal bars, no chart library. Reveals scheduling conflicts, long-running outliers, and idle gaps
 - **Tool usage patterns** — which MCP tools each job uses most, derived from the existing audit trail. Helps the user understand agent behavior and identify tool configuration opportunities
+- **Agent dispatch chains** — trace provenance from agent-initiated dispatches. Show which jobs dispatch which other jobs and how deep chains go. This data now exists via the `agent` trigger type
 - Data comes from `tasks` table plus MCP tool call logs — read-only aggregation, no schema changes
 
-**Second-order effects:** The dashboard creates visibility that drives instruction tuning. When a user sees that the Engineer job fails 30% of the time on watch-triggered tasks, they know where to focus. By shipping after P1-P3, the dashboard can also surface branch operation patterns, agent dispatch chains, and interrogation frequency — richer signals than task success/failure alone.
+**Second-order effects:** The dashboard creates visibility that drives instruction tuning. When a user sees that the Engineer job fails 30% of the time on watch-triggered tasks, they know where to focus. Branch operation patterns, agent dispatch chains, and tool access distributions are all now available as data — the dashboard is the surface that makes them legible.
 
 ## Deferred
 
 Valuable but deliberately postponed:
 
-- **Bash restriction** — structured MCP tools as the default, with Bash as a governed escape hatch. Requires the MCP tool surface to be comprehensive enough that agents don't need Bash for routine operations. P2 (tool governance) and P3 (coordination) will expand the tool surface, making this more viable afterward.
-- **Parallel dispatch** — concurrent execution via git worktrees. High complexity (merge conflicts, branch management, concurrent MCP sessions). P2's branch tools are a prerequisite — parallel dispatch on a single branch is unsafe. Revisit once branch management is proven and the dashboard reveals whether sequential processing is a real bottleneck.
+- **Bash restriction** — structured MCP tools as the default, with Bash as a governed escape hatch. The tool surface is now broad enough (branch ops, dispatch, queue status) that agents can do most coordination without Bash. The `allowed_internal_tools` mechanism makes restriction possible. Revisit once real usage patterns reveal whether agents still rely on Bash for operations that could be structured tools.
+- **Parallel dispatch** — concurrent execution via git worktrees. High complexity (merge conflicts, concurrent MCP sessions). Branch tools are now implemented, which removes the safety prerequisite. Revisit once the dashboard reveals whether sequential processing is a real bottleneck and once the orchestration pattern sees real use.
 - **Auto-evaluation** — LLM judges dispatch output quality automatically. Needs a calibration dataset. Revisit once the dashboard reveals performance patterns and task session interrogation (P1) gives the operator a way to validate agent reasoning.
 - **Prompt effectiveness tracking** — correlate job instruction changes with task success rates. Needs enough task history to be statistically meaningful. Falls out naturally once the dashboard surfaces job-level health.
 - **Conditional dependencies** — "only run if upstream output matches X." Adds significant complexity to the trigger model for a use case that hasn't surfaced yet.
@@ -142,6 +110,8 @@ Valuable but deliberately postponed:
 - **Watch Semantics** — subscriptions presence = watch active, no separate toggle.
 - **Settings and Configuration UI** — queue behavior (auto-queueing/manual), default model, default timeout, MCP server management.
 - **Tool Discoverability** — platform presents available CLI tools, internal MCP tools, and external MCP server tools as selectable options.
+- **Platform Tool Governance** (was P2) — `allowed_internal_tools` per-job property, three-dimensional tool composition (CLI + internal MCP + external MCP), git branch operations (`git_branch_create` with naming conventions, `git_branch_switch`, `git_branch_merge`), branch audit trail via MCP tool call logging.
+- **Inter-Agent Coordination** (was P3) — `dispatch_task` MCP tool with `agent` trigger type, `get_queue_status` for situational awareness, `allowed_dispatch_targets` per-job property (empty = deny-all), dispatch attribution to originating task, self-dispatch prohibition and loop prevention.
 - **External MCP Server Lifecycle** — full registration, connection, tool discovery, and per-job assignment.
 - **Route Modularization** — separate routers, shared state module, Pydantic models.
 - **Dispatch Diff View** — `start_commit`/`result_commit` with inline diff display.
