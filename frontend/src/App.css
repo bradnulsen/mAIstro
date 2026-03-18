@@ -33,6 +33,7 @@
   --diff-del-bg: rgba(204, 68, 68, 0.12);
   --diff-info: #7ab0d6;
   /* Type scale — all font-size declarations use these tokens */
+  --text-3xs: 7px;
   --text-2xs: 9px;
   --text-xs: 10px;
   --text-sm: 11px;
@@ -44,6 +45,20 @@
   /* On-accent text — white text for elements on dark/accent backgrounds */
   --text-on-accent: #fff;
   --text-on-accent-dim: rgba(255, 255, 255, 0.6);
+  /* Spacing scale — base-4 steps covering tight to loose */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 16px;
+  --space-8: 20px;
+  --space-9: 24px;
+  /* Component sizes */
+  --size-dot: 7px;
+  /* Textarea auto-resize ceiling — JS auto-height uses this value */
+  --textarea-max-height: 200px;
 }
 
 body {
@@ -188,8 +203,8 @@ body {
 }
 
 .status-dot {
-  width: 7px;
-  height: 7px;
+  width: var(--size-dot);
+  height: var(--size-dot);
   border-radius: 50%;
   background: var(--text-muted);
 }
@@ -216,7 +231,7 @@ body {
 button, .btn {
   font-family: var(--font);
   font-size: var(--text-md);
-  padding: 4px 12px;
+  padding: var(--space-2) var(--space-6);
   border: 1.5px solid var(--border);
   background: var(--surface);
   color: var(--text);
@@ -263,7 +278,7 @@ button.small {
 input, textarea, select {
   font-family: var(--font);
   font-size: var(--text-md);
-  padding: 4px 8px;
+  padding: var(--space-2) var(--space-4);
   border: 1.5px solid var(--border-light);
   background: var(--surface);
   color: var(--text);
@@ -292,7 +307,7 @@ label {
   letter-spacing: 0.05em;
   color: var(--text-muted);
   display: block;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
 }
 
 label.muted-text {
@@ -497,8 +512,8 @@ label.muted-text {
 .queue-status.running { color: var(--running); }
 .queue-status.running::before {
   content: '●';
-  font-size: 7px;
-  margin-right: 4px;
+  font-size: var(--text-3xs);
+  margin-right: var(--space-2);
   display: inline-block;
   vertical-align: middle;
   animation: dot-pulse 1.4s ease-in-out infinite;

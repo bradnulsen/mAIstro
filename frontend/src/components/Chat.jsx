@@ -44,7 +44,7 @@ export default function Chat() {
     const el = inputRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 150) + 'px'
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
   }, [input])
 
   // On mount: check if the most recent session is still processing (e.g. we navigated away)
