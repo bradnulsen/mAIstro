@@ -16,6 +16,8 @@
   --radius-sm: 3px;
   --radius: 4px;
   --radius-lg: 6px;
+  --radius-xs: 2px;
+  --radius-circle: 50%;
   --danger: #c44;
   --success: #4a4;
   --running: #e90;
@@ -59,6 +61,14 @@
   --textarea-max-height: 200px;
   /* Status dot size — used by .status-dot; task-list overrides were removed once this was defined */
   --size-dot: 6px;
+  /* Indicator dot — larger variant used by health cards and MCP server list */
+  --size-dot-lg: 8px;
+  /* Opacity — disabled and dimmed UI states */
+  --opacity-disabled: 0.4;
+  --opacity-dimmed: 0.6;
+  /* Z-index layers */
+  --z-tray: 10;
+  --z-overlay: 9999;
   /* Structural layout dimensions */
   --width-rail: 52px;
   --size-icon: 36px;
@@ -220,7 +230,7 @@ body {
 .status-dot {
   width: var(--size-dot);
   height: var(--size-dot);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   background: var(--text-muted);
 }
 
@@ -260,7 +270,7 @@ button:hover, .btn:hover {
 }
 
 button:disabled {
-  opacity: 0.4;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -974,7 +984,7 @@ label.muted-text {
   background: var(--accent);
   color: var(--text-on-accent);
   border-radius: var(--radius) var(--radius) 0 0;
-  z-index: 10;
+  z-index: var(--z-tray);
   user-select: none;
 }
 
@@ -1109,7 +1119,7 @@ label.muted-text {
   height: 10px;
   border: 1.5px solid var(--border-light);
   border-top-color: var(--text-muted);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin {
@@ -1424,9 +1434,9 @@ label.muted-text {
 }
 
 .health-job-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: var(--size-dot-lg);
+  height: var(--size-dot-lg);
+  border-radius: var(--radius-circle);
   flex-shrink: 0;
 }
 
@@ -1457,7 +1467,7 @@ label.muted-text {
 .health-bar {
   height: 4px;
   background: var(--border-light);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   overflow: hidden;
   margin-bottom: var(--space-3);
 }
@@ -1465,7 +1475,7 @@ label.muted-text {
 .health-bar-fill {
   height: 100%;
   background: var(--success);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   transition: width 0.3s;
 }
 
@@ -1701,7 +1711,7 @@ label.muted-text {
   font-family: var(--font);
   color: var(--text-muted);
   border: 1px solid var(--border-light);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   cursor: help;
   flex-shrink: 0;
   line-height: 1;
@@ -1727,7 +1737,7 @@ label.muted-text {
   font-size: var(--text-sm);
   color: var(--text);
   line-height: 1.5;
-  z-index: 9999;
+  z-index: var(--z-overlay);
   white-space: normal;
   text-transform: none;
   letter-spacing: 0;
@@ -2187,9 +2197,9 @@ label.muted-text {
 
 .mcp-health-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: var(--size-dot-lg);
+  height: var(--size-dot-lg);
+  border-radius: var(--radius-circle);
   margin-left: var(--space-3);
   vertical-align: middle;
 }

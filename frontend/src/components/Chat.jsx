@@ -43,8 +43,9 @@ export default function Chat() {
   useLayoutEffect(() => {
     const el = inputRef.current
     if (!el) return
+    const maxH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--textarea-max-height')) || 200
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+    el.style.height = Math.min(el.scrollHeight, maxH) + 'px'
   }, [input])
 
   // On mount: check if the most recent session is still processing (e.g. we navigated away)

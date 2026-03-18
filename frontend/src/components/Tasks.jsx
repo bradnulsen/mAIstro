@@ -108,7 +108,7 @@ export default function Tasks({ jobs, onRefresh, onNavigate }) {
           </div>
           <div className="scroll-area">
             {filteredJobs.length === 0 && search && (
-              <div className="muted-text" style={{ padding: '12px' }}>No matches</div>
+              <div className="muted-text" style={{ padding: 'var(--space-6)' }}>No matches</div>
             )}
             {filteredJobs.map((j, i) => (
               <div
@@ -270,7 +270,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, onNavigate }) {
         </div>
       )}
 
-      <div className="job-header" style={{ marginBottom: props.description ? 4 : 12 }}>
+      <div className="job-header" style={{ marginBottom: props.description ? 'var(--space-2)' : 'var(--space-6)' }}>
         <h2>{job.name}</h2>
         <span className="muted-text">id: {job.id}</span>
       </div>
