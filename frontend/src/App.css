@@ -1387,6 +1387,7 @@ label.muted-text {
 }
 
 .health-card {
+  background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   padding: var(--space-4) var(--space-5);
@@ -1479,6 +1480,7 @@ label.muted-text {
   position: relative;
   height: 20px;
   margin-bottom: var(--space-2);
+  margin-left: calc(80px + var(--space-4));
   border-bottom: 1px solid var(--border-light);
 }
 
@@ -1602,6 +1604,7 @@ label.muted-text {
 }
 
 .tool-usage-card {
+  background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   padding: var(--space-4) var(--space-5);
