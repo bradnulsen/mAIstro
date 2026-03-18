@@ -1,6 +1,6 @@
 # Proposal: Collapse Closing Directive into Trigger Context
 
-**Status**: accepted — implemented in prompt-assembly.md. Code changes pending in dispatch.py (remove `_build_closing_directive`, remove `task_meta` dispatch mode label).
+**Status**: complete — implemented in prompt-assembly.md, dispatch.py, and worker.py.
 
 ## Problem
 
