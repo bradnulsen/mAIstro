@@ -120,6 +120,13 @@ async def _migrate(db: aiosqlite.Connection):
         )
         await db.commit()
 
+    if schema_version < 2:
+        await _migrate_status_column(db)
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '2')"
+        )
+        await db.commit()
+
 
 async def _migrate_cascade_fks(db: aiosqlite.Connection):
     """Add ON DELETE CASCADE to tasks.job_id and chat_sessions.job_id.
@@ -131,11 +138,17 @@ async def _migrate_cascade_fks(db: aiosqlite.Connection):
     await db.execute("PRAGMA foreign_keys=OFF")
 
     # -- tasks table --
+    # Check if status column exists already (if v2 migration ran before v1 somehow)
+    cols = await db.execute_fetchall("PRAGMA table_info(tasks)")
+    col_names = [c["name"] for c in cols]
+    has_status = "status" in col_names
+
     await db.execute("ALTER TABLE tasks RENAME TO _tasks_old")
     await db.execute("""
         CREATE TABLE tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
             trigger TEXT NOT NULL,
             trigger_detail TEXT,
             context TEXT,
@@ -153,9 +166,31 @@ async def _migrate_cascade_fks(db: aiosqlite.Connection):
             coalesced_id INTEGER REFERENCES tasks(id)
         )
     """)
-    await db.execute("""
-        INSERT INTO tasks SELECT * FROM _tasks_old
-    """)
+    if has_status:
+        await db.execute("""
+            INSERT INTO tasks (id, job_id, status, trigger, trigger_detail, context,
+                session_id, resume_session_id, approval, start_commit, created_at,
+                started_at, completed_at, result_commit, error, queued_at,
+                sort_order, coalesced_id)
+            SELECT id, job_id, status, trigger, trigger_detail, context,
+                session_id, resume_session_id, approval, start_commit, created_at,
+                started_at, completed_at, result_commit, error, queued_at,
+                sort_order, coalesced_id
+            FROM _tasks_old
+        """)
+    else:
+        await db.execute("""
+            INSERT INTO tasks (id, job_id, trigger, trigger_detail, context,
+                session_id, resume_session_id, approval, start_commit, created_at,
+                started_at, completed_at, result_commit, error, queued_at,
+                sort_order, coalesced_id)
+            SELECT id, job_id, trigger, trigger_detail, context,
+                session_id, resume_session_id, approval, start_commit, created_at,
+                started_at, completed_at, result_commit, error, queued_at,
+                sort_order, coalesced_id
+            FROM _tasks_old
+        """)
+
     await db.execute("DROP TABLE _tasks_old")
 
     # Recreate all tasks indexes
@@ -226,6 +261,42 @@ async def _migrate_cascade_fks(db: aiosqlite.Connection):
     await db.execute("PRAGMA foreign_keys=ON")
 
 
+async def _migrate_status_column(db: aiosqlite.Connection):
+    """Add status column and backfill from existing lifecycle columns.
+
+    Derives the correct status value for every existing task using the
+    migration rules defined in dispatch-engine.md § Task Status § Migration.
+    """
+    try:
+        await db.execute("ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+    except Exception:
+        pass  # Column already exists (e.g. fresh DB created with schema that includes it)
+
+    # Backfill status from lifecycle columns — order matters (most specific first)
+    await db.execute("""
+        UPDATE tasks SET status = CASE
+            WHEN completed_at IS NOT NULL AND error IS NULL THEN 'completed'
+            WHEN completed_at IS NOT NULL AND error = 'cancelled' THEN 'cancelled'
+            WHEN completed_at IS NOT NULL AND error = 'timed out' THEN 'timed_out'
+            WHEN completed_at IS NOT NULL AND error = 'interrupted' THEN 'interrupted'
+            WHEN completed_at IS NOT NULL AND error = 'rejected' THEN 'rejected'
+            WHEN completed_at IS NOT NULL AND error IS NOT NULL THEN 'failed'
+            WHEN started_at IS NOT NULL AND completed_at IS NULL THEN 'active'
+            WHEN queued_at IS NOT NULL AND started_at IS NULL AND error IS NULL THEN 'queued'
+            WHEN started_at IS NULL AND queued_at IS NULL AND error IS NULL THEN 'pending'
+            WHEN completed_at IS NULL AND error IS NOT NULL THEN 'cancelled'
+            ELSE 'pending'
+        END
+    """)
+
+    # New primary worker index replaces the old multi-column predicate indexes
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_worker "
+        "ON tasks (status, approval, coalesced_id)"
+    )
+    await db.commit()
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
@@ -249,6 +320,7 @@ CREATE TABLE IF NOT EXISTS job_properties (
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
     trigger TEXT NOT NULL,
     trigger_detail TEXT,
     context TEXT,
@@ -316,6 +388,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_running
 
 CREATE INDEX IF NOT EXISTS idx_tasks_coalesced
     ON tasks (coalesced_id);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status_worker
+    ON tasks (status, approval, coalesced_id);
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session
     ON chat_messages (session_id, created_at);
@@ -427,7 +502,7 @@ async def get_job(job_id: str, running_ids: set | None = None) -> dict | None:
         props["running"] = job_id in running_ids
     else:
         r = await db.execute_fetchall(
-            "SELECT 1 FROM tasks WHERE job_id = ? AND started_at IS NOT NULL AND completed_at IS NULL LIMIT 1",
+            "SELECT 1 FROM tasks WHERE job_id = ? AND status = 'active' LIMIT 1",
             (job_id,)
         )
         props["running"] = bool(r)
@@ -444,7 +519,7 @@ async def list_jobs() -> list[dict]:
         return []
 
     running_rows = await conn.execute_fetchall(
-        "SELECT DISTINCT job_id FROM tasks WHERE started_at IS NOT NULL AND completed_at IS NULL"
+        "SELECT DISTINCT job_id FROM tasks WHERE status = 'active'"
     )
     running_ids = {r["job_id"] for r in running_rows}
 
@@ -544,7 +619,7 @@ async def get_jobs_depending_on(job_id: str) -> list[dict]:
         return []
 
     running_rows = await conn.execute_fetchall(
-        "SELECT DISTINCT job_id FROM tasks WHERE started_at IS NOT NULL AND completed_at IS NULL"
+        "SELECT DISTINCT job_id FROM tasks WHERE status = 'active'"
     )
     running_ids = {r["job_id"] for r in running_rows}
 
@@ -605,15 +680,17 @@ async def enqueue_task(job_id: str, trigger: str,
     # Auto-queueing: when enabled, new tasks skip pending and go directly to queued
     from backend.state import utcnow
     queued_at = None
+    status = "pending"
     auto_queue = await get_config("queue_auto_dispatch")
     if auto_queue == "true":
         queued_at = utcnow()
+        status = "queued"
 
     # Insert the atomic task (not committed yet — coalesce update shares the transaction)
     cursor = await db.execute(
-        """INSERT INTO tasks (job_id, trigger, trigger_detail, context, approval, queued_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (job_id, trigger, trigger_detail, context, approval, queued_at)
+        """INSERT INTO tasks (job_id, status, trigger, trigger_detail, context, approval, queued_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (job_id, status, trigger, trigger_detail, context, approval, queued_at)
     )
     new_id = cursor.lastrowid
 
@@ -621,7 +698,7 @@ async def enqueue_task(job_id: str, trigger: str,
     root_id = None
     if coalesce_global or coalesce_same_type:
         query = """SELECT id FROM tasks
-                   WHERE job_id = ? AND started_at IS NULL AND error IS NULL
+                   WHERE job_id = ? AND status IN ('pending', 'queued')
                      AND coalesced_id IS NULL AND id != ?"""
         params: list = [job_id, new_id]
         if coalesce_same_type and not coalesce_global:
@@ -705,7 +782,7 @@ async def get_oldest_queued_task() -> dict | None:
     rows = await db.execute_fetchall(
         """SELECT t.*, j.name as job_name FROM tasks t
            JOIN jobs j ON j.id = t.job_id
-           WHERE t.queued_at IS NOT NULL AND t.started_at IS NULL AND t.error IS NULL
+           WHERE t.status = 'queued'
              AND (t.approval IS NULL OR t.approval = 'approved')
              AND t.coalesced_id IS NULL
            ORDER BY t.sort_order IS NULL, t.sort_order ASC, t.created_at ASC
@@ -739,32 +816,132 @@ async def update_tasks_batch(task_ids: list[int], **kwargs):
     await db.commit()
 
 
+# ── Task Status State Machine ─────────────────────────────
+
+# Legal transitions: (current_status, new_status) -> allowed
+LEGAL_TRANSITIONS: set[tuple[str, str]] = {
+    ("pending", "queued"),
+    ("pending", "cancelled"),
+    ("pending", "rejected"),
+    ("queued", "pending"),
+    ("queued", "active"),
+    ("queued", "cancelled"),
+    ("active", "completed"),
+    ("active", "failed"),
+    ("active", "cancelled"),
+    ("active", "timed_out"),
+    ("active", "interrupted"),
+}
+
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted", "timed_out", "rejected"})
+
+# Map status to the timestamp column that should be set on transition
+_STATUS_TIMESTAMP = {
+    "queued": "queued_at",
+    "active": "started_at",
+    "completed": "completed_at",
+    "failed": "completed_at",
+    "cancelled": "completed_at",
+    "timed_out": "completed_at",
+    "interrupted": "completed_at",
+    "rejected": "completed_at",
+}
+
+
+async def transition_task(task_id: int, new_status: str, _commit: bool = True, **fields):
+    """Transition a task to a new status with validation.
+
+    All status changes must go through this function. Sets the corresponding
+    timestamp column automatically. Additional fields (error, result_commit,
+    session_id, etc.) can be passed as kwargs.
+
+    Raises ValueError if the transition is illegal.
+    """
+    conn = await get_db()
+    rows = await conn.execute_fetchall(
+        "SELECT status FROM tasks WHERE id = ?", (task_id,)
+    )
+    if not rows:
+        raise ValueError(f"Task #{task_id} not found")
+
+    current_status = rows[0]["status"]
+
+    if (current_status, new_status) not in LEGAL_TRANSITIONS:
+        raise ValueError(
+            f"Illegal transition for task #{task_id}: {current_status} → {new_status}"
+        )
+
+    updates = {"status": new_status}
+
+    # Set the corresponding timestamp if applicable
+    ts_col = _STATUS_TIMESTAMP.get(new_status)
+    if ts_col:
+        from backend.state import utcnow
+        updates[ts_col] = fields.pop(ts_col, utcnow())
+
+    # When going back to pending, clear queued_at
+    if new_status == "pending":
+        updates["queued_at"] = None
+
+    updates.update(fields)
+
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values()) + [task_id]
+    await conn.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
+    if _commit:
+        await conn.commit()
+
+
+async def transition_tasks_batch(task_ids: list[int], new_status: str, **fields):
+    """Transition multiple tasks to the same new status.
+
+    Skips validation per-task for performance — caller is responsible for
+    ensuring all tasks are in a valid source state. Used for subordinate tasks.
+    """
+    if not task_ids:
+        return
+    conn = await get_db()
+    updates = {"status": new_status}
+    ts_col = _STATUS_TIMESTAMP.get(new_status)
+    if ts_col:
+        from backend.state import utcnow
+        updates[ts_col] = fields.pop(ts_col, utcnow())
+    updates.update(fields)
+
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    placeholders = ",".join("?" * len(task_ids))
+    vals = list(updates.values()) + list(task_ids)
+    await conn.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
+    await conn.commit()
+
+
 async def transfer_task(task_id: int, to_queued: bool):
     """Move a task between pending and queued columns. Sets or clears queued_at.
     Also transfers subordinate tasks to maintain group cohesion."""
     from backend.state import utcnow
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, started_at, error, coalesced_id FROM tasks WHERE id = ?",
+        "SELECT id, status, coalesced_id FROM tasks WHERE id = ?",
         (task_id,)
     )
     if not rows:
         raise ValueError("Task not found")
     task = rows[0]
-    if task["started_at"] is not None or task["error"] is not None:
+    if task["status"] not in ("pending", "queued"):
         raise ValueError("Can only transfer pre-execution tasks")
     if task["coalesced_id"] is not None:
         raise ValueError("Cannot transfer a subordinate — transfer its root instead")
 
+    new_status = "queued" if to_queued else "pending"
     queued_at = utcnow() if to_queued else None
     # Transfer root and all subordinates; clear sort_order (append to end of target column)
     await db.execute(
-        "UPDATE tasks SET queued_at = ?, sort_order = NULL WHERE id = ?",
-        (queued_at, task_id)
+        "UPDATE tasks SET status = ?, queued_at = ?, sort_order = NULL WHERE id = ?",
+        (new_status, queued_at, task_id)
     )
     await db.execute(
-        "UPDATE tasks SET queued_at = ? WHERE coalesced_id = ? AND started_at IS NULL AND error IS NULL",
-        (queued_at, task_id)
+        "UPDATE tasks SET status = ?, queued_at = ? WHERE coalesced_id = ? AND status IN ('pending', 'queued')",
+        (new_status, queued_at, task_id)
     )
     await db.commit()
     return task_id
@@ -774,7 +951,7 @@ async def reorder_tasks(task_ids: list[int]):
     """Set explicit sort_order on pending tasks to control execution priority."""
     db = await get_db()
     await db.executemany(
-        "UPDATE tasks SET sort_order = ? WHERE id = ? AND started_at IS NULL AND error IS NULL",
+        "UPDATE tasks SET sort_order = ? WHERE id = ? AND status IN ('pending', 'queued')",
         [(i, tid) for i, tid in enumerate(task_ids)],
     )
     await db.commit()
@@ -810,7 +987,7 @@ async def merge_tasks(task_ids: list[int]) -> int:
     db = await get_db()
     placeholders = ",".join("?" * len(task_ids))
     rows = await db.execute_fetchall(
-        f"""SELECT id, job_id, started_at, error, approval, coalesced_id, created_at, queued_at
+        f"""SELECT id, job_id, status, approval, coalesced_id, created_at
             FROM tasks WHERE id IN ({placeholders})
             ORDER BY created_at ASC""",
         task_ids,
@@ -821,12 +998,8 @@ async def merge_tasks(task_ids: list[int]) -> int:
 
     job_ids = set()
     for r in rows:
-        if r["queued_at"] is not None:
-            raise ValueError(f"Task #{r['id']} is queued — merge is a pending-column operation")
-        if r["started_at"] is not None:
-            raise ValueError(f"Task #{r['id']} has already started")
-        if r["error"] is not None:
-            raise ValueError(f"Task #{r['id']} has an error")
+        if r["status"] != "pending":
+            raise ValueError(f"Task #{r['id']} is not pending — merge is a pending-column operation")
         if r["approval"] == "pending":
             raise ValueError(f"Task #{r['id']} is pending approval")
         if r["coalesced_id"] is not None:
@@ -856,7 +1029,7 @@ async def split_task(root_id: int) -> list[int]:
     db = await get_db()
 
     root_rows = await db.execute_fetchall(
-        "SELECT id, job_id, started_at, error, queued_at, coalesced_id FROM tasks WHERE id = ?",
+        "SELECT id, job_id, status, coalesced_id FROM tasks WHERE id = ?",
         (root_id,)
     )
     if not root_rows:
@@ -864,10 +1037,8 @@ async def split_task(root_id: int) -> list[int]:
     root = root_rows[0]
     if root["coalesced_id"] is not None:
         raise ValueError("Task is a subordinate, not a root")
-    if root["queued_at"] is not None:
+    if root["status"] != "pending":
         raise ValueError("Can only split pending tasks — split is a pending-column operation")
-    if root["started_at"] is not None or root["error"] is not None:
-        raise ValueError("Can only split pre-execution tasks")
 
     sub_rows = await db.execute_fetchall(
         "SELECT id FROM tasks WHERE coalesced_id = ?", (root_id,)
@@ -892,7 +1063,7 @@ async def split_task(root_id: int) -> list[int]:
     await db.execute(
         f"""UPDATE tasks
             SET coalesced_id = NULL, sort_order = NULL, created_at = ?,
-                approval = ?, queued_at = NULL
+                status = 'pending', approval = ?, queued_at = NULL
             WHERE id IN ({placeholders})""",
         [now, approval_val] + sub_ids,
     )
@@ -905,7 +1076,7 @@ async def uncoalesce_task(task_id: int) -> int:
     db = await get_db()
 
     rows = await db.execute_fetchall(
-        "SELECT id, job_id, coalesced_id, started_at, error FROM tasks WHERE id = ?",
+        "SELECT id, job_id, coalesced_id, status FROM tasks WHERE id = ?",
         (task_id,)
     )
     if not rows:
@@ -913,17 +1084,15 @@ async def uncoalesce_task(task_id: int) -> int:
     task = rows[0]
     if not task["coalesced_id"]:
         raise ValueError("Task is not a subordinate — use split on the root task")
-    if task["started_at"] is not None or task["error"] is not None:
+    if task["status"] not in ("pending", "queued"):
         raise ValueError("Can only uncoalesce pre-execution tasks")
 
     # Verify root is in pending (uncoalesce is a pending-column operation)
-    # Pending = not yet queued, not started, not errored
     root_rows = await db.execute_fetchall(
-        "SELECT queued_at, started_at, error FROM tasks WHERE id = ?", (task["coalesced_id"],)
+        "SELECT status FROM tasks WHERE id = ?", (task["coalesced_id"],)
     )
     if root_rows:
-        root = root_rows[0]
-        if root["started_at"] is not None or root["error"] is not None or root["queued_at"] is not None:
+        if root_rows[0]["status"] != "pending":
             raise ValueError("Can only uncoalesce from a pending root — split is a pending-column operation")
 
     # Look up the job's current require_approval setting
@@ -938,7 +1107,7 @@ async def uncoalesce_task(task_id: int) -> int:
     now = utcnow()
     # Freed task always lands in pending (uncoalesce is a pending-column operation)
     await db.execute(
-        "UPDATE tasks SET coalesced_id = NULL, sort_order = NULL, created_at = ?, approval = ?, queued_at = NULL WHERE id = ?",
+        "UPDATE tasks SET coalesced_id = NULL, sort_order = NULL, created_at = ?, status = 'pending', approval = ?, queued_at = NULL WHERE id = ?",
         (now, approval_val, task_id),
     )
     await db.commit()
@@ -948,15 +1117,14 @@ async def uncoalesce_task(task_id: int) -> int:
 async def sweep_stale_tasks(now: str):
     """Mark any in-flight tasks as interrupted (e.g. after restart)."""
     db = await get_db()
-    # Read stale IDs first, then update — avoids two full scans with identical predicates.
     rows = await db.execute_fetchall(
-        "SELECT id FROM tasks WHERE started_at IS NOT NULL AND completed_at IS NULL"
+        "SELECT id FROM tasks WHERE status = 'active'"
     )
     if not rows:
         return []
     await db.execute(
-        "UPDATE tasks SET completed_at = ?, error = 'interrupted'"
-        " WHERE started_at IS NOT NULL AND completed_at IS NULL",
+        "UPDATE tasks SET status = 'interrupted', completed_at = ?, error = 'interrupted'"
+        " WHERE status = 'active'",
         (now,)
     )
     await db.commit()
@@ -981,7 +1149,7 @@ async def reject_task(task_id: int) -> bool:
     from backend.state import utcnow
     now = utcnow()
     cursor = await db.execute(
-        "UPDATE tasks SET approval = 'rejected', completed_at = ?, error = 'rejected'"
+        "UPDATE tasks SET status = 'rejected', approval = 'rejected', completed_at = ?, error = 'rejected'"
         " WHERE (id = ? OR coalesced_id = ?) AND approval = 'pending'",
         (now, task_id, task_id)
     )
@@ -1173,17 +1341,15 @@ async def dashboard_health(window_days: int) -> list[dict]:
             t.job_id,
             j.name AS job_name,
             COUNT(*) AS total,
-            SUM(CASE WHEN t.error IS NULL THEN 1 ELSE 0 END) AS completed,
-            SUM(CASE WHEN t.error IS NOT NULL
-                      AND t.error NOT IN ('timed out','cancelled','interrupted','rejected')
-                 THEN 1 ELSE 0 END) AS failed,
-            SUM(CASE WHEN t.error = 'timed out' THEN 1 ELSE 0 END) AS timed_out,
-            SUM(CASE WHEN t.error = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
-            SUM(CASE WHEN t.error = 'interrupted' THEN 1 ELSE 0 END) AS interrupted,
-            SUM(CASE WHEN t.error = 'rejected' THEN 1 ELSE 0 END) AS rejected
+            SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN t.status = 'timed_out' THEN 1 ELSE 0 END) AS timed_out,
+            SUM(CASE WHEN t.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+            SUM(CASE WHEN t.status = 'interrupted' THEN 1 ELSE 0 END) AS interrupted,
+            SUM(CASE WHEN t.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
         FROM tasks t
         JOIN jobs j ON j.id = t.job_id
-        WHERE t.completed_at IS NOT NULL
+        WHERE t.status IN ('completed','failed','timed_out','cancelled','interrupted','rejected')
           AND t.completed_at >= datetime('now', ?)
         GROUP BY t.job_id, j.name
     """
@@ -1194,9 +1360,9 @@ async def dashboard_health(window_days: int) -> list[dict]:
         SELECT
             t.job_id,
             COUNT(*) AS total,
-            SUM(CASE WHEN t.error IS NULL THEN 1 ELSE 0 END) AS completed
+            SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed
         FROM tasks t
-        WHERE t.completed_at IS NOT NULL
+        WHERE t.status IN ('completed','failed','timed_out','cancelled','interrupted','rejected')
           AND t.completed_at >= datetime('now', ?)
           AND t.completed_at < datetime('now', ?)
         GROUP BY t.job_id

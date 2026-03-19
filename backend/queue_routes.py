@@ -71,7 +71,7 @@ async def stream_task(task_id: int):
     if not task:
         raise HTTPException(404, "Task not found")
 
-    if task.get("completed_at"):
+    if task.get("status") in ("completed", "failed", "cancelled", "interrupted", "timed_out", "rejected"):
         async def done_stream():
             yield {"event": "done", "data": json.dumps({"status": "completed"})}
         return EventSourceResponse(done_stream())
@@ -118,8 +118,12 @@ async def get_task_output(task_id: int):
     if not session_id:
         return {"messages": [], "status": "pending", "task": task}
     messages = await db.get_chat_messages(session_id)
-    status = "running" if task.get("started_at") and not task.get("completed_at") else \
-             "completed" if task.get("completed_at") else "pending"
+    status = task.get("status", "pending")
+    # Map internal statuses to simpler API-level status for output endpoint
+    if status == "active":
+        status = "running"
+    elif status in ("failed", "cancelled", "interrupted", "timed_out", "rejected"):
+        status = "completed"
     return {"messages": messages, "status": status, "task": task}
 
 
@@ -161,7 +165,7 @@ async def update_task_route(task_id: int, req: UpdateTaskRequest):
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.get("started_at"):
+    if task.get("status") not in ("pending", "queued"):
         raise HTTPException(409, "Cannot edit a task that has already started")
 
     if req.context is not None:
@@ -172,12 +176,18 @@ async def update_task_route(task_id: int, req: UpdateTaskRequest):
 @router.post("/api/tasks/cancel/{task_id}")
 async def cancel_task(task_id: int):
     require_project()
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
     was_running = worker.cancel(task_id)
-    now = utcnow()
-    await db.update_task(task_id, _commit=False, completed_at=now, error="cancelled")
+    # Cancel is valid from pending, queued, or active
+    current = task.get("status")
+    if current in db.TERMINAL_STATUSES:
+        return {"status": "already_terminal", "was_running": False}
+    await db.transition_task(task_id, "cancelled", error="cancelled")
     subs = await db.get_subordinate_tasks(task_id)
-    sub_ids = [s["id"] for s in subs if not s.get("completed_at")]
-    await db.update_tasks_batch(sub_ids, completed_at=now, error="cancelled")
+    sub_ids = [s["id"] for s in subs if s.get("status") not in db.TERMINAL_STATUSES]
+    await db.transition_tasks_batch(sub_ids, "cancelled", error="cancelled")
     return {"status": "cancelled", "was_running": was_running}
 
 
@@ -188,7 +198,7 @@ async def resume_task(task_id: int):
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if not task.get("completed_at"):
+    if task.get("status") not in db.TERMINAL_STATUSES:
         raise HTTPException(409, "Task is not completed")
 
     session_id = task.get("session_id")
@@ -217,7 +227,7 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if not task.get("completed_at"):
+    if task.get("status") not in db.TERMINAL_STATUSES:
         raise HTTPException(409, "Task is not completed")
 
     user_notes = req.context if req and req.context else None

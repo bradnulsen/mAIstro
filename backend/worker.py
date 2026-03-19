@@ -97,10 +97,13 @@ async def process_one(task_id: int) -> dict | None:
         task = await db.get_task(task_id)
         if not task:
             return None
-        if task.get("started_at") or task.get("error"):
+        if task.get("status") not in ("pending", "queued"):
             return None
         if task.get("approval") == "pending":
             await db.approve_task(task_id)
+        # Ensure task is queued before processing (transition validates legality)
+        if task.get("status") == "pending":
+            await db.transition_task(task_id, "queued")
         await _process_task(task)
         return task
 
@@ -155,12 +158,20 @@ async def _process_task(task: dict):
     job_id = task["job_id"]
 
     if not state.PROJECT_DIR:
-        await db.update_task(task_id, completed_at=utcnow(), error="no project open")
+        try:
+            await db.transition_task(task_id, "active")
+        except ValueError:
+            pass
+        await db.transition_task(task_id, "failed", error="no project open")
         return
 
     job = await db.get_job(job_id)
     if not job:
-        await db.update_task(task_id, completed_at=utcnow(), error=f"job '{job_id}' not found")
+        try:
+            await db.transition_task(task_id, "active")
+        except ValueError:
+            pass
+        await db.transition_task(task_id, "failed", error=f"job '{job_id}' not found")
         return
 
     # Collect subordinate tasks (coalesced) and pass to queue context builder
@@ -190,8 +201,9 @@ async def _process_task(task: dict):
     _cancel_event = asyncio.Event()
     _active_task_id = task_id
     start_commit = git.head_hash(state.PROJECT_DIR)
-    await db.update_task(task_id, started_at=utcnow(), session_id=session_id,
-                         start_commit=start_commit)
+    await db.transition_task(task_id, "active",
+                             session_id=session_id,
+                             start_commit=start_commit)
 
     log.info("[worker] Processing task #%d (job=%s)", task_id, job_id)
 
@@ -240,41 +252,45 @@ async def _process_task(task: dict):
             elif etype == "error":
                 await db.add_chat_message(session_id, "system", event.get("message", "error"))
 
-        await db.add_chat_events_batch(session_id, raw_event_buffer)
+        log.info("[worker] Task #%d CLI finished — starting post-processing", task_id)
+
+        try:
+            await db.add_chat_events_batch(session_id, raw_event_buffer)
+        except Exception:
+            log.exception("[worker] Task #%d failed to write chat events", task_id)
 
         response_text = "".join(full_response) or "".join(streaming_text)
         if response_text:
-            await db.add_chat_message(session_id, "assistant", response_text)
+            try:
+                await db.add_chat_message(session_id, "assistant", response_text)
+            except Exception:
+                log.exception("[worker] Task #%d failed to write response", task_id)
 
         _cancelled = local_cancel.is_set() and not _timed_out
+        head = git.head_hash(state.PROJECT_DIR)
 
         if _timed_out:
-            head = git.head_hash(state.PROJECT_DIR)
-            now = utcnow()
-            await db.update_task(task_id, _commit=False, completed_at=now,
-                                 result_commit=head, error="timed out")
-            # Re-fetch subordinates to capture any coalesced after task start
+            await db.transition_task(task_id, "timed_out",
+                                     result_commit=head, error="timed out")
             fresh_subs = await db.get_subordinate_tasks(task_id)
-            sub_ids = [s["id"] for s in fresh_subs if not s.get("completed_at")]
-            await db.update_tasks_batch(sub_ids, completed_at=now,
-                                        result_commit=head, error="timed out")
+            sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
+            await db.transition_tasks_batch(sub_ids, "timed_out",
+                                            result_commit=head, error="timed out")
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
         elif _cancelled:
-            head = git.head_hash(state.PROJECT_DIR)
-            now = utcnow()
-            await db.update_task(task_id, _commit=False, completed_at=now, result_commit=head)
-            # Re-fetch to avoid double-writing tasks the cancel route already resolved
+            await db.transition_task(task_id, "cancelled",
+                                     result_commit=head, error="cancelled")
             fresh_subs = await db.get_subordinate_tasks(task_id)
-            sub_ids = [s["id"] for s in fresh_subs if not s.get("completed_at")]
-            await db.update_tasks_batch(sub_ids, completed_at=now, error="cancelled")
+            sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
+            await db.transition_tasks_batch(sub_ids, "cancelled",
+                                            result_commit=head, error="cancelled")
             log.info("[worker] Task #%d cancelled (dependents skipped)", task_id)
         else:
-            head = git.head_hash(state.PROJECT_DIR)
-            now = utcnow()
-            await db.update_task(task_id, _commit=False, completed_at=now,
-                                 result_commit=head)
+            await db.transition_task(task_id, "completed",
+                                     result_commit=head)
             sub_ids = [s["id"] for s in subordinates]
-            await db.update_tasks_batch(sub_ids, completed_at=now, result_commit=head)
+            await db.transition_tasks_batch(sub_ids, "completed",
+                                            result_commit=head)
             log.info("[worker] Task #%d completed (commit=%s)", task_id, head[:8])
 
             await _enqueue_dependents(job_id, task_id,
@@ -288,16 +304,31 @@ async def _process_task(task: dict):
             await db.add_chat_events_batch(session_id, raw_event_buffer)
         except Exception:
             pass
-        response_text = "".join(full_response) or "".join(streaming_text)
-        if response_text:
-            await db.add_chat_message(session_id, "assistant", response_text)
-        await db.add_chat_message(session_id, "system", f"Error: {e}")
-        now = utcnow()
-        await db.update_task(task_id, _commit=False, completed_at=now, error=str(e))
-        fresh_subs = await db.get_subordinate_tasks(task_id)
-        sub_ids = [s["id"] for s in fresh_subs if not s.get("completed_at")]
-        await db.update_tasks_batch(sub_ids, completed_at=now, error=str(e))
+        try:
+            response_text = "".join(full_response) or "".join(streaming_text)
+            if response_text:
+                await db.add_chat_message(session_id, "assistant", response_text)
+            await db.add_chat_message(session_id, "system", f"Error: {e}")
+        except Exception:
+            pass
+        await db.transition_task(task_id, "failed", error=str(e))
+        try:
+            fresh_subs = await db.get_subordinate_tasks(task_id)
+            sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
+            await db.transition_tasks_batch(sub_ids, "failed", error=str(e))
+        except Exception:
+            pass
     finally:
+        # Last-resort: if status is still 'active' (both try and except
+        # crashed), force it to failed so tasks can never get stuck.
+        try:
+            task_row = await db.get_task(task_id)
+            if task_row and task_row.get("status") == "active":
+                log.error("[worker] Task #%d still active in finally — forcing to failed", task_id)
+                await db.transition_task(task_id, "failed",
+                                         error="internal error: post-processing failed")
+        except Exception:
+            log.exception("[worker] Task #%d CRITICAL: could not transition to failed", task_id)
         if watchdog and not watchdog.done():
             watchdog.cancel()
         _broadcast(task_id, {"type": "_done"})

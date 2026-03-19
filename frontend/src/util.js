@@ -92,8 +92,20 @@ export const TRIGGER_LABELS = {
   schedule: 'Schedule',
 }
 
-/** Derive task status from lifecycle fields */
+/** Get task status — uses authoritative status column from backend,
+ *  with fallback derivation for backward compatibility. */
 export function getTaskStatus(item) {
+  // Use authoritative status column when available
+  if (item.status) {
+    const s = item.status
+    // Map backend statuses to UI statuses
+    if (s === 'active') return 'running'
+    if (s === 'failed') return 'error'
+    // Check approval gate overlay (orthogonal to lifecycle status)
+    if ((s === 'pending' || s === 'queued') && item.approval === 'pending') return 'pending_approval'
+    return s
+  }
+  // Fallback: derive from lifecycle fields (pre-migration data)
   if (item.error) {
     if (item.error === 'cancelled') return 'cancelled'
     if (item.error === 'timed out') return 'timed_out'

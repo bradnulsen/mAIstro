@@ -264,12 +264,13 @@ def tool_get_queue_status(args: dict) -> str:
 
         for t in tasks:
             task_line = f"#{t['id']} {t.get('job_name', t['job_id'])} [{t['trigger']}]"
-            if t.get("started_at") and not t.get("completed_at"):
+            s = t.get("status", "pending")
+            if s == "active":
                 running.append(task_line)
-            elif t.get("completed_at"):
-                status = "error" if t.get("error") else "ok"
+            elif s in ("completed", "failed", "cancelled", "interrupted", "timed_out", "rejected"):
+                status = "ok" if s == "completed" else "error"
                 recent_completed.append(f"{task_line} ({status})")
-            elif t.get("queued_at"):
+            elif s == "queued":
                 queued.append(task_line)
             else:
                 pending.append(task_line)
