@@ -1575,7 +1575,9 @@ label.muted-text {
 }
 
 .timeline-bar.error {
-  opacity: 0.9;
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+  opacity: 1;
 }
 
 /* ── Dispatch Chains ── */
