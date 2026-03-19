@@ -179,6 +179,21 @@ Completed tasks produce outcome summaries and diffs, but the user needs to ask f
 - **Work flows through tasks** — if the conversation reveals work that should be done, the user dispatches a new task. The read-only session is an investigation tool, not an execution channel. This preserves the queue-first invariant: all modifications flow through the task queue where they are visible, auditable, and controllable.
 - **UI integration** — the session chat appears in the same chat tray used for standalone conversation, but with a visual indicator that this is a task session (job color, task reference) and that it is read-only.
 
+### Notifications
+
+The platform must inform the operator when events need attention — without requiring them to be watching. As task volume grows through automated triggers, scheduled jobs, and agent-initiated dispatches, the operator is increasingly absent during execution. The dashboard answers "how are my agents doing?" when the operator looks; notifications answer "something needs you" when the operator isn't looking.
+
+- **In-app notification feed** — a persistent notification surface (badge indicator with dropdown or panel) showing recent events that warrant operator attention. Events include: task failures, timeouts, approval requests pending, and optionally task completions. The feed is ordered by recency. Read/unread state distinguishes new events from acknowledged ones. The badge count reflects unread notifications — the operator sees at a glance whether anything needs attention without opening the feed.
+- **Desktop notifications** — browser Notification API for events that need attention when the operator is away from the tab. The operator opts in via a standard browser permission prompt. The platform does not assume permission — it degrades gracefully when denied. Critical events (failures, timeouts, approval requests) are the default desktop notification triggers. Desktop notifications are a supplement to the in-app feed, not a replacement — every desktop notification has a corresponding in-app entry.
+- **Notification rules** — configurable per-job or globally. The operator controls which events produce notifications: all completions, only failures, only timeouts, only approval requests, or never. Defaults to failures, timeouts, and approval requests — these are the events that most commonly require operator response. The operator tunes signal-to-noise as task volume grows. Rules are additive: a per-job rule overrides the global default for that job.
+- **Webhook integration** — an outbound webhook that fires on configurable events. The operator registers a URL (and optional secret for signature verification). The platform sends a structured JSON payload describing the event: what happened, which job, which task, when. This is the escape hatch for external systems — Slack, Discord, email, or any HTTP endpoint. One generic mechanism rather than N specific integrations. The webhook fires independently of in-app and desktop notifications — it is a separate channel, not gated by notification rules.
+
+**What notifications are not:**
+
+- Notifications are not a messaging system. They carry structured event data, not free-text messages. The operator cannot reply to or compose notifications.
+- Notifications do not replace the dashboard or dispatch view. They are nudges that tell the operator *when* to look, not *what* to look at. Investigation happens on existing surfaces.
+- Notifications do not create or modify tasks. They are read-only signals. The operator responds to a notification by navigating to the appropriate view and taking action there.
+
 ### Streaming
 
 - Task output streams to the frontend via Server-Sent Events (SSE). Event types: `text`, `tool_use`, `result`, `error`, `session_id`.
@@ -273,6 +288,8 @@ The product presents eight views and a persistent chat surface:
 - **Chat** — a persistent, resizable tray providing interactive conversation with the LLM in the project context.
 
 A status bar surfaces running task indicators, providing ambient awareness of system activity without requiring the user to be on the Dispatch view.
+
+A notification indicator (badge with unread count) provides ambient awareness of events that need attention. The indicator is persistent — visible from any view, not tied to a specific navigation item. Activating the indicator reveals a notification feed (dropdown or panel) without navigating away from the current view. Notifications are a cross-cutting concern, not a destination.
 
 ### Contextual Help (Tooltips)
 
@@ -432,3 +449,5 @@ Tool patterns are secondary to health and timing — they support investigation,
 - **Session interrogation is read-only**: resumed task sessions for interrogation strip all write tools. The agent can read and reason but cannot modify the project. This preserves the queue-first invariant — all modifications flow through the task queue.
 - **Agent dispatch is governed**: an agent can only dispatch tasks for jobs listed in its `allowed_dispatch_targets`. No self-dispatch. A depth limit on agent-initiated dispatch chains prevents runaway cascades. Coalescing absorbs redundant agent-triggered enqueues.
 - **Branch operations are explicit**: branch creation, switching, and merging are structured tool calls — not unmediated shell commands. Merge conflicts surface as structured output, not silent failures. Naming conventions on branch creation prevent namespace collisions between jobs.
+- **Notifications are read-only signals**: the notification system observes task lifecycle events but never creates, modifies, or dispatches tasks. Notifications inform the operator; actions happen on the surfaces designed for them (Dispatch, Jobs). Webhook payloads carry event data but do not accept inbound commands.
+- **Notification defaults are conservative**: the platform defaults to notifying on failures, timeouts, and approval requests — events that typically require operator response. The operator opts into higher-volume notifications (all completions) deliberately. Desktop notifications require explicit browser permission.
