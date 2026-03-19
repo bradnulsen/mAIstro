@@ -121,28 +121,12 @@ async def _migrate(db: aiosqlite.Connection):
     except Exception:
         pass  # Column already exists
 
-    # Index for queued task lookup — safe to run unconditionally after column exists
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_queued "
-        "ON tasks (queued_at, started_at, error, coalesced_id)"
-    )
-    await db.commit()
-
     # Drop rating column (removed from architecture — no longer tracked)
     try:
         await db.execute("ALTER TABLE tasks DROP COLUMN rating")
         await db.commit()
     except Exception:
         pass  # Column already removed or never existed
-
-    # Covering index for get_oldest_queued_task() — runs every ~2s in the worker loop.
-    # Adds approval to the filter columns so SQLite resolves the approval predicate
-    # from the index without touching the heap.
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_queued_worker "
-        "ON tasks (queued_at, started_at, error, coalesced_id, approval)"
-    )
-    await db.commit()
 
     # Index for dashboard time-windowed aggregation queries
     await db.execute(
@@ -177,6 +161,20 @@ async def _migrate(db: aiosqlite.Connection):
         await _migrate_stale_indices(db)
         await db.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '3')"
+        )
+        await db.commit()
+
+    if schema_version < 4:
+        await _migrate_task_events_backfill(db)
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '4')"
+        )
+        await db.commit()
+
+    if schema_version < 5:
+        await _migrate_fix_chat_fks(db)
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '5')"
         )
         await db.commit()
 
@@ -381,6 +379,100 @@ async def _migrate_stale_indices(db: aiosqlite.Connection):
     await db.commit()
 
 
+async def _migrate_task_events_backfill(db: aiosqlite.Connection):
+    """Backfill task_events from existing task records (Phase 1 dual-write).
+
+    Synthesizes lifecycle events from the timestamp columns on existing tasks.
+    After this migration, all tasks have at least a 'created' event, and those
+    with queued_at/started_at/completed_at get corresponding transition events.
+    New tasks going forward get events via dual-write in transition_task().
+    """
+    # The table is created by SCHEMA_SQL (CREATE TABLE IF NOT EXISTS).
+    # Only backfill if the table is empty — avoids double-backfilling on re-run.
+    rows = await db.execute_fetchall("SELECT COUNT(*) as cnt FROM task_events")
+    if rows[0]["cnt"] > 0:
+        return
+
+    # Synthesize 'created' event for every task
+    await db.execute("""
+        INSERT INTO task_events (task_id, event, detail, created_at)
+        SELECT id, 'created', trigger, created_at FROM tasks
+    """)
+
+    # Synthesize 'queued' event for tasks that were queued
+    await db.execute("""
+        INSERT INTO task_events (task_id, event, created_at)
+        SELECT id, 'queued', queued_at FROM tasks WHERE queued_at IS NOT NULL
+    """)
+
+    # Synthesize 'active' event for tasks that were started
+    await db.execute("""
+        INSERT INTO task_events (task_id, event, created_at)
+        SELECT id, 'active', started_at FROM tasks WHERE started_at IS NOT NULL
+    """)
+
+    # Synthesize terminal events from status + completed_at
+    await db.execute("""
+        INSERT INTO task_events (task_id, event, detail, created_at)
+        SELECT id, status, error, completed_at
+        FROM tasks
+        WHERE status IN ('completed', 'failed', 'cancelled', 'timed_out',
+                         'interrupted', 'rejected')
+          AND completed_at IS NOT NULL
+    """)
+
+    await db.commit()
+
+
+async def _migrate_fix_chat_fks(db: aiosqlite.Connection):
+    """Fix broken FK references in chat_events and chat_messages.
+
+    The v1 cascade FK migration renamed chat_sessions to _chat_sessions_old
+    and recreated it, but didn't recreate the dependent tables. SQLite
+    automatically updated their FK targets to _chat_sessions_old, which was
+    then dropped — leaving dangling FK references that cause every INSERT
+    to fail.
+    """
+    await db.execute("PRAGMA foreign_keys=OFF")
+
+    # -- chat_events --
+    await db.execute("ALTER TABLE chat_events RENAME TO _chat_events_old")
+    await db.execute("""
+        CREATE TABLE chat_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            raw_json TEXT NOT NULL,
+            created_at DATETIME DEFAULT (datetime('now'))
+        )
+    """)
+    await db.execute("INSERT INTO chat_events SELECT * FROM _chat_events_old")
+    await db.execute("DROP TABLE _chat_events_old")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_events_session ON chat_events (session_id)"
+    )
+
+    # -- chat_messages --
+    await db.execute("ALTER TABLE chat_messages RENAME TO _chat_messages_old")
+    await db.execute("""
+        CREATE TABLE chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at DATETIME DEFAULT (datetime('now'))
+        )
+    """)
+    await db.execute("INSERT INTO chat_messages SELECT * FROM _chat_messages_old")
+    await db.execute("DROP TABLE _chat_messages_old")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, created_at)"
+    )
+
+    await db.execute("PRAGMA foreign_keys=ON")
+    await db.commit()
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
@@ -446,6 +538,20 @@ CREATE TABLE IF NOT EXISTS chat_events (
     raw_json TEXT NOT NULL,
     created_at DATETIME DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS task_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    event TEXT NOT NULL,
+    detail TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_events_task
+    ON task_events (task_id, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_task_events_type
+    ON task_events (task_id, event, id DESC);
 
 CREATE TABLE IF NOT EXISTS mcp_servers (
     name TEXT PRIMARY KEY,
@@ -757,12 +863,24 @@ async def enqueue_task(job_id: str, trigger: str,
         status = "queued"
 
     # Insert the atomic task (not committed yet — coalesce update shares the transaction)
+    now = utcnow()
     cursor = await db.execute(
         """INSERT INTO tasks (job_id, status, trigger, trigger_detail, context, approval, queued_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (job_id, status, trigger, trigger_detail, context, approval, queued_at)
     )
     new_id = cursor.lastrowid
+
+    # Dual-write: emit 'created' event (and 'queued' if auto-queued)
+    await db.execute(
+        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'created', ?, ?)",
+        (new_id, trigger, now)
+    )
+    if queued_at:
+        await db.execute(
+            "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'queued', ?)",
+            (new_id, queued_at)
+        )
 
     # Coalesce: find an existing pending root and link this task to it
     root_id = None
@@ -781,6 +899,11 @@ async def enqueue_task(job_id: str, trigger: str,
             await db.execute(
                 "UPDATE tasks SET coalesced_id = ? WHERE id = ?",
                 (root_id, new_id)
+            )
+            # Metadata event: record the coalescing
+            await db.execute(
+                "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'coalesced', ?, ?)",
+                (new_id, str(root_id), now)
             )
 
     # Single commit: insert + optional coalesce link land atomically
@@ -905,6 +1028,20 @@ LEGAL_TRANSITIONS: set[tuple[str, str]] = {
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted", "timed_out", "rejected"})
 
+# Map new_status to the event name for task_events dual-write.
+# Most map 1:1; "pending" (from queued→pending demotion) maps to "unqueued".
+_STATUS_TO_EVENT = {
+    "pending": "unqueued",
+    "queued": "queued",
+    "active": "active",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "timed_out": "timed_out",
+    "interrupted": "interrupted",
+    "rejected": "rejected",
+}
+
 # Map status to the timestamp column that should be set on transition
 _STATUS_TIMESTAMP = {
     "queued": "queued_at",
@@ -918,12 +1055,33 @@ _STATUS_TIMESTAMP = {
 }
 
 
+def _build_event_detail(new_status: str, fields: dict) -> str | None:
+    """Extract event detail from transition fields for the audit log.
+
+    Selects the most meaningful field for the event type: error message for
+    failures, session_id for activation, result_commit for completion.
+    """
+    if new_status in ("failed", "cancelled", "timed_out", "interrupted"):
+        return fields.get("error")
+    if new_status == "active":
+        parts = {}
+        if "session_id" in fields:
+            parts["session_id"] = fields["session_id"]
+        if "start_commit" in fields:
+            parts["start_commit"] = fields["start_commit"]
+        return json.dumps(parts) if parts else None
+    if new_status == "completed":
+        return fields.get("result_commit")
+    return None
+
+
 async def transition_task(task_id: int, new_status: str, _commit: bool = True, **fields):
     """Transition a task to a new status with validation.
 
     All status changes must go through this function. Sets the corresponding
-    timestamp column automatically. Additional fields (error, result_commit,
-    session_id, etc.) can be passed as kwargs.
+    timestamp column automatically and writes an event to task_events (Phase 1
+    dual-write). Additional fields (error, result_commit, session_id, etc.)
+    can be passed as kwargs.
 
     Raises ValueError if the transition is illegal.
     """
@@ -955,6 +1113,22 @@ async def transition_task(task_id: int, new_status: str, _commit: bool = True, *
 
     updates.update(fields)
 
+    # Dual-write: event log (source of truth) + task record (materialized cache)
+    event_type = _STATUS_TO_EVENT[new_status]
+    event_detail = _build_event_detail(new_status, fields)
+    event_ts = updates.get(ts_col) if ts_col else None
+    if event_ts:
+        await conn.execute(
+            "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
+            (task_id, event_type, event_detail, event_ts)
+        )
+    else:
+        from backend.state import utcnow
+        await conn.execute(
+            "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
+            (task_id, event_type, event_detail, utcnow())
+        )
+
     sets = ", ".join(f"{k} = ?" for k in updates)
     vals = list(updates.values()) + [task_id]
     await conn.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
@@ -967,16 +1141,27 @@ async def transition_tasks_batch(task_ids: list[int], new_status: str, **fields)
 
     Skips validation per-task for performance — caller is responsible for
     ensuring all tasks are in a valid source state. Used for subordinate tasks.
+    Writes events for each task in the batch (Phase 1 dual-write).
     """
     if not task_ids:
         return
     conn = await get_db()
+    from backend.state import utcnow
     updates = {"status": new_status}
     ts_col = _STATUS_TIMESTAMP.get(new_status)
+    now = utcnow()
     if ts_col:
-        from backend.state import utcnow
-        updates[ts_col] = fields.pop(ts_col, utcnow())
+        updates[ts_col] = fields.pop(ts_col, now)
     updates.update(fields)
+
+    # Dual-write: batch-insert events for all tasks
+    event_type = _STATUS_TO_EVENT[new_status]
+    event_detail = _build_event_detail(new_status, fields)
+    event_ts = updates.get(ts_col) if ts_col else now
+    await conn.executemany(
+        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
+        [(tid, event_type, event_detail, event_ts) for tid in task_ids]
+    )
 
     sets = ", ".join(f"{k} = ?" for k in updates)
     placeholders = ",".join("?" * len(task_ids))
@@ -1002,17 +1187,38 @@ async def transfer_task(task_id: int, to_queued: bool):
     if task["coalesced_id"] is not None:
         raise ValueError("Cannot transfer a subordinate — transfer its root instead")
 
+    now = utcnow()
     new_status = "queued" if to_queued else "pending"
-    queued_at = utcnow() if to_queued else None
+    queued_at = now if to_queued else None
+    event_type = "queued" if to_queued else "unqueued"
+
     # Transfer root and all subordinates; clear sort_order (append to end of target column)
     await db.execute(
         "UPDATE tasks SET status = ?, queued_at = ?, sort_order = NULL WHERE id = ?",
         (new_status, queued_at, task_id)
     )
+    # Dual-write: event for the root task
+    await db.execute(
+        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, ?, ?)",
+        (task_id, event_type, now)
+    )
+
+    # Transfer subordinates
+    sub_rows = await db.execute_fetchall(
+        "SELECT id FROM tasks WHERE coalesced_id = ? AND status IN ('pending', 'queued')",
+        (task_id,)
+    )
     await db.execute(
         "UPDATE tasks SET status = ?, queued_at = ? WHERE coalesced_id = ? AND status IN ('pending', 'queued')",
         (new_status, queued_at, task_id)
     )
+    # Dual-write: events for subordinates
+    if sub_rows:
+        await db.executemany(
+            "INSERT INTO task_events (task_id, event, created_at) VALUES (?, ?, ?)",
+            [(r["id"], event_type, now) for r in sub_rows]
+        )
+
     await db.commit()
     return task_id
 
@@ -1090,6 +1296,15 @@ async def merge_tasks(task_ids: list[int]) -> int:
     # should now point directly to the new root
     for sid in sub_ids:
         await _flatten_coalesce(db, sid, root_id)
+
+    # Metadata events: record coalescing for each subordinate
+    from backend.state import utcnow
+    now = utcnow()
+    await db.executemany(
+        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'coalesced', ?, ?)",
+        [(sid, str(root_id), now) for sid in sub_ids]
+    )
+
     await db.commit()
     return root_id
 
@@ -1137,6 +1352,13 @@ async def split_task(root_id: int) -> list[int]:
             WHERE id IN ({placeholders})""",
         [now, approval_val] + sub_ids,
     )
+
+    # Metadata events: record uncoalescing for each subordinate
+    await db.executemany(
+        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'uncoalesced', ?)",
+        [(sid, now) for sid in sub_ids]
+    )
+
     await db.commit()
     return sub_ids
 
@@ -1180,6 +1402,13 @@ async def uncoalesce_task(task_id: int) -> int:
         "UPDATE tasks SET coalesced_id = NULL, sort_order = NULL, created_at = ?, status = 'pending', approval = ?, queued_at = NULL WHERE id = ?",
         (now, approval_val, task_id),
     )
+
+    # Metadata event: record uncoalescing
+    await db.execute(
+        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'uncoalesced', ?)",
+        (task_id, now)
+    )
+
     await db.commit()
     return task_id
 
@@ -1459,7 +1688,7 @@ async def dashboard_timeline(window_days: int) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
         """SELECT t.id, t.job_id, j.name AS job_name,
-                  t.started_at, t.completed_at, t.error
+                  t.started_at, t.completed_at, t.error, t.status
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
            WHERE t.started_at IS NOT NULL

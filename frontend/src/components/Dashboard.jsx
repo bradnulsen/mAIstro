@@ -200,7 +200,10 @@ function Timeline({ timeline, windowDays, jobColorMap }) {
                   const dur = end - start
                   const median = medians[t.job_id] || dur
                   const isOutlier = dur > median * 3 && dur > 60000
-                  const isError = t.error != null
+                  // Non-happy-path: any terminal outcome other than 'completed',
+                  // or an explicit error string for legacy data without status
+                  const isError = (t.status && t.status !== 'completed' && t.completed_at)
+                    || (!t.status && t.error != null)
 
                   return (
                     <div

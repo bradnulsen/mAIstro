@@ -689,7 +689,7 @@ function ResolvedColumn({ items, loading, selected, onSelect }) {
           return (
             <div
               key={item.id}
-              className={`feed-item ${selected?.id === item.id ? 'active' : ''}`}
+              className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status !== 'completed' ? status : ''}`}
               onClick={() => onSelect(item)}
             >
               <div className="feed-avatar">

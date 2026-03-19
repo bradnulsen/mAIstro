@@ -382,6 +382,18 @@ label.muted-text {
   border-left: 2px solid var(--warning);
 }
 
+.feed-item.error {
+  border-left: 2px solid var(--danger);
+}
+
+.feed-item.timed_out {
+  border-left: 2px solid var(--warning);
+}
+
+.feed-item.interrupted {
+  border-left: 2px solid var(--warning);
+}
+
 .feed-item[draggable="true"] { cursor: grab; }
 .feed-item[draggable="true"]:active { cursor: grabbing; }
 .feed-item.dragging { opacity: var(--opacity-disabled); }
