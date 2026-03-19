@@ -5,15 +5,16 @@ import {
   getTaskDiff, getTaskOutcome, getQueueSettings, setQueueSettings, processOne,
   streamTask, approveTask, rejectTask,
   reorderTasks, mergeTasks, splitTask, uncoalesceTask, getSubordinates,
-  transferTask,
+  transferTask, resumeTask, retryTask,
 } from '../api'
 import {
   formatDate, formatDuration, TRIGGER_ICONS, mdBreaks,
   STATUS_LABELS, TRIGGER_LABELS, getTaskStatus, triggerLabel, getMessageContent,
 } from '../util'
-import History from './History'
 
 const getStatus = getTaskStatus
+
+const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'timed_out', 'interrupted', 'rejected'])
 
 function isPreExecution(item) {
   const s = getStatus(item)
@@ -30,9 +31,20 @@ function sortPreExecution(items) {
   })
 }
 
+/** Human-readable inline reason for non-success terminal states */
+function errorSummary(item, status) {
+  if (status === 'completed') return null
+  if (status === 'cancelled') return 'Cancelled by user'
+  if (status === 'timed_out') return 'Exceeded timeout limit'
+  if (status === 'interrupted') return 'Process interrupted'
+  if (status === 'rejected') return 'Rejected before execution'
+  return item.error || 'Unknown error'
+}
+
+const MIN_DRAWER_HEIGHT = 120
+const DEFAULT_DRAWER_HEIGHT = 320
+
 export default function Queue() {
-  const [tab, setTab] = useState('queue')
-  const historyRef = useRef(null)
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -40,9 +52,12 @@ export default function Queue() {
   const [output, setOutput] = useState(null)
   const [confirmCancel, setConfirmCancel] = useState(null)
   const [actionError, setActionError] = useState('')
-
   const [refreshing, setRefreshing] = useState(false)
-  const detailScrollRef = useRef(null)
+  const [retryContext, setRetryContext] = useState(null)
+
+  // Drawer state
+  const [drawerHeight, setDrawerHeight] = useState(DEFAULT_DRAWER_HEIGHT)
+  const drawerScrollRef = useRef(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -77,11 +92,12 @@ export default function Queue() {
     return () => clearInterval(interval)
   }, [refresh])
 
+  // Live streaming state
   const [liveText, setLiveText] = useState('')
   const [liveTools, setLiveTools] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
 
-  useEffect(() => { setActionError(''); setConfirmCancel(null) }, [selected?.id])
+  useEffect(() => { setActionError(''); setConfirmCancel(null); setRetryContext(null) }, [selected?.id])
 
   useEffect(() => {
     if (!selected) { setOutput(null); setLiveText(''); setLiveTools([]); setIsStreaming(false); return }
@@ -228,13 +244,51 @@ export default function Queue() {
     }
   }
 
+  const handleResume = async (id) => {
+    setActionError('')
+    try {
+      await resumeTask(id)
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
+  const handleRetry = async (id, context) => {
+    setActionError('')
+    try {
+      await retryTask(id, context)
+      setRetryContext(null)
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
+  // Drawer resize via drag
+  const handleDrawerDragStart = useCallback((e) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = drawerHeight
+    const onMove = (e) => {
+      const delta = startY - e.clientY
+      setDrawerHeight(Math.max(MIN_DRAWER_HEIGHT, startH + delta))
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [drawerHeight])
+
   useLayoutEffect(() => {
-    if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0
+    if (drawerScrollRef.current) drawerScrollRef.current.scrollTop = 0
   }, [selected?.id])
 
   useEffect(() => {
-    if (!liveText || !detailScrollRef.current) return
-    const el = detailScrollRef.current
+    if (!liveText || !drawerScrollRef.current) return
+    const el = drawerScrollRef.current
     el.scrollTop = el.scrollHeight
   }, [liveText])
 
@@ -242,14 +296,15 @@ export default function Queue() {
     const handleKey = (e) => {
       if (e.key !== 'Escape') return
       if (confirmCancel !== null) { setConfirmCancel(null); return }
+      if (retryContext !== null) { setRetryContext(null); return }
       if (selected) setSelected(null)
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [selected, confirmCancel])
+  }, [selected, confirmCancel, retryContext])
 
-  // Partition items into columns — Dispatch shows only pre-execution and active tasks
-  const pendingItems = sortPreExecution(items.filter(i => {
+  // Partition items into three columns
+  const upcomingItems = sortPreExecution(items.filter(i => {
     const s = getStatus(i)
     return s === 'pending' || (s === 'pending_approval' && !i.queued_at)
   }))
@@ -258,39 +313,19 @@ export default function Queue() {
     return s === 'queued' || (s === 'pending_approval' && i.queued_at)
   }))
   const activeItems = items.filter(i => getStatus(i) === 'running')
-  const anyRunning = activeItems.length > 0
+  const resolvedItems = items
+    .filter(i => TERMINAL_STATES.has(getStatus(i)))
+    .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
 
-  // Determine which status group the selected task belongs to
   const selectedStatus = selected ? getStatus(selected) : null
   const selectedIsPreExec = selected && isPreExecution(selected)
-
-  if (tab === 'history') {
-    return (
-      <>
-        <div className="header-bar">
-          <h1>Dispatch</h1>
-          <div className="dispatch-tabs">
-            <button className="dispatch-tab" onClick={() => setTab('queue')}>Upcoming</button>
-            <button className="dispatch-tab active">History</button>
-          </div>
-          <div className="spacer" />
-          <button className="small" onClick={() => historyRef.current?.refresh()} disabled={historyRef.current?.refreshing}>
-            {historyRef.current?.refreshing ? <span className="tool-spinner" /> : '↻'}
-          </button>
-        </div>
-        <History ref={historyRef} />
-      </>
-    )
-  }
+  const selectedIsTerminal = selected && TERMINAL_STATES.has(selectedStatus)
+  const selectedIsRunning = selectedStatus === 'running'
 
   return (
     <>
       <div className="header-bar">
         <h1>Dispatch</h1>
-        <div className="dispatch-tabs">
-          <button className="dispatch-tab active">Upcoming</button>
-          <button className="dispatch-tab" onClick={() => setTab('history')}>History</button>
-        </div>
         <div className="spacer" />
         <button className="small" onClick={handleRefresh} disabled={refreshing}>
           {refreshing ? <span className="tool-spinner" /> : '↻'}
@@ -302,11 +337,11 @@ export default function Queue() {
         </label>
       </div>
 
-      <div className="split-body">
+      <div className="dispatch-body">
         <div className="kanban-columns">
           <KanbanColumn
-            title="Pending"
-            items={pendingItems}
+            title="Upcoming"
+            items={upcomingItems}
             column="pending"
             dragMode="merge"
             selected={selected}
@@ -326,22 +361,31 @@ export default function Queue() {
             onRefresh={refresh}
             activeItems={activeItems}
           />
+          <ResolvedColumn
+            items={resolvedItems}
+            loading={loading}
+            selected={selected}
+            onSelect={setSelected}
+          />
         </div>
 
         {selected && (
-          <div className="detail-panel">
-            <div className="detail-panel-header">
+          <div className="detail-drawer" style={{ height: drawerHeight }}>
+            <div className="detail-drawer-handle" onMouseDown={handleDrawerDragStart}>
+              <div className="drawer-handle-bar" />
+            </div>
+            <div className="detail-drawer-header">
               <h3>#{selected.id} — {selected.job_name}</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
-            <div ref={detailScrollRef} className="detail-scroll">
+            <div ref={drawerScrollRef} className="detail-drawer-scroll">
               <TaskDetail item={selected} output={output} onUpdate={refresh}
                 liveText={liveText} liveTools={liveTools} isStreaming={isStreaming}
                 onUncoalesce={handleUncoalesce} />
             </div>
 
-            {(selectedIsPreExec || selectedStatus === 'running') && (
+            {(selectedIsPreExec || selectedIsRunning) && (
               <div className="detail-actions">
                 {confirmCancel === selected.id ? (
                   <div className="action-row">
@@ -398,6 +442,45 @@ export default function Queue() {
                 )}
               </div>
             )}
+
+            {selectedIsTerminal && (
+              <div className="detail-actions">
+                {retryContext !== null ? (
+                  <>
+                    <label className="muted-text">Edit context before retrying</label>
+                    <ContextEditor value={retryContext} onChange={e => setRetryContext(e.target.value)} autoFocus />
+                    <div className="action-row compact">
+                      <button className="small primary" onClick={() => handleRetry(selected.id, retryContext)}>
+                        ↺ Retry
+                      </button>
+                      <button className="small" onClick={() => setRetryContext(null)}>Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="action-row">
+                    {selected.error && !['cancelled', 'rejected'].includes(selectedStatus) && (
+                      <button
+                        className="small primary"
+                        onClick={() => handleResume(selected.id)}
+                        title="Continue from the last Claude session checkpoint (--resume)"
+                      >
+                        ↻ Resume
+                      </button>
+                    )}
+                    <button
+                      className="small"
+                      onClick={() => setRetryContext('')}
+                      title="Queue a fresh task — edit context first"
+                    >
+                      ↺ Retry
+                    </button>
+                  </div>
+                )}
+                {actionError && (
+                  <div className="error-text">{actionError}</div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -408,8 +491,8 @@ export default function Queue() {
 
 /**
  * A single kanban column with specialized drag behavior:
- * - Pending (dragMode="merge"): drop onto same-job task to coalesce
- * - Queued (dragMode="reorder"): drop between tasks to change priority
+ * - Upcoming (dragMode="merge"): drop onto same-job task to coalesce
+ * - Active (dragMode="reorder"): drop between tasks to change priority
  * Both columns accept cross-column drops as transfers.
  */
 function KanbanColumn({
@@ -425,11 +508,9 @@ function KanbanColumn({
 
   const computeDropZone = (e, rowEl, draggedItem, targetItem) => {
     if (dragMode === 'merge') {
-      // Pending column: merge if same job, otherwise no-op
       const canMerge = targetItem && draggedItem && targetItem.job_id === draggedItem.job_id
       return canMerge ? 'merge' : null
     }
-    // Queued column: reorder only
     const rect = rowEl.getBoundingClientRect()
     const y = e.clientY - rect.top
     return (y / rect.height) < 0.5 ? 'reorder-before' : 'reorder-after'
@@ -467,9 +548,8 @@ function KanbanColumn({
     setDropZone(null)
   }
 
-  // Handle cross-column drops (transfer)
   const handleColumnDragOver = (e) => {
-    if (dragIdx !== null) return // Internal drag — handled by row handlers
+    if (dragIdx !== null) return
     e.preventDefault()
     setColumnDropActive(true)
   }
@@ -506,7 +586,6 @@ function KanbanColumn({
         {items.length === 0 && !activeItems?.length && (
           <div className="empty-state">No {title.toLowerCase()} tasks</div>
         )}
-        {/* Active tasks appear above queued items */}
         {activeItems && activeItems.length > 0 && (
           <>
             {activeItems.map(item => (
@@ -577,6 +656,70 @@ function KanbanColumn({
                 <div className="feed-message">
                   {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
                 </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+
+/**
+ * Resolved column — read-only, no drag operations.
+ * Shows all terminal tasks ordered by completion time.
+ */
+function ResolvedColumn({ items, loading, selected, onSelect }) {
+  return (
+    <div className="kanban-column">
+      <div className="kanban-column-header">
+        <span className="kanban-column-title">Resolved</span>
+        <span className="kanban-column-count">{items.length}</span>
+      </div>
+      <div className="kanban-column-body">
+        {loading && items.length === 0 && <div className="loading">Loading...</div>}
+        {!loading && items.length === 0 && (
+          <div className="empty-state">No resolved tasks</div>
+        )}
+        {items.map(item => {
+          const status = getStatus(item)
+          const reason = errorSummary(item, status)
+          const hasCommits = item.start_commit && item.result_commit && item.start_commit !== item.result_commit
+          return (
+            <div
+              key={item.id}
+              className={`feed-item ${selected?.id === item.id ? 'active' : ''}`}
+              onClick={() => onSelect(item)}
+            >
+              <div className="feed-avatar">
+                {(item.job_name || '?')[0].toUpperCase()}
+              </div>
+              <div className="feed-body">
+                <div className="feed-meta">
+                  <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
+                  <span className="feed-author">{item.job_name}</span>
+                  <span className={`queue-status ${status}`}>
+                    {STATUS_LABELS[status] || status}
+                  </span>
+                  <span>{formatDate(item.completed_at, true)}</span>
+                </div>
+                {reason ? (
+                  <div className="feed-message">
+                    <span className="history-error-reason">{reason}</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="feed-message">
+                      {item.context || `${TRIGGER_LABELS[item.trigger] || item.trigger} task`}
+                    </div>
+                    {hasCommits && (
+                      <div className="feed-commits">
+                        {item.start_commit.slice(0, 8)}..{item.result_commit.slice(0, 8)}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           )
@@ -662,7 +805,6 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
       await updateTask(targetId, { context: editingContext })
       setEditingContext(null)
       if (onUpdate) await onUpdate()
-      // Re-fetch subordinates to get updated context
       if (item.subordinate_count > 0) {
         getSubordinates(item.id).then(setSubordinates).catch(() => {})
       }

@@ -2411,6 +2411,87 @@ label.muted-text {
   overflow: hidden;
 }
 
+/* ── Dispatch Body (three-column kanban + bottom drawer) ── */
+
+.dispatch-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.dispatch-body > .kanban-columns {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Detail Drawer (bottom slide-up panel) ── */
+
+.detail-drawer {
+  border-top: var(--border-heavy) solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.detail-drawer-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 10px;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  background: var(--rail-bg);
+}
+
+.detail-drawer-handle:hover {
+  background: var(--hover-bg);
+}
+
+.drawer-handle-bar {
+  width: 40px;
+  height: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--border-light);
+}
+
+.detail-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-7);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.detail-drawer-header h3 {
+  font-size: var(--text-base);
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.detail-drawer-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-7);
+}
+
+.detail-drawer .detail-actions {
+  border-top: 1px solid var(--border-light);
+  padding: var(--space-4) var(--space-7);
+  flex-shrink: 0;
+}
+
+.detail-drawer .detail-section {
+  display: inline-block;
+  vertical-align: top;
+  margin-right: var(--space-7);
+  margin-bottom: var(--space-4);
+}
+
 /* ── Detail Panel Sections ── */
 
 .detail-section {
