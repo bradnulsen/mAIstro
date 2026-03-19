@@ -196,7 +196,7 @@ function Timeline({ timeline, windowDays, jobColorMap }) {
                   const end = t.completed_at ? new Date(t.completed_at + 'Z').getTime() : now
                   const span = now - windowStart
                   const width = Math.max(0.3, ((end - start) / span) * 100)
-                  const left = Math.max(0, ((start - windowStart) / span) * 100)
+                  const left = Math.max(0, ((now - end) / span) * 100)
                   const dur = end - start
                   const median = medians[t.job_id] || dur
                   const isOutlier = dur > median * 3 && dur > 60000
@@ -229,7 +229,7 @@ function TimelineAxis({ windowStart, now }) {
   const ticks = []
   // Generate ~5 evenly-spaced time ticks
   for (let i = 0; i <= 4; i++) {
-    const t = windowStart + (span * i) / 4
+    const t = now - (span * i) / 4
     const d = new Date(t)
     const label = span > 86400000 * 2
       ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
