@@ -56,59 +56,66 @@ async def _loop():
                 await asyncio.sleep(_CHECK_INTERVAL)
                 continue
 
-            jobs = await db.list_jobs()
-            now = _now_utc()
+            # Guard the entire tick so close_db() waits for us to finish
+            async with db.db_read_guard():
+                jobs = await db.list_jobs()
+                now = _now_utc()
 
-            last_fire_map = await db.get_config_prefix("schedule_last_fire_")
+                last_fire_map = await db.get_config_prefix("schedule_last_fire_")
 
-            for job in jobs:
-                schedule = job["properties"].get("schedule", "")
-                if not schedule or not schedule.strip():
-                    continue
+                for job in jobs:
+                    schedule = job["properties"].get("schedule", "")
+                    if not schedule or not schedule.strip():
+                        continue
 
-                if not croniter.is_valid(schedule):
-                    log.warning("[scheduler] Invalid cron '%s' on job %s", schedule, job["id"])
-                    continue
+                    if not croniter.is_valid(schedule):
+                        log.warning("[scheduler] Invalid cron '%s' on job %s", schedule, job["id"])
+                        continue
 
-                if job["properties"].get("running"):
-                    continue
+                    if job["properties"].get("running"):
+                        continue
 
-                raw = last_fire_map.get(_config_key(job["id"]))
-                last_fire: datetime | None = None
-                if raw:
-                    try:
-                        last_fire = datetime.fromisoformat(raw)
-                    except ValueError:
-                        pass
+                    raw = last_fire_map.get(_config_key(job["id"]))
+                    last_fire: datetime | None = None
+                    if raw:
+                        try:
+                            last_fire = datetime.fromisoformat(raw)
+                        except ValueError:
+                            pass
 
-                if last_fire is None:
-                    await _set_last_fire(job["id"], now)
-                    log.info("[scheduler] Initialized schedule for %s: %s", job["id"], schedule)
-                    continue
+                    if last_fire is None:
+                        await _set_last_fire(job["id"], now)
+                        log.info("[scheduler] Initialized schedule for %s: %s", job["id"], schedule)
+                        continue
 
-                cron = croniter(schedule, last_fire)
-                next_fire = cron.get_next(datetime)
-                if next_fire.tzinfo is None:
-                    next_fire = next_fire.replace(tzinfo=timezone.utc)
+                    cron = croniter(schedule, last_fire)
+                    next_fire = cron.get_next(datetime)
+                    if next_fire.tzinfo is None:
+                        next_fire = next_fire.replace(tzinfo=timezone.utc)
 
-                if next_fire <= now:
-                    head = git.head_hash(state.PROJECT_DIR)
+                    if next_fire <= now:
+                        head = git.head_hash(state.PROJECT_DIR)
 
-                    log.info("[scheduler] Firing %s (schedule: %s)", job["id"], schedule)
-                    await db.enqueue_task(
-                        job["id"],
-                        "schedule",
-                        trigger_detail=schedule,
-                        context=build_trigger_context(
-                            "schedule", schedule_expr=schedule, commit_hash=head,
-                        ),
-                    )
-                    await _set_last_fire(job["id"], now)
+                        log.info("[scheduler] Firing %s (schedule: %s)", job["id"], schedule)
+                        await db.enqueue_task(
+                            job["id"],
+                            "schedule",
+                            trigger_detail=schedule,
+                            context=build_trigger_context(
+                                "schedule", schedule_expr=schedule, commit_hash=head,
+                            ),
+                        )
+                        await _set_last_fire(job["id"], now)
 
-                    worker.notify()
+                        worker.notify()
 
         except asyncio.CancelledError:
             raise
+        except RuntimeError as e:
+            if "closing" in str(e).lower():
+                log.info("[scheduler] Skipping tick — project switch in progress")
+            else:
+                log.exception("[scheduler] Error in loop")
         except Exception:
             log.exception("[scheduler] Error in loop")
 

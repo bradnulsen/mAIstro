@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 PROJECT_DIR: str | None = None
+_switching: bool = False
 
 
 def utcnow() -> str:
@@ -17,6 +18,8 @@ def utcnow() -> str:
 
 
 def require_project():
-    """Raise HTTPException if no project is loaded. Shared across route modules."""
+    """Raise HTTPException if no project is loaded or a switch is in progress."""
+    if _switching:
+        raise HTTPException(503, "Project switch in progress. Please retry.")
     if not PROJECT_DIR:
         raise HTTPException(400, "No project loaded. POST /api/project/open first.")

@@ -114,14 +114,22 @@ async def open_project(req: OpenProjectRequest):
     if not os.path.isdir(path):
         raise HTTPException(404, "Directory not found")
 
-    if state.PROJECT_DIR and os.path.normpath(path) != os.path.normpath(state.PROJECT_DIR):
+    switching = state.PROJECT_DIR and os.path.normpath(path) != os.path.normpath(state.PROJECT_DIR)
+    if switching:
         active = worker.get_active_task_id()
         if active is not None:
             raise HTTPException(409, f"Cannot switch projects while task #{active} is running. Cancel it first or wait for completion.")
 
-    git.ensure_repo(path)
-    state.PROJECT_DIR = path
-    await db.init_db(path)
+    # Coordinated project switch: flag prevents new work, close_db drains readers
+    if switching:
+        state._switching = True
+    try:
+        git.ensure_repo(path)
+        invalidate_chat_context_cache()
+        await db.init_db(path)
+        state.PROJECT_DIR = path
+    finally:
+        state._switching = False
     git.install_post_commit_hook(path)
     git.ensure_gitignore(path)
     appstate.touch_project(path)
@@ -194,9 +202,13 @@ async def close_project():
     active = worker.get_active_task_id()
     if active is not None:
         raise HTTPException(409, f"Cannot close project while task #{active} is running. Cancel it first or wait for completion.")
-    state.PROJECT_DIR = None
-    invalidate_chat_context_cache()
-    await db.close_db()
+    state._switching = True
+    try:
+        state.PROJECT_DIR = None
+        invalidate_chat_context_cache()
+        await db.close_db()
+    finally:
+        state._switching = False
     return {"status": "ok"}
 
 

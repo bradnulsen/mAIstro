@@ -138,15 +138,23 @@ async def _loop():
                 await _sweep_stale()
                 _swept_project = state.PROJECT_DIR
 
-            # Worker always processes queued tasks — auto-queueing only
-            # controls where new tasks land, not whether the worker runs.
-            async with _lock:
-                task = await db.get_oldest_queued_task()
-                if task:
-                    await _process_task(task)
+            # Guard the queue poll so close_db() waits for us.
+            # Task execution itself is protected by the active-task check
+            # at the HTTP layer — this covers the poll gap.
+            async with db.db_read_guard():
+                async with _lock:
+                    task = await db.get_oldest_queued_task()
+                    if task:
+                        await _process_task(task)
 
         except asyncio.CancelledError:
             raise
+        except RuntimeError as e:
+            if "closing" in str(e).lower():
+                log.info("[worker] Skipping poll — project switch in progress")
+            else:
+                log.exception("[worker] Error in loop")
+                await asyncio.sleep(5)
         except Exception:
             log.exception("[worker] Error in loop")
             await asyncio.sleep(5)

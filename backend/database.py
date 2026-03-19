@@ -1,20 +1,55 @@
 """SQLite database layer for mAistro — schema, init, CRUD helpers."""
 
+import asyncio
 import aiosqlite
+import contextlib
 import json
+import logging
 import os
 import re
 import uuid
 
+log = logging.getLogger("maistro.database")
+
 DB_PATH: str | None = None
 _conn: aiosqlite.Connection | None = None
 _property_defs_cache: list | None = None
+
+# ── Project-switch coordination (R3) ──────────────────────
+# Reader-counting guard prevents close_db() from pulling the connection
+# out from under in-flight DB operations. See storage.md § Project-Switch
+# Coordination for the full spec.
+_active_readers: int = 0
+_closing: bool = False
+_readers_drained = asyncio.Event()
+_readers_drained.set()  # starts drained (no readers)
 
 
 def get_db_path(project_dir: str) -> str:
     maistro_dir = os.path.join(project_dir, ".maistro")
     os.makedirs(maistro_dir, exist_ok=True)
     return os.path.join(maistro_dir, "maistro.db")
+
+
+@contextlib.asynccontextmanager
+async def db_read_guard():
+    """Acquire a read guard around a DB operation span.
+
+    While any guard is held, close_db() blocks. Once close_db() sets the
+    _closing flag, new guards raise instead of entering — callers should
+    let the operation fail gracefully (the project is switching).
+    """
+    global _active_readers
+    if _closing:
+        raise RuntimeError("Database is closing — project switch in progress")
+    _active_readers += 1
+    _readers_drained.clear()
+    try:
+        yield
+    finally:
+        _active_readers -= 1
+        if _active_readers == 0:
+            _readers_drained.set()
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -35,13 +70,24 @@ async def get_db() -> aiosqlite.Connection:
 
 
 async def close_db():
-    """Close the persistent connection and reset state. Call from lifespan teardown."""
-    global _conn, DB_PATH, _property_defs_cache
+    """Close the persistent connection, waiting for active readers to drain.
+
+    Sets _closing to prevent new readers, waits for in-flight operations
+    to finish, then closes the connection and resets state.
+    """
+    global _conn, DB_PATH, _property_defs_cache, _closing
+    _closing = True
+    # Wait for active readers to drain (timeout prevents deadlock)
+    try:
+        await asyncio.wait_for(_readers_drained.wait(), timeout=10.0)
+    except asyncio.TimeoutError:
+        log.warning("[database] Timed out waiting for %d active readers to drain — closing anyway", _active_readers)
     if _conn is not None:
         await _conn.close()
         _conn = None
     DB_PATH = None
     _property_defs_cache = None
+    _closing = False
 
 
 async def init_db(project_dir: str):
