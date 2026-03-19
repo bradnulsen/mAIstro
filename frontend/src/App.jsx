@@ -14,7 +14,7 @@ const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', mc
 export default function App() {
   const [project, setProject] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState(VIEWS.queue)
+  const [view, setView] = useState(VIEWS.dashboard)
   const [jobs, setJobs] = useState([])
   const [chatOpen, setChatOpen] = useState(false)
   const [chatWidth, setChatWidth] = useState(380)
@@ -79,6 +79,11 @@ export default function App() {
       <nav className="rail">
         <div className="rail-logo" onClick={() => { setProject(null); setJobs([]) }} title="Switch project">⬡</div>
         <button
+          className={`rail-icon ${view === VIEWS.dashboard ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.dashboard)}
+          title="Dashboard"
+        >⊞</button>
+        <button
           className={`rail-icon ${view === VIEWS.queue ? 'active' : ''}`}
           onClick={() => setView(VIEWS.queue)}
           title="Dispatch"
@@ -103,11 +108,6 @@ export default function App() {
           onClick={() => setView(VIEWS.mcp)}
           title="MCP Servers"
         >⧈</button>
-        <button
-          className={`rail-icon ${view === VIEWS.dashboard ? 'active' : ''}`}
-          onClick={() => setView(VIEWS.dashboard)}
-          title="Dashboard"
-        >▦</button>
         <div className="rail-spacer" />
         <button
           className={`rail-icon ${view === VIEWS.settings ? 'active' : ''}`}
