@@ -173,6 +173,13 @@ async def _migrate(db: aiosqlite.Connection):
         )
         await db.commit()
 
+    if schema_version < 3:
+        await _migrate_stale_indices(db)
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '3')"
+        )
+        await db.commit()
+
 
 async def _migrate_cascade_fks(db: aiosqlite.Connection):
     """Add ON DELETE CASCADE to tasks.job_id and chat_sessions.job_id.
@@ -343,6 +350,37 @@ async def _migrate_status_column(db: aiosqlite.Connection):
     await db.commit()
 
 
+async def _migrate_stale_indices(db: aiosqlite.Connection):
+    """Drop stale timestamp-based indices and add idx_tasks_job_status.
+
+    Before the status state machine (schema v2), queue queries filtered on
+    (started_at, error, queued_at) combinations. All hot paths now filter
+    on the status column instead. The timestamp-based indices are dead weight
+    — they consume write overhead and storage without serving any query.
+
+    idx_tasks_job_status covers the (job_id, status) predicate used by:
+      - get_job() single-job fetch: WHERE job_id = ? AND status = 'active'
+      - enqueue_task() coalescing: WHERE job_id = ? AND status IN ('pending','queued')
+    """
+    stale = [
+        "idx_tasks_pending",
+        "idx_tasks_job_coalesce",
+        "idx_tasks_running",
+        "idx_tasks_job_running",
+        "idx_tasks_coalesce_lookup",
+        "idx_tasks_queued",
+        "idx_tasks_queued_worker",
+    ]
+    for name in stale:
+        await db.execute(f"DROP INDEX IF EXISTS {name}")
+
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_job_status "
+        "ON tasks (job_id, status)"
+    )
+    await db.commit()
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
@@ -423,20 +461,12 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 -- Indices for hot query paths
-CREATE INDEX IF NOT EXISTS idx_tasks_pending
-    ON tasks (started_at, error, sort_order, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_job_coalesce
-    ON tasks (job_id, started_at, error);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_running
-    ON tasks (started_at, completed_at);
-
 CREATE INDEX IF NOT EXISTS idx_tasks_coalesced
     ON tasks (coalesced_id);
 
-CREATE INDEX IF NOT EXISTS idx_tasks_status_worker
-    ON tasks (status, approval, coalesced_id);
+-- idx_tasks_status_worker is created by _migrate_status_column (schema v2)
+-- because the status column may not exist on legacy databases when SCHEMA_SQL runs.
+-- idx_tasks_job_status is created by _migrate_stale_indices (schema v3) for the same reason.
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session
     ON chat_messages (session_id, created_at);
@@ -458,12 +488,6 @@ CREATE INDEX IF NOT EXISTS idx_job_properties_key
 
 CREATE INDEX IF NOT EXISTS idx_job_properties_job_id
     ON job_properties (job_id);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_job_running
-    ON tasks (job_id, started_at, completed_at);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_coalesce_lookup
-    ON tasks (job_id, started_at, error, coalesced_id);
 
 """
 
