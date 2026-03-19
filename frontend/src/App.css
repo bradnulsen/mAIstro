@@ -2498,9 +2498,23 @@ label.muted-text {
 }
 
 .detail-drawer .detail-section {
-  display: inline-block;
-  vertical-align: top;
-  margin-right: var(--space-7);
+  margin-bottom: var(--space-4);
+}
+
+/* Compact metadata row: Status, Timeline, Commits side by side */
+.detail-meta-row {
+  display: flex;
+  gap: var(--space-7);
+  margin-bottom: var(--space-4);
+}
+
+.detail-meta-row .detail-section {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+/* Full-width sections (Context, Output, Diff) */
+.detail-section-wide {
   margin-bottom: var(--space-4);
 }
 

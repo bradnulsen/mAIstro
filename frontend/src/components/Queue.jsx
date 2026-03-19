@@ -826,15 +826,59 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
   const activeTrigger = allTriggers.find(t => t.id === selectedTrigger) || allTriggers[0]
   const ctx = activeTrigger?.context || ''
 
+  const hasCommits = item.start_commit && item.result_commit && item.start_commit !== item.result_commit
+
   return (
     <>
-      <div className="detail-section">
-        <label>Status</label>
-        <span className={`queue-status large ${status}`}>
-          {STATUS_LABELS[status]}
-        </span>
+      {/* Row 1: Compact metadata side by side */}
+      <div className="detail-meta-row">
+        <div className="detail-section">
+          <label>Status</label>
+          <span className={`queue-status large ${status}`}>
+            {STATUS_LABELS[status]}
+          </span>
+        </div>
+
+        <div className="detail-section">
+          <label>Timeline</label>
+          <div className="detail-meta">
+            <div>Created: {formatDate(item.created_at, true)}</div>
+            {item.queued_at && <div>Queued: {formatDate(item.queued_at, true)}</div>}
+            {item.started_at && <div>Started: {formatDate(item.started_at, true)}</div>}
+            {item.completed_at && <div>Completed: {formatDate(item.completed_at, true)}</div>}
+            {item.started_at && item.completed_at && (
+              <div className="detail-duration">
+                Duration: {formatDuration(item.started_at, item.completed_at)}
+              </div>
+            )}
+            {item.started_at && !item.completed_at && (
+              <div className="detail-duration running">
+                Running for {formatDuration(item.started_at)}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {hasCommits && (
+          <div className="detail-section">
+            <label>Commits</label>
+            <div className="detail-meta">
+              {`${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`}
+            </div>
+          </div>
+        )}
+
+        {item.error && status !== 'cancelled' && (
+          <div className="detail-section">
+            <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
+            <div className={`detail-meta ${status === 'timed_out' ? 'warning-text' : 'error-text'}`}>
+              {status === 'timed_out' ? 'Task exceeded timeout limit' : item.error}
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* Row 2: Triggers — full width */}
       <div className="detail-section">
         <label>Triggers{allTriggers.length > 1 ? ` (${allTriggers.length})` : ''}</label>
         <div className="trigger-chips">
@@ -858,6 +902,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
         </div>
       </div>
 
+      {/* Row 3: Context — full width */}
       <div className="detail-section">
         <label>Context</label>
         {isPending && editingContext !== null ? (
@@ -886,48 +931,11 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
         )}
       </div>
 
-      <div className="detail-section">
-        <label>Timeline</label>
-        <div className="detail-meta">
-          <div>Created: {formatDate(item.created_at, true)}</div>
-          {item.queued_at && <div>Queued: {formatDate(item.queued_at, true)}</div>}
-          {item.started_at && <div>Started: {formatDate(item.started_at, true)}</div>}
-          {item.completed_at && <div>Completed: {formatDate(item.completed_at, true)}</div>}
-          {item.started_at && item.completed_at && (
-            <div className="detail-duration">
-              Duration: {formatDuration(item.started_at, item.completed_at)}
-            </div>
-          )}
-          {item.started_at && !item.completed_at && (
-            <div className="detail-duration running">
-              Running for {formatDuration(item.started_at)}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {item.start_commit && item.result_commit && item.start_commit !== item.result_commit && (
-        <div className="detail-section">
-          <label>Commits</label>
-          <div className="detail-meta">
-            {`${item.start_commit.slice(0, 8)}..${item.result_commit.slice(0, 8)}`}
-          </div>
-        </div>
-      )}
-
+      {/* Outcome summary — full width */}
       {outcomeSummary && (
         <div className="detail-section">
           <label>Outcome</label>
           <pre className="context-display">{outcomeSummary}</pre>
-        </div>
-      )}
-
-      {item.error && status !== 'cancelled' && (
-        <div className="detail-section">
-          <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
-          <div className={`detail-meta ${status === 'timed_out' ? 'warning-text' : 'error-text'}`}>
-            {status === 'timed_out' ? 'Task exceeded timeout limit' : item.error}
-          </div>
         </div>
       )}
 
@@ -973,7 +981,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
         </div>
       )}
 
-      {item.start_commit && item.result_commit && item.start_commit !== item.result_commit && (
+      {hasCommits && (
         <div className="detail-section">
           <label
             onClick={() => setDiffOpen(o => !o)}
