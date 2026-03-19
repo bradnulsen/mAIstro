@@ -20,6 +20,24 @@ The project lifecycle system manages opening, closing, and switching between pro
 
 `POST /api/project/close` with the same active-task guard. Clears `PROJECT_DIR` and closes the database connection.
 
+## Project Switch Coordination
+
+Opening a new project (or closing the current one) requires closing the active database connection. Four concurrent consumers share this connection: the worker, the scheduler, HTTP handlers, and the chat CLI runner. Closing the connection without coordinating with in-flight operations causes use-after-close errors.
+
+### Current Guards
+
+The active-task check (step 2 of opening) prevents project switch while the worker is executing a task. This covers the most dangerous case — the worker holds the connection for the full duration of CLI execution.
+
+### Gaps
+
+- **Scheduler**: polls every 30 seconds, making multiple DB calls per tick (list_jobs, config reads, enqueue). A project switch mid-tick closes the connection under it. The scheduler has no idle guard.
+- **HTTP handlers**: any request that has passed `require_project()` may be mid-query when a different request triggers project switch. The two requests execute concurrently.
+- **Worker loop (non-task)**: the worker's poll loop calls `get_oldest_queued_task()` outside the active-task guard. If a project switch races this call, the worker hits a closed connection.
+
+### Coordination Mechanism
+
+The connection coordination model is specified in [Storage — Project-Switch Coordination](storage.md#project-switch-coordination). In summary: a reader-counting guard in `database.py` lets `close_db()` wait until all in-flight DB operations complete before closing. Project switch sets a "switching" flag first to prevent new operations from starting, drains active readers, then closes and reopens the connection atomically.
+
 ## Shared Mutable State
 
 `backend/state.py` holds two shared utilities:

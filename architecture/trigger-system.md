@@ -37,6 +37,8 @@ A background scheduler evaluates cron expressions. When a job's schedule fires, 
 4. If overdue, enqueues with `schedule` trigger and updates the last-fire timestamp
 5. First encounter of a schedule sets the baseline to now without firing — prevents immediate fire on job creation
 
+**Connection safety**: the scheduler makes multiple DB calls per tick (list_jobs, config reads, enqueue) without holding any lock. During project switch, `close_db()` must wait for the scheduler's in-flight operations to complete. See [Storage — Project-Switch Coordination](storage.md#project-switch-coordination).
+
 **Coalescing**: always coalesces globally — any pre-execution task (pending or queued) for the same job absorbs the new trigger. Repeated cron fires while a task is pre-execution produce one run, not many.
 
 **Persistence**: last-fire timestamps are stored in the `config` table (key: `schedule_last_fire_{job_id}`), surviving process restarts.

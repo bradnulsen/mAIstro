@@ -154,6 +154,8 @@ An `asyncio.Lock` guards task processing. Exactly one task runs at a time. The l
 
 The `_active_task_id` global tracks which task is currently running, enabling cancellation and the "active task blocks project switch" safety invariant.
 
+The worker's poll loop also makes DB calls outside the lock (e.g., `get_oldest_queued_task`). These are protected by the connection-level coordination described in [Storage — Project-Switch Coordination](storage.md#project-switch-coordination), which ensures `close_db()` waits for in-flight DB operations to complete.
+
 The worker only queries for tasks with `status = 'queued'`. Pending tasks are invisible to the worker regardless of their queue position.
 
 ### Task Ordering

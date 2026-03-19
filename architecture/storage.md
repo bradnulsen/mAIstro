@@ -18,6 +18,52 @@ Pragmas applied on every connection:
 - `journal_mode=WAL` — concurrent reads during writes, critical because the worker writes task records while routes read them
 - `foreign_keys=ON` — enforces referential integrity (cascading deletes depend on this)
 
+### Project-Switch Coordination
+
+The connection singleton is shared by four concurrent consumers: the worker loop, the scheduler loop, HTTP request handlers, and the chat CLI runner. Closing the connection during a project switch must coordinate with all of them to prevent use-after-close errors.
+
+#### The Problem
+
+`close_db()` nulls the singleton and closes the underlying connection immediately. If any consumer is mid-query — has called `get_db()` and is between `execute()` and `commit()` — the connection becomes invalid under it. The race is possible because:
+
+1. **Worker**: guarded by an active-task check at the HTTP layer, but the check and the close are not atomic. The worker reads `PROJECT_DIR` at the top of its loop, then makes DB calls — if `close_db()` runs between those two points, the worker hits a closed connection.
+2. **Scheduler**: has no guard at all. It reads `DB_PATH` and `PROJECT_DIR` at loop top, then iterates all jobs and makes multiple DB calls (list_jobs, get_config, enqueue_task). A project switch mid-iteration closes the connection under it.
+3. **HTTP handlers**: any in-flight request that has already passed `require_project()` can be mid-query when another request triggers project switch.
+4. **Chat CLI runner**: long-running streaming sessions that make DB calls throughout their lifetime.
+
+#### Coordination Model
+
+An `asyncio.Lock` (`_db_lock`) in `database.py` guards the connection lifecycle. All consumers acquire this lock as a shared reader; `close_db()` acquires it exclusively before closing.
+
+Since Python's `asyncio.Lock` has no reader/writer mode, the implementation uses a counting semaphore pattern:
+
+- **`db_read_guard()`** — async context manager that increments an active-reader count on entry, decrements on exit. While the count is nonzero, `close_db()` blocks.
+- **`close_db()`** — sets a "closing" flag that prevents new readers from entering, then waits until the active-reader count reaches zero before closing the connection.
+
+The granularity of protection is per-operation, not per-request. Each `get_db()` call site wraps its query-to-commit span in `db_read_guard()`. This keeps the critical section narrow — a long-running task execution holds the guard only around individual DB operations, not for the entire task lifetime.
+
+#### Consumer-Specific Guards
+
+| Consumer | Current guard | Required guard |
+|----------|--------------|----------------|
+| Worker | Active-task HTTP check blocks project switch while a task runs | Sufficient — task execution is the long pole; individual DB calls within the loop iteration are fast |
+| Scheduler | None | `db_read_guard()` around the entire per-tick job scan, or around each DB call within the tick |
+| HTTP handlers | `require_project()` checks project is loaded | `db_read_guard()` around DB-touching operations, or project switch waits for in-flight requests to drain |
+| Chat runner | None | `db_read_guard()` around each DB call within the streaming session |
+
+The worker's active-task check is the coarse-grained guard that prevents the most dangerous case (project switch during task execution). The `db_read_guard()` covers the remaining gaps — scheduler ticks and HTTP handler races.
+
+#### Ordering Constraint
+
+Project switch must follow this sequence:
+1. Set a "switching" flag that causes new `require_project()` calls to fail (prevents new work from starting)
+2. Wait for active readers to drain (the `db_read_guard()` mechanism)
+3. Close the old connection
+4. Open the new connection and set `PROJECT_DIR`
+5. Clear the "switching" flag
+
+This ensures no consumer sees a partially-switched state where `PROJECT_DIR` points to the new project but the connection still belongs to the old one (or is closed).
+
 ### Schema
 
 Seven tables:
