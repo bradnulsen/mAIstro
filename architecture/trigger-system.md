@@ -97,7 +97,7 @@ Coalescing prevents redundant pre-execution tasks. It checks both pending and qu
    - `commit`, `dependency`, or `agent` trigger → coalesce with same-type pre-execution tasks
    - All others → no coalescing
 
-2. If coalescing: query for an existing pre-execution task (not started, no error, `queued_at IS NULL OR started_at IS NULL`). If found, the new trigger is absorbed and the existing task ID is returned.
+2. If coalescing: query for an existing pre-execution task (`status IN ('pending', 'queued')`). If found, the new trigger is absorbed and the existing task ID is returned.
 
 3. If not coalescing (or no compatible pre-execution task found): insert a new record. The new task enters pending or queued based on the auto-queueing setting.
 

@@ -59,7 +59,7 @@ Aggregated operational visibility — a read-only surface that answers "how are 
 
 **Four sections:**
 
-- **Job Health Summary** — per-job task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Jobs are ordered by health — low success rates and degrading trends are visually prominent. Terminal state breakdown uses the existing `error` column convention: NULL = completed, specific strings = distinct failure modes (see [Dispatch Engine — Terminal States](dispatch-engine.md#terminal-states)).
+- **Job Health Summary** — per-job task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Jobs are ordered by health — low success rates and degrading trends are visually prominent. Terminal state breakdown uses the `status` column directly — each terminal status (`completed`, `failed`, `cancelled`, `timed_out`, `interrupted`, `rejected`) maps to a health category (see [Dispatch Engine — Task Status](dispatch-engine.md#task-status)).
 
 - **Timeline** — horizontal bars per task positioned by `started_at` and sized by duration (`completed_at - started_at`), color-coded by job. Rendered with positioned HTML/CSS elements — no chart library. Reveals scheduling density, idle gaps, and duration outliers. Long-running tasks (significantly above the job's median) are visually distinct.
 
@@ -68,7 +68,7 @@ Aggregated operational visibility — a read-only surface that answers "how are 
 - **Tool Usage Patterns** — per-job tool frequency and error rates derived from `chat_events` where `event_type = 'mcp_tool_use'`. Joins through `chat_sessions` (session → task → job) to attribute tool calls to jobs. Surfaces persistent tool errors that indicate configuration or instruction problems. Secondary to health and timing — supports investigation after triage.
 
 **Data access pattern**: the dashboard introduces a new query surface over existing tables but requires no schema changes. The key queries are time-windowed aggregations:
-- `tasks` grouped by `job_id` with terminal state classification (from `error` column), filtered by `completed_at` within the time window
+- `tasks` grouped by `job_id` with terminal state classification (from `status` column), filtered by `completed_at` within the time window
 - `tasks` with `started_at` and `completed_at` for timeline positioning, filtered by time window
 - `tasks` filtered by `trigger = 'agent'` with `trigger_detail` for dispatch chain reconstruction
 - `chat_events` joined through `chat_sessions` → `tasks` for per-job tool attribution, filtered by event timestamp

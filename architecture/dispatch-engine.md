@@ -17,6 +17,7 @@ Each `tasks` row tracks:
 | Column | Purpose |
 |--------|---------|
 | `job_id` | Which job this task belongs to |
+| `status` | Authoritative task state — see [Task Status](#task-status) below |
 | `trigger` | Primary trigger type (manual, commit, schedule, dependency, resume, retry) |
 | `trigger_detail` | Trigger-specific reference (commit hash, cron expression, upstream job ID) |
 | `context` | Pre-formatted context text built at the enqueue site |
@@ -29,36 +30,106 @@ Each `tasks` row tracks:
 | `started_at` | When the worker began processing |
 | `completed_at` | When execution finished (success, failure, or cancellation) |
 | `result_commit` | HEAD hash after execution completed |
-| `error` | Error message if failed, timed out, cancelled, interrupted, or rejected |
+| `error` | Error detail for non-success terminal states (free-form text for `failed`, sentinel strings for others) |
 | `coalesced_id` | Links subordinate tasks to a root task for merge; NULL = standalone/root |
 
-### Task State Derivation
+### Task Status
 
-Task state is derived from lifecycle timestamps, not stored as a separate field:
+The `status` column is the authoritative source of task state. All queries that need to know "what state is this task in" filter on `status` — never on a multi-column predicate derived from timestamps.
 
-| State | Condition |
-|-------|-----------|
-| **Pending** | `queued_at IS NULL AND started_at IS NULL` |
-| **Queued** | `queued_at IS NOT NULL AND started_at IS NULL` |
-| **Active** | `started_at IS NOT NULL AND completed_at IS NULL` |
-| **Terminal** | `completed_at IS NOT NULL` |
+The timestamp columns (`created_at`, `queued_at`, `started_at`, `completed_at`) remain as an audit trail recording *when* each transition occurred. They are no longer used to *derive* state.
 
-A task may move backward from queued to pending (via manual transfer), but once started, progression is forward-only.
+#### Status Values
 
-### Terminal States
-
-A task reaches a terminal state when `completed_at` is set. The `error` field distinguishes the outcome:
-
-| Terminal State | `error` value | Meaning |
-|----------------|---------------|---------|
-| **Completed** | `NULL` | Success — the agent finished its work. Only this state triggers downstream dependencies. |
-| **Failed** | error message | The agent encountered an unrecoverable error. |
-| **Timed out** | `"timed out"` | The watchdog terminated the agent after exceeding the configured timeout. Partial commits may exist. |
-| **Cancelled** | `"cancelled"` | The user explicitly stopped the task while it was running. |
-| **Interrupted** | `"interrupted"` | The platform process died while the task was active. Detected by the stale sweep on startup. |
-| **Rejected** | `"rejected"` | The user rejected a task awaiting approval. The task never executed. |
+| Status | Category | Meaning |
+|--------|----------|---------|
+| `pending` | Pre-execution | Task is in the staging area, awaiting curation or promotion |
+| `queued` | Pre-execution | Task is on the execution runway, eligible for the worker |
+| `active` | In-flight | Worker is currently processing this task |
+| `completed` | Terminal (success) | Agent finished its work. Only this status triggers downstream dependencies |
+| `failed` | Terminal (non-success) | Agent encountered an unrecoverable error |
+| `cancelled` | Terminal (non-success) | User explicitly stopped the task while running, or cancelled before execution |
+| `interrupted` | Terminal (non-success) | Platform process died while task was active; detected by stale sweep |
+| `timed_out` | Terminal (non-success) | Watchdog terminated the agent after exceeding configured timeout |
+| `rejected` | Terminal (non-success) | User rejected a task awaiting approval; task never executed |
 
 **Completed is success; everything else is non-success.** Each non-success state implies a different user response — retry a failure, resume a timeout, re-dispatch after an interruption — so the UI must make the distinction immediately visible via distinct status labels.
+
+#### Transition Rules
+
+All status changes go through a centralized `transition_task(task_id, new_status, **fields)` function that validates the transition is legal before executing it. Raw `UPDATE tasks SET status = ...` is prohibited outside this function.
+
+```
+pending  → queued       (transfer, auto-queue at enqueue time)
+pending  → cancelled    (cancel before execution)
+pending  → rejected     (reject pending-approval task)
+queued   → pending      (transfer back to staging — only backward transition allowed)
+queued   → active       (worker picks up task)
+queued   → cancelled    (cancel before execution)
+active   → completed    (agent finished successfully)
+active   → failed       (agent error)
+active   → cancelled    (user cancellation)
+active   → timed_out    (watchdog fires)
+active   → interrupted  (stale sweep on startup)
+```
+
+Any transition not in this list raises an error. This prevents invalid state combinations — a task can never jump from `pending` to `completed` without passing through `queued` and `active`.
+
+The `transition_task` function:
+1. Reads the current `status` of the task
+2. Validates `(current_status, new_status)` is a legal transition
+3. Sets `status` to `new_status`
+4. Sets the corresponding timestamp (`queued_at`, `started_at`, or `completed_at`) if applicable
+5. Sets any additional fields passed as kwargs (e.g., `error`, `result_commit`, `session_id`)
+6. Commits the transaction
+
+#### Migration
+
+Existing databases derive `status` from the current column state during migration:
+
+| Condition | Derived status |
+|-----------|----------------|
+| `started_at IS NULL AND queued_at IS NULL AND error IS NULL` | `pending` |
+| `started_at IS NULL AND queued_at IS NOT NULL AND error IS NULL` | `queued` |
+| `started_at IS NOT NULL AND completed_at IS NULL` | `active` |
+| `completed_at IS NOT NULL AND error IS NULL` | `completed` |
+| `completed_at IS NOT NULL AND error = 'cancelled'` | `cancelled` |
+| `completed_at IS NOT NULL AND error = 'timed out'` | `timed_out` |
+| `completed_at IS NOT NULL AND error = 'interrupted'` | `interrupted` |
+| `completed_at IS NOT NULL AND error = 'rejected'` | `rejected` |
+| `completed_at IS NOT NULL AND error IS NOT NULL` (other) | `failed` |
+| `completed_at IS NULL AND error IS NOT NULL` (zombie) | `cancelled` |
+
+The last row handles the zombie state that triggered R1 — tasks with `error` set but never started or completed. These are force-terminated as `cancelled`.
+
+#### Query Simplification
+
+Before (6-column predicate for worker eligibility):
+```sql
+WHERE queued_at IS NOT NULL AND started_at IS NULL AND error IS NULL
+  AND completed_at IS NULL
+  AND (approval IS NULL OR approval = 'approved')
+  AND coalesced_id IS NULL
+```
+
+After:
+```sql
+WHERE status = 'queued'
+  AND (approval IS NULL OR approval = 'approved')
+  AND coalesced_id IS NULL
+```
+
+The `approval` and `coalesced_id` predicates remain because they are orthogonal concerns — approval gates and coalescing are not lifecycle states. A new index on `(status, approval, coalesced_id)` replaces the current multi-column worker index.
+
+#### Invariants
+
+- `status` is never NULL — every task has exactly one status at all times
+- `status` only changes through `transition_task` — no raw UPDATE on status
+- Terminal statuses (`completed`, `failed`, `cancelled`, `interrupted`, `timed_out`, `rejected`) are permanent — once set, a task's status never changes again
+- `completed_at` is set on every terminal transition; `started_at` on `active`; `queued_at` on `queued`
+- A task with `status = 'active'` always has `started_at IS NOT NULL` and `completed_at IS NULL`
+- A task with any terminal status always has `completed_at IS NOT NULL`
+- The `error` column is informational for terminal non-success states — `status` is authoritative for determining the outcome type
 
 ## Worker
 
@@ -83,7 +154,7 @@ An `asyncio.Lock` guards task processing. Exactly one task runs at a time. The l
 
 The `_active_task_id` global tracks which task is currently running, enabling cancellation and the "active task blocks project switch" safety invariant.
 
-The worker only queries for tasks in the **queued** state (`queued_at IS NOT NULL AND started_at IS NULL`). Pending tasks are invisible to the worker regardless of their queue position.
+The worker only queries for tasks with `status = 'queued'`. Pending tasks are invisible to the worker regardless of their queue position.
 
 ### Task Ordering
 
@@ -109,7 +180,7 @@ Cancellation works through an `asyncio.Event` shared with the CLI bridge. Settin
 
 ### Stale Sweep
 
-On startup (once per project open), the worker marks any tasks that are `started_at IS NOT NULL AND completed_at IS NULL` as interrupted. This handles the case where the process died mid-task.
+On startup (once per project open), the worker transitions any tasks with `status = 'active'` to `interrupted` via `transition_task`. This handles the case where the process died mid-task.
 
 ### Dependent Job Propagation
 
@@ -117,7 +188,7 @@ After successful completion (no error, no timeout), the worker scans all jobs fo
 
 Circular dependency chains are safe: coalescing absorbs redundant triggers, and sequential execution ensures no concurrent amplification. A cycle produces at most one pending task per job at any time.
 
-Only successful completion (no error) triggers dependents — failed, timed-out, cancelled, interrupted, and rejected tasks do not.
+Only `status = 'completed'` triggers dependents — `failed`, `timed_out`, `cancelled`, `interrupted`, and `rejected` tasks do not.
 
 ## Approval Gates
 
@@ -196,8 +267,8 @@ Reverses a merge or automatic coalescing. Takes a pending root task that has sub
 3. Split-off tasks inherit the job's current `require_approval` setting — if the gate is now enabled, they enter pending-approval state even if the original merge happened before the gate was set
 
 **Constraints**:
-- Only pending root tasks (coalesced_id IS NULL, queued_at IS NULL) that have at least one subordinate can be split. Split is a coalescing operation and coalescing belongs to the pending column
-- Only pre-execution tasks (started_at IS NULL and no error)
+- Only pending root tasks (`coalesced_id IS NULL`, `status = 'pending'`) that have at least one subordinate can be split. Split is a coalescing operation and coalescing belongs to the pending column
+- Only pre-execution tasks (`status IN ('pending', 'queued')`)
 - The root task itself is unchanged — it retains its position, trigger, and context. Only subordinates are released
 
 ### Transfer
@@ -220,7 +291,7 @@ The coalesced_id approach has structural advantages:
 
 ## Retry and Resume
 
-- **Retry**: resurrects the original task record — resets all lifecycle fields (`started_at`, `completed_at`, `error`, commits, session), resets `created_at` to now (so it doesn't jump ahead in the queue), appends a retry trigger. The task ID is preserved.
+- **Retry**: creates a new task record with `retry` trigger. The original task is coalesced under the new one (preserving audit trail). The new task enters the queue normally — retry does not bypass the two-stage queue.
 - **Resume**: creates a new task record with `resume_session_id` set to the original CLI session ID. The worker passes this to the CLI's `--resume` flag. If the original chat session still exists, it's reused.
 
 ## Relationship to Other Systems
