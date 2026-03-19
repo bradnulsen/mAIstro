@@ -63,9 +63,9 @@ The background task (`_run_cli`) runs independently of the SSE stream. If the cl
 
 Completed tasks produce outcome summaries and diffs, but the user often needs follow-up: "Why did you change this file?" "What alternatives did you consider?" This requires conversational access to the agent's original session — the same context, the same reasoning chain.
 
-### Session Resume from History
+### Session Resume from Resolved Tasks
 
-Completed tasks in the History tab provide a "Chat" action that opens the task's session in a conversational interface. The agent resumes with its full prior context intact via the CLI's `--resume` capability.
+Completed tasks in the Dispatch view's Resolved column provide a "Chat" action that opens the task's session in a conversational interface. The agent resumes with its full prior context intact via the CLI's `--resume` capability.
 
 ### Read-Only Tool Restriction
 
@@ -107,5 +107,5 @@ Additionally, tool invocations that flow through the platform's internal MCP ser
 - [Dispatch Engine](dispatch-engine.md) drives the broadcast during task processing
 - [CLI Bridge](cli-bridge.md) yields the events that feed both live streaming and durable storage
 - [Storage](storage.md) holds the chat_sessions, chat_messages, and chat_events tables
-- [Frontend](frontend.md) connects via SSE for live streaming, polls the output endpoint for stored results, and initiates task session interrogation from the History tab
+- [Frontend](frontend.md) connects via SSE for live streaming, polls the output endpoint for stored results, and initiates task session interrogation from the Dispatch view's Resolved column
 - [Tool Mediation](tool-mediation.md) provides the tool scoping mechanism used to enforce read-only interrogation sessions
