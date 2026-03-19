@@ -194,8 +194,9 @@ function Timeline({ timeline, windowDays, jobColorMap }) {
                 {job.tasks.map(t => {
                   const start = new Date(t.started_at + 'Z').getTime()
                   const end = t.completed_at ? new Date(t.completed_at + 'Z').getTime() : now
-                  const left = Math.max(0, ((start - windowStart) / (now - windowStart)) * 100)
-                  const width = Math.max(0.3, ((end - start) / (now - windowStart)) * 100)
+                  const span = now - windowStart
+                  const width = Math.max(0.3, ((end - start) / span) * 100)
+                  const left = Math.max(0, ((now - end) / span) * 100)
                   const dur = end - start
                   const median = medians[t.job_id] || dur
                   const isOutlier = dur > median * 3 && dur > 60000
@@ -228,7 +229,7 @@ function TimelineAxis({ windowStart, now }) {
   const ticks = []
   // Generate ~5 evenly-spaced time ticks
   for (let i = 0; i <= 4; i++) {
-    const t = windowStart + (span * i) / 4
+    const t = now - (span * i) / 4
     const d = new Date(t)
     const label = span > 86400000 * 2
       ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
@@ -265,34 +266,43 @@ function DispatchChains({ chains, jobColorMap }) {
   }
 
   // Build dispatch pattern: which jobs dispatch which
-  // trigger_detail for agent tasks carries the originating task ID
+  // trigger_detail for agent tasks is "source_job_id#source_task_id"
   const patterns = {}  // "source_job -> target_job" -> count
   const taskJobMap = {}  // task_id -> job_id (from the chains data)
   chains.forEach(t => { taskJobMap[t.id] = t.job_id })
+
+  /** Parse agent trigger_detail ("job-slug#123") → { jobId, taskId } or null */
+  function parseAgentDetail(detail) {
+    if (!detail) return null
+    const idx = detail.lastIndexOf('#')
+    if (idx < 1) return null
+    const taskId = parseInt(detail.slice(idx + 1))
+    if (isNaN(taskId)) return null
+    return { jobId: detail.slice(0, idx), taskId }
+  }
 
   // For chain depth, trace back through trigger_detail
   const depths = {}  // task_id -> depth
   const maxDepthByJob = {}
 
   chains.forEach(t => {
-    // trigger_detail might be a task ID reference
-    const sourceTaskId = t.trigger_detail ? parseInt(t.trigger_detail) : null
-    const sourceJob = sourceTaskId ? taskJobMap[sourceTaskId] : null
+    const parsed = parseAgentDetail(t.trigger_detail)
+    // Source job: prefer the explicit job ID from trigger_detail, fall back to task map
+    const sourceJob = parsed ? parsed.jobId : null
     const key = `${sourceJob || '?'} -> ${t.job_id}`
     patterns[key] = (patterns[key] || 0) + 1
 
-    // Estimate depth
+    // Estimate depth by tracing the dispatch chain
     let depth = 1
-    let cur = t.trigger_detail
+    let curTaskId = parsed ? parsed.taskId : null
     const visited = new Set()
-    while (cur && !visited.has(cur)) {
-      visited.add(cur)
-      const pid = parseInt(cur)
-      if (taskJobMap[pid]) {
+    while (curTaskId && !visited.has(curTaskId)) {
+      visited.add(curTaskId)
+      if (taskJobMap[curTaskId]) {
         depth++
-        // Look for parent's trigger_detail (we only have chains data)
-        const parent = chains.find(c => c.id === pid)
-        cur = parent ? parent.trigger_detail : null
+        const parent = chains.find(c => c.id === curTaskId)
+        const parentParsed = parent ? parseAgentDetail(parent.trigger_detail) : null
+        curTaskId = parentParsed ? parentParsed.taskId : null
       } else {
         break
       }
