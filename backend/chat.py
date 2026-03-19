@@ -22,7 +22,7 @@ log = logging.getLogger("maistro.chat")
 # ── Chat context cache (TTL-based) ───────────────────────
 _chat_context_cache: str | None = None
 _chat_context_ts: float = 0.0
-_CHAT_CONTEXT_TTL = 8.0  # seconds
+_CHAT_CONTEXT_TTL = 30.0  # seconds — context only changes on job edits or commits
 
 def invalidate_chat_context_cache():
     """Clear the cached system prompt. Call on project close/switch."""

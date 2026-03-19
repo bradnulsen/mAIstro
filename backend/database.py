@@ -30,6 +30,7 @@ async def get_db() -> aiosqlite.Connection:
         await _conn.execute("PRAGMA cache_size=-8000")
         await _conn.execute("PRAGMA foreign_keys=ON")
         await _conn.execute("PRAGMA temp_store=MEMORY")
+        await _conn.execute("PRAGMA mmap_size=67108864")  # 64 MB memory-mapped I/O
     return _conn
 
 
