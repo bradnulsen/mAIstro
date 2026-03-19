@@ -35,29 +35,13 @@ Each `tasks` row tracks:
 
 ### Task Status
 
-The `status` column is the authoritative source of task state. All queries that need to know "what state is this task in" filter on `status` — never on a multi-column predicate derived from timestamps.
+Task lifecycle is event-sourced. See [Task Lifecycle](task-lifecycle.md) for the full specification.
 
-The timestamp columns (`created_at`, `queued_at`, `started_at`, `completed_at`) remain as an audit trail recording *when* each transition occurred. They are no longer used to *derive* state.
+The `status` column on the task record is a materialized view of the latest lifecycle event — it exists for query performance, not as a source of truth. The `task_events` table records every transition as an immutable event with a timestamp and optional detail.
 
-#### Status Values
+**Status values**: `pending`, `queued`, `active`, `completed`, `failed`, `cancelled`, `interrupted`, `timed_out`, `rejected`. Completed is success; everything else is non-success.
 
-| Status | Category | Meaning |
-|--------|----------|---------|
-| `pending` | Pre-execution | Task is in the staging area, awaiting curation or promotion |
-| `queued` | Pre-execution | Task is on the execution runway, eligible for the worker |
-| `active` | In-flight | Worker is currently processing this task |
-| `completed` | Terminal (success) | Agent finished its work. Only this status triggers downstream dependencies |
-| `failed` | Terminal (non-success) | Agent encountered an unrecoverable error |
-| `cancelled` | Terminal (non-success) | User explicitly stopped the task while running, or cancelled before execution |
-| `interrupted` | Terminal (non-success) | Platform process died while task was active; detected by stale sweep |
-| `timed_out` | Terminal (non-success) | Watchdog terminated the agent after exceeding configured timeout |
-| `rejected` | Terminal (non-success) | User rejected a task awaiting approval; task never executed |
-
-**Completed is success; everything else is non-success.** Each non-success state implies a different user response — retry a failure, resume a timeout, re-dispatch after an interruption — so the UI must make the distinction immediately visible via distinct status labels.
-
-#### Transition Rules
-
-All status changes go through a centralized `transition_task(task_id, new_status, **fields)` function that validates the transition is legal before executing it. Raw `UPDATE tasks SET status = ...` is prohibited outside this function.
+**Transition rules** are enforced by `transition_task()`, which validates the transition, writes an event to `task_events`, and updates the materialized `status` — all in one transaction.
 
 ```
 pending  → queued       (transfer, auto-queue at enqueue time)
@@ -73,62 +57,13 @@ active   → timed_out    (watchdog fires)
 active   → interrupted  (stale sweep on startup)
 ```
 
-Any transition not in this list raises an error. This prevents invalid state combinations — a task can never jump from `pending` to `completed` without passing through `queued` and `active`.
+**Worker query**: `WHERE status = 'queued' AND (approval IS NULL OR approval = 'approved') AND coalesced_id IS NULL`. The `approval` and `coalesced_id` predicates are orthogonal concerns. Index on `(status, approval, coalesced_id)`.
 
-The `transition_task` function:
-1. Reads the current `status` of the task
-2. Validates `(current_status, new_status)` is a legal transition
-3. Sets `status` to `new_status`
-4. Sets the corresponding timestamp (`queued_at`, `started_at`, or `completed_at`) if applicable
-5. Sets any additional fields passed as kwargs (e.g., `error`, `result_commit`, `session_id`)
-6. Commits the transaction
-
-#### Migration
-
-Existing databases derive `status` from the current column state during migration:
-
-| Condition | Derived status |
-|-----------|----------------|
-| `started_at IS NULL AND queued_at IS NULL AND error IS NULL` | `pending` |
-| `started_at IS NULL AND queued_at IS NOT NULL AND error IS NULL` | `queued` |
-| `started_at IS NOT NULL AND completed_at IS NULL` | `active` |
-| `completed_at IS NOT NULL AND error IS NULL` | `completed` |
-| `completed_at IS NOT NULL AND error = 'cancelled'` | `cancelled` |
-| `completed_at IS NOT NULL AND error = 'timed out'` | `timed_out` |
-| `completed_at IS NOT NULL AND error = 'interrupted'` | `interrupted` |
-| `completed_at IS NOT NULL AND error = 'rejected'` | `rejected` |
-| `completed_at IS NOT NULL AND error IS NOT NULL` (other) | `failed` |
-| `completed_at IS NULL AND error IS NOT NULL` (zombie) | `cancelled` |
-
-The last row handles the zombie state that triggered R1 — tasks with `error` set but never started or completed. These are force-terminated as `cancelled`.
-
-#### Query Simplification
-
-Before (6-column predicate for worker eligibility):
-```sql
-WHERE queued_at IS NOT NULL AND started_at IS NULL AND error IS NULL
-  AND completed_at IS NULL
-  AND (approval IS NULL OR approval = 'approved')
-  AND coalesced_id IS NULL
-```
-
-After:
-```sql
-WHERE status = 'queued'
-  AND (approval IS NULL OR approval = 'approved')
-  AND coalesced_id IS NULL
-```
-
-The `approval` and `coalesced_id` predicates remain because they are orthogonal concerns — approval gates and coalescing are not lifecycle states. A new index on `(status, approval, coalesced_id)` replaces the current multi-column worker index.
-
-#### Invariants
-
+**Invariants**:
 - `status` is never NULL — every task has exactly one status at all times
 - `status` only changes through `transition_task` — no raw UPDATE on status
-- Terminal statuses (`completed`, `failed`, `cancelled`, `interrupted`, `timed_out`, `rejected`) are permanent — once set, a task's status never changes again
-- `completed_at` is set on every terminal transition; `started_at` on `active`; `queued_at` on `queued`
-- A task with `status = 'active'` always has `started_at IS NOT NULL` and `completed_at IS NULL`
-- A task with any terminal status always has `completed_at IS NOT NULL`
+- Terminal statuses are permanent — once set, a task's status never changes again
+- Every `transition_task` call produces exactly one event in `task_events`
 - The `error` column is informational for terminal non-success states — `status` is authoritative for determining the outcome type
 
 ## Worker
@@ -302,5 +237,6 @@ The coalesced_id approach has structural advantages:
 - [CLI Bridge](cli-bridge.md) is invoked by `run_task()` — the engine manages the lifecycle around it
 - [Prompt Assembly](prompt-assembly.md) builds the prompts that `run_task()` feeds to the CLI
 - [Streaming and Sessions](streaming-and-sessions.md) receives broadcast events from the worker and stores durable output
+- [Task Lifecycle](task-lifecycle.md) defines the event-sourced state machine, transition validation, and duration computation
 - [Git Integration](git-integration.md) provides `head_hash` for commit tracking and `changed_files_in_commit` for dependency context
 - [Tool Mediation](tool-mediation.md) provides the internal MCP server instance configured per-task

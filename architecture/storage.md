@@ -66,14 +66,15 @@ This ensures no consumer sees a partially-switched state where `PROJECT_DIR` poi
 
 ### Schema
 
-Seven tables:
+Eight tables:
 
 | Table | Purpose |
 |-------|---------|
 | `jobs` | Job identity (id, name, created_at) |
 | `job_property_defs` | EAV registry — defines property keys, default values, and types |
 | `job_properties` | EAV overrides — per-job property values |
-| `tasks` | Every task record with full lifecycle columns |
+| `tasks` | Task identity, execution metadata, and materialized status |
+| `task_events` | Immutable lifecycle event log — source of truth for when transitions happened |
 | `chat_sessions` | Session metadata, links jobs and tasks to their output |
 | `chat_messages` | Durable chat messages (role + content) |
 | `chat_events` | Raw NDJSON audit trail per session |
@@ -90,30 +91,40 @@ On read, `get_job()` loads all defs, applies defaults, then overlays job-specifi
 
 This design means adding a new property requires only a seed SQL insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
-### Task Table Extensions
+### Task Record
 
-Two columns extend the `tasks` table beyond the core lifecycle:
+The task record carries identity (immutable after creation), execution metadata (set once during execution), queue management columns, and a materialized `status` for query performance:
 
-- **`status`** — authoritative task state: `pending`, `queued`, `active`, `completed`, `failed`, `cancelled`, `interrupted`, `timed_out`, `rejected`. All state queries filter on this column. Lifecycle timestamps (`queued_at`, `started_at`, `completed_at`) remain as audit trail. All transitions go through `transition_task` which validates legality. See [Dispatch Engine — Task Status](dispatch-engine.md#task-status).
-- **`queued_at`** — nullable timestamp recording when the task was promoted to queued state. Set by `transition_task` on `pending → queued`. When auto-queueing is enabled, set at creation time. Transfer between columns sets or clears this field.
+- **`status`** — materialized from the latest lifecycle event in `task_events`. All hot-path queries (worker, queue rendering, coalescing) filter on this column. Updated atomically with each event insert. See [Task Lifecycle](task-lifecycle.md).
 - **`coalesced_id`** — nullable foreign key referencing another `tasks` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a task ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
+
+Lifecycle timestamp columns (`queued_at`, `started_at`, `completed_at`) are transitional — maintained via dual-write during migration but redundant with the event log. See [Task Lifecycle — Migration Path](task-lifecycle.md#migration-path) for the removal plan.
+
+### Task Events
+
+The `task_events` table is the source of truth for task lifecycle history. Each row records an immutable event: a state transition with a timestamp and optional detail. See [Task Lifecycle](task-lifecycle.md) for the full specification including event types, standard query procedures, and duration computation.
+
+Key properties:
+- Append-only — events are never updated (deleted only by CASCADE when the parent task is deleted)
+- Indexed on `(task_id, id DESC)` for latest-event queries and `(task_id, event, id DESC)` for latest-event-of-type queries
+- The `detail` column carries event-specific context (error messages, commit hashes, session IDs) as free-form text or JSON
 
 ### Dashboard Aggregation Queries
 
-The Activity Dashboard (see [Frontend — Dashboard](frontend.md#dashboard)) introduces a read-only aggregation workload over existing tables. Unlike queue operations which filter on lifecycle state (pending, queued, active), dashboard queries filter on `completed_at` within a time window and aggregate across jobs. Key patterns:
+The Activity Dashboard (see [Frontend — Dashboard](frontend.md#dashboard)) introduces a read-only aggregation workload over existing tables. Unlike queue operations which filter on lifecycle state (pending, queued, active), dashboard queries filter on terminal events and aggregate across jobs. Key patterns:
 
-- **Health**: `tasks` grouped by `job_id`, classified by `status` column value, filtered by `completed_at` range
-- **Timeline**: `tasks` ordered by `started_at`, reading both `started_at` and `completed_at` for duration
+- **Health**: `tasks` grouped by `job_id`, classified by `status` column value (materialized), filtered by time range
+- **Timeline**: `task_events` pairs of `active` and terminal events, computing duration from their timestamps
 - **Dispatch chains**: `tasks` filtered on `trigger = 'agent'`, following `trigger_detail` references
 - **Tool usage**: `chat_events` (where `event_type = 'mcp_tool_use'`) joined through `chat_sessions.task_id` → `tasks.job_id`
 
-The primary worker index is on `(status, approval, coalesced_id)` — covers the worker's queued-task lookup. Time-windowed historical queries use the index on `tasks(completed_at)`.
+The primary worker index is on `(status, approval, coalesced_id)` — covers the worker's queued-task lookup.
 
 ### Key Invariants
 
 - The `tasks.context` column stores pre-formatted context text built at the enqueue site
 - All foreign keys referencing `jobs(id)` — on `job_properties`, `tasks`, and `chat_sessions` — use `ON DELETE CASCADE`. Deleting a job is a single `DELETE FROM jobs` statement; the database handles dependent row cleanup automatically
-- Task state is stored in the `status` column, set exclusively through `transition_task`. Timestamps record when transitions occurred but are not used for state derivation
+- Task state is materialized in the `status` column, set exclusively through `transition_task`. The `task_events` table is the source of truth for transition history. If the two ever disagree, the event log wins
 - Tasks with non-null `coalesced_id` are invisible in queue listings but included when their root task is dispatched or acted upon
 
 ## Application Database
