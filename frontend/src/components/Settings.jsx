@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getProject, getConfig, setConfig, getQueueSettings, setQueueSettings } from '../api'
+import { getProject, getConfig, setConfig } from '../api'
 import HelpTip from './HelpTip'
 
 const TIPS = {
-  autoDispatch: 'When enabled, new tasks skip the Pending column and go directly to Queued — the worker processes them automatically. When disabled, new tasks land in Pending for review. Drag tasks between columns to promote or demote them.',
   model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
   timeout: 'Maximum execution time in seconds applied to tasks that have no task-level override. Set to 0 or leave blank for no limit.',
 }
@@ -11,7 +10,6 @@ const TIPS = {
 export default function Settings() {
   const [project, setProject] = useState(null)
   const [config, setConfigState] = useState({})
-  const [queueSettings, setQueueSettingsState] = useState({ auto_dispatch: false })
   const [loading, setLoading] = useState(true)
   const [saveMsg, setSaveMsg] = useState('')
 
@@ -21,12 +19,11 @@ export default function Settings() {
 
   const load = useCallback(async () => {
     try {
-      const [p, cfg, qs] = await Promise.all([
-        getProject(), getConfig(), getQueueSettings(),
+      const [p, cfg] = await Promise.all([
+        getProject(), getConfig(),
       ])
       setProject(p)
       setConfigState(cfg)
-      setQueueSettingsState(qs)
       setDefaultModel(cfg.default_model || 'sonnet')
       setDefaultTimeout(cfg.default_timeout || '')
     } catch {
@@ -40,12 +37,6 @@ export default function Settings() {
   const flash = (msg) => {
     setSaveMsg(msg)
     setTimeout(() => setSaveMsg(''), 2000)
-  }
-
-  const handleAutoDispatch = async (val) => {
-    await setQueueSettings({ auto_dispatch: val })
-    setQueueSettingsState({ auto_dispatch: val })
-    flash('Saved')
   }
 
   const handleSaveModel = async () => {
@@ -82,24 +73,6 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* Queue Behavior */}
-        <div className="settings-section">
-          <h3>Queue Behavior</h3>
-          <div className="settings-field">
-            <div className="label-row">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={queueSettings.auto_dispatch}
-                  onChange={e => handleAutoDispatch(e.target.checked)}
-                />
-                Auto-queue new tasks
-              </label>
-              <HelpTip text={TIPS.autoDispatch} />
-            </div>
-          </div>
-        </div>
-
         {/* Default Model */}
         <div className="settings-section">
           <h3>Default Model</h3>
@@ -109,7 +82,7 @@ export default function Settings() {
                 <label>Model</label>
                 <HelpTip text={TIPS.model} />
               </div>
-              <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)}>
+              <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSaveModel()}>
                 <option value="sonnet">sonnet</option>
                 <option value="opus">opus</option>
                 <option value="haiku">haiku</option>

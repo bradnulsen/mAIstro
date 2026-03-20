@@ -125,7 +125,7 @@ export default function McpServers() {
                     type="checkbox"
                     checked={!!s.enabled}
                     onChange={e => handleToggleMcp(s.name, e.target.checked)}
-                    title={s.enabled ? 'Enabled — available to jobs' : 'Disabled — unavailable to any job'}
+                    title={s.enabled ? 'Enabled — available to goals' : 'Disabled — unavailable to any goal'}
                   />
                   <div className="mcp-server-content">
                     <div className="mcp-server-name">
@@ -141,13 +141,14 @@ export default function McpServers() {
                       <div className="mcp-edit-form">
                         <div className="mcp-edit-row">
                           <label>Command</label>
-                          <input value={editing.command} onChange={e => setEditing({ ...editing, command: e.target.value })} />
+                          <input value={editing.command} onChange={e => setEditing({ ...editing, command: e.target.value })} onKeyDown={e => e.key === 'Enter' && handleSaveEdit()} />
                         </div>
                         <div className="mcp-edit-row">
                           <label>Arguments</label>
                           <textarea
                             value={editing.args}
                             onChange={e => setEditing({ ...editing, args: e.target.value })}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSaveEdit() } }}
                             rows={2}
                           />
                         </div>
@@ -183,11 +184,11 @@ export default function McpServers() {
             <div className="mcp-add-form-row">
               <div>
                 <label>Name</label>
-                <input value={mcpName} onChange={e => setMcpName(e.target.value)} placeholder="server-name" />
+                <input value={mcpName} onChange={e => setMcpName(e.target.value)} placeholder="server-name" onKeyDown={e => e.key === 'Enter' && handleAddMcp()} />
               </div>
               <div>
                 <label>Command</label>
-                <input value={mcpCommand} onChange={e => setMcpCommand(e.target.value)} placeholder="npx or python3" />
+                <input value={mcpCommand} onChange={e => setMcpCommand(e.target.value)} placeholder="npx or python3" onKeyDown={e => e.key === 'Enter' && handleAddMcp()} />
               </div>
             </div>
             <div className="mcp-add-form-args">
@@ -195,6 +196,7 @@ export default function McpServers() {
               <textarea
                 value={mcpArgs}
                 onChange={e => setMcpArgs(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddMcp() } }}
                 placeholder={`-m my_server\n--port 3000\n--verbose`}
                 rows={2}
               />

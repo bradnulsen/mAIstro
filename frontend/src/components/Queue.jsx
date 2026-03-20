@@ -450,7 +450,7 @@ export default function Queue() {
                 {replyContext !== null ? (
                   <>
                     <label className="muted-text">Add context for your reply</label>
-                    <ContextEditor value={replyContext} onChange={e => setReplyContext(e.target.value)} autoFocus />
+                    <ContextEditor value={replyContext} onChange={e => setReplyContext(e.target.value)} onSubmit={() => handleReply(selected.id, replyContext)} autoFocus />
                     <div className="action-row compact">
                       <button className="small primary" onClick={() => handleReply(selected.id, replyContext)}>
                         ↺ Reply
@@ -732,7 +732,7 @@ function ResolvedColumn({ items, loading, selected, onSelect }) {
 }
 
 
-function ContextEditor({ value, onChange, autoFocus = false }) {
+function ContextEditor({ value, onChange, onSubmit, autoFocus = false }) {
   const ref = useRef(null)
   useEffect(() => {
     const el = ref.current
@@ -745,6 +745,12 @@ function ContextEditor({ value, onChange, autoFocus = false }) {
       ref={ref}
       value={value}
       onChange={onChange}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && !e.shiftKey && onSubmit) {
+          e.preventDefault()
+          onSubmit()
+        }
+      }}
       className="context-editor"
       autoFocus={autoFocus}
     />
@@ -911,7 +917,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
         <label>Context</label>
         {isPending && editingContext !== null ? (
           <>
-            <ContextEditor value={editingContext} onChange={e => setEditingContext(e.target.value)} autoFocus />
+            <ContextEditor value={editingContext} onChange={e => setEditingContext(e.target.value)} onSubmit={handleSaveContext} autoFocus />
             <div className="action-row compact">
               <button className="small primary" onClick={handleSaveContext}>Save</button>
               <button className="small" onClick={() => { setEditingContext(null); setSaveError('') }}>Cancel</button>
