@@ -244,6 +244,7 @@ body {
 .command-bar-indicator:hover {
   border-color: var(--goal-c);
   background: var(--hover-bg);
+  color: var(--text);
 }
 .command-bar-indicator.active {
   border-color: var(--goal-c);
@@ -914,6 +915,7 @@ label.muted-text {
 
 .task-tab-btn:hover {
   color: var(--text);
+  background: none;
 }
 
 .task-tab-btn.active {
