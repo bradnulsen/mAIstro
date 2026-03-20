@@ -6,6 +6,7 @@ import {
   streamTask, approveTask, rejectTask,
   reorderTasks, mergeTasks, splitTask, uncoalesceTask, getSubordinates,
   transferTask, resumeTask, replyTask,
+  queueAll, shelveAll,
 } from '../api'
 import {
   formatDate, formatDuration, formatDurationSecs, TRIGGER_ICONS, mdBreaks,
@@ -172,6 +173,24 @@ export default function Queue() {
     }
   }, [selected?.id, selected?.started_at, selected?.completed_at])
 
+  const handleQueueAll = async () => {
+    try {
+      await queueAll()
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
+  const handleShelveAll = async () => {
+    try {
+      await shelveAll()
+      await refresh()
+    } catch (e) {
+      setActionError(e.message)
+    }
+  }
+
   const handleProcessOne = async (id) => {
     try {
       await processOne(id)
@@ -334,6 +353,16 @@ export default function Queue() {
       <div className="header-bar">
         <h1>Dispatch</h1>
         <div className="spacer" />
+        {upcomingItems.length > 0 && (
+          <button className="small" onClick={handleQueueAll} title="Move all pending tasks to the queue">
+            ▶ Queue All
+          </button>
+        )}
+        {queuedItems.length > 0 && (
+          <button className="small" onClick={handleShelveAll} title="Move all queued tasks back to pending">
+            ▣ Shelve All
+          </button>
+        )}
         <button className="small" onClick={handleRefresh} disabled={refreshing}>
           {refreshing ? <span className="tool-spinner" /> : '↻'}
         </button>
