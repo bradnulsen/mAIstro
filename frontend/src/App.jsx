@@ -189,11 +189,13 @@ function CommandBar({ goals, onNavigate, refreshGoals }) {
   const handleQueueAll = async () => {
     await queueAll().catch(() => {})
     refreshGoals()
+    window.dispatchEvent(new Event('queue-refresh'))
   }
 
   const handleShelveAll = async () => {
     await shelveAll().catch(() => {})
     refreshGoals()
+    window.dispatchEvent(new Event('queue-refresh'))
   }
 
   const hasPending = goals.some(g => (g.properties?.pending_count || 0) > 0)
@@ -251,8 +253,8 @@ function CommandBar({ goals, onNavigate, refreshGoals }) {
       </div>
 
       <div className="command-bar-actions">
-        <button className="small" onClick={handleQueueAll} disabled={!hasPending} title="Queue all pending tasks">Queue all</button>
-        <button className="small" onClick={handleShelveAll} disabled={!hasQueued} title="Shelve all queued tasks">Shelve all</button>
+        <button className="small" onClick={handleQueueAll} disabled={!hasPending} title="Queue all pending tasks">▶ Queue all</button>
+        <button className="small" onClick={handleShelveAll} disabled={!hasQueued} title="Shelve all queued tasks">▣ Shelve all</button>
         <label className="command-bar-toggle" title="Auto-queue: new tasks skip pending and go directly to queued">
           <input type="checkbox" checked={autoQueue} onChange={handleAutoQueueToggle} />
           <span>Auto</span>
