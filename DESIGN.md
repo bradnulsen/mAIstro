@@ -37,7 +37,7 @@ A goal is a template. A task is an instance. One goal produces many tasks over t
 
 - Properties follow an entity-attribute-value pattern: a registry of property definitions (with types and defaults) and per-goal overrides.
 - Property types: `string`, `json`, `integer`, `boolean`. The platform casts stored strings to the declared type on read.
-- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `require_approval`, `coalesce_dispatches`, `allowed_tools`, `allowed_internal_tools`, `allowed_dispatch_targets`, `mcp_servers`, `sort_order`, `color`.
+- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `max_turns`, `require_approval`, `coalesce_dispatches`, `allowed_tools`, `allowed_internal_tools`, `allowed_dispatch_targets`, `mcp_servers`, `sort_order`, `color`.
 
 ### Dispatch
 
@@ -48,21 +48,25 @@ A goal is a template. A task is an instance. One goal produces many tasks over t
   - **Queued** — the execution runway. Tasks here are committed to run. The worker pulls the highest-priority queued task when ready. The user reorders queued tasks to control execution sequence.
 - **Auto-queueing** — a global setting that controls the routing of newly created tasks. When enabled, new tasks skip pending and go directly to the queued state. When disabled, new tasks always enter pending. This replaces the former auto-dispatch concept. The distinction: auto-queueing controls *where tasks land on creation*, not whether the worker runs. The worker always runs — it simply has nothing to do when no queued tasks exist.
 - The user can override auto-queueing for any individual task by dragging it back from queued to pending. The routing decision happens only at initial trigger time — once a task exists, the user has full manual control over its state.
-- Each task records its full lifecycle: `created_at`, `queued_at`, `started_at`, `completed_at`, `error`. A task that has started but not completed is "active."
+- Each task records its full lifecycle: creation, queueing, start, and completion timestamps plus a terminal status. A task that has started but not completed is "active."
+- Each task captures **execution metadata** when the agent finishes: stop reason (why the agent stopped — natural completion, max turns reached, or error), turns consumed, duration, and cost. This metadata is surfaced to the user alongside the task's outcome. It is the difference between "the agent finished" and "the agent finished in 3 turns at $0.02" — the latter lets the operator assess efficiency, detect anomalies, and tune goal configuration.
 - On startup, the worker sweeps any tasks that were active when the process died and marks them as interrupted.
 
 #### Terminal States
 
-A task reaches a terminal state when `completed_at` is set. The `error` field distinguishes the outcome:
+A task reaches a terminal state when execution ends (or is prevented). Seven distinct terminal states exist:
 
-- **Completed** (`error` is NULL) — the task ran to completion and the agent finished its work. This is the success state. Only completed tasks trigger downstream dependencies.
-- **Failed** (`error` contains a message) — the task started but the agent encountered an unrecoverable error. The error field carries the diagnostic message.
-- **Timed out** (`error` = `"timed out"`) — the watchdog terminated the agent after exceeding the configured timeout. Partial commits may exist between `start_commit` and `result_commit`.
-- **Cancelled** (`error` = `"cancelled"`) — the user explicitly stopped the task while it was running.
-- **Interrupted** (`error` = `"interrupted"`) — the platform process died while the task was active. Detected and marked on startup by the stale sweep.
-- **Rejected** (`error` = `"rejected"`) — the user rejected a task awaiting approval. The task never executed.
+- **Completed** — the agent finished its work naturally. This is the success state. Only completed tasks trigger downstream dependencies.
+- **Exhausted** — the agent consumed all available turns without finishing. The platform's per-task turn limit was reached and the CLI stopped the agent. This is a resource-limit stop, not a natural stop — the agent was cut off, not done. Partial commits may exist. Exhausted tasks do not trigger downstream dependencies. The user response is to investigate (what was the agent trying to do?), potentially increase the turn limit, and resume or re-dispatch.
+- **Failed** — the task started but the agent encountered an unrecoverable error. The error context carries the diagnostic message.
+- **Timed out** — the watchdog terminated the agent after exceeding the configured timeout. Partial commits may exist between `start_commit` and `result_commit`.
+- **Cancelled** — the user explicitly stopped the task while it was running.
+- **Interrupted** — the platform process died while the task was active. Detected and marked on startup by the stale sweep.
+- **Rejected** — the user rejected a task awaiting approval. The task never executed.
 
-The distinction matters: **completed is success; everything else is a form of non-success.** Each non-success state implies a different user response — retry a failure, resume a timeout, re-dispatch after an interruption — so the UI must make the distinction immediately visible, not require the user to inspect error fields.
+The distinction matters: **completed is success; everything else is a form of non-success.** Each non-success state implies a different user response — retry a failure, resume a timeout, increase turns and re-dispatch after exhaustion, investigate after an interruption — so the UI must make the distinction immediately visible without requiring the user to inspect error details.
+
+The difference between **exhausted** and **timed out** is the resource that ran out: turns vs. time. Both produce partial work. Both are non-success. But they have different operational responses: exhaustion suggests the task needs more turns (or the instructions are too open-ended), while timeout suggests the task needs more time (or the agent is stuck). The distinction prevents misdiagnosis.
 
 ### Task Ordering
 
@@ -78,7 +82,7 @@ Five trigger types cause tasks to be enqueued:
 - **Manual** — the user explicitly dispatches a goal. Always creates a new task. Never coalesces. Bypasses approval gates.
 - **Commit (watch)** — a git post-commit hook notifies the platform. Goals whose subscription glob patterns match changed files are enqueued as tasks. Coalesces with other pending commit-triggered tasks for the same goal.
 - **Schedule** — cron expressions evaluated by a background scheduler. Enqueues a task when the expression fires. Always coalesces globally (repeated fires while a task is pending produce one run, not many). The first evaluation after a schedule is set establishes a baseline without firing — a newly configured schedule does not immediately dispatch.
-- **Dependency** — when a task completes successfully, goals declaring its goal as an upstream dependency are enqueued. Coalesces with other pending dependency-triggered tasks for the same goal. Only successful completion (no error) triggers dependents — failed, timed-out, cancelled, interrupted, and rejected tasks do not.
+- **Dependency** — when a task completes successfully, goals declaring its goal as an upstream dependency are enqueued. Coalesces with other pending dependency-triggered tasks for the same goal. Only successful completion triggers dependents — exhausted, failed, timed-out, cancelled, interrupted, and rejected tasks do not.
 - **Agent** — another agent's task programmatically dispatches a goal via the `dispatch_task` MCP tool, with a message explaining why. The trigger context carries the dispatching task's identity and message. Coalesces with other pending agent-triggered tasks for the same goal. Agent dispatch is subject to goal-level dispatch control — a goal property governs which other goals an agent can dispatch.
 
 Two continuation triggers operate on existing tasks:
@@ -155,6 +159,13 @@ A goal can use subscriptions purely for context (by gating automatic triggers wi
 - A watchdog cancels the CLI subprocess after the timeout elapses. The task is marked as timed out. Timed-out tasks do not trigger dependents.
 - Cancellation is graceful: the platform signals termination, waits a grace period, then forces termination if the process has not exited.
 
+### Turn Limit
+
+- Each goal has a configurable maximum number of agent turns (`max_turns`). A turn is one cycle of the agent receiving context, reasoning, and producing output (text or tool calls).
+- When the agent reaches the turn limit, the CLI stops the session. The platform marks the task as exhausted. Exhausted tasks do not trigger downstream dependencies.
+- The turn limit is a safety bound, not a target. Most tasks finish well within the limit. When a task hits the limit, it typically means the instructions are too broad, the agent is stuck in a loop, or the work genuinely requires more interaction than anticipated.
+- The user sees turns consumed alongside the outcome — "completed in 5/50 turns" vs. "exhausted at 50/50 turns" — so the limit's effect is always visible, not just when it triggers.
+
 ### Prompt Assembly
 
 - The platform builds two prompts per task: a **system prompt** (execution mode, documentation principles, git workflow, working directory) and a **user prompt** (goal identity, instructions, invocation context, goal registry, subscribed files, action directive).
@@ -195,14 +206,17 @@ The platform must inform the operator when events need attention — without req
 
 ### Streaming
 
-- Task output streams to the frontend via Server-Sent Events (SSE). Event types: `text`, `tool_use`, `result`, `error`, `session_id`.
+- Task output streams to the frontend via Server-Sent Events (SSE). Event types: `text`, `thinking`, `tool_use`, `result`, `error`, `session_id`.
+- **Thinking content** — when the agent produces reasoning or thinking blocks, these are streamed as `thinking` events. The user sees the agent's reasoning process alongside its actions. Thinking content is part of the agent's output — dropping it silently degrades the user's ability to understand what the agent is doing and why.
 - Live subscribers receive events in real time. The stored session provides the same content for later retrieval.
+- **Incremental persistence** — chat events are persisted incrementally during streaming, not accumulated in memory and flushed once at the end. A crash or failure mid-stream must not discard all events captured up to that point. The stored session is the authoritative record of what the agent did; its durability cannot depend on clean termination.
 
 ### Dispatch Outcomes
 
 When a task completes, the platform must make the result understandable without requiring the user to read the full streamed output.
 
 - **Outcome summary** — the platform derives a short summary from the commits produced during the task's execution window (between `start_commit` and `result_commit`). The summary captures what the agent actually did — commit messages and change statistics — not a restatement of the instructions. Displayed inline in the Dispatch view so users can scan completed tasks at a glance.
+- **Execution metadata** — each resolved task displays its execution metadata: stop reason, turns consumed (relative to the limit), duration, and cost. This is visible alongside the outcome summary — the user sees not just what the agent did but how much it cost to do it. Turns consumed relative to the limit is especially important: "3/50 turns" is healthy; "50/50 turns (exhausted)" is a signal to investigate.
 - **Outcome in dependency context** — when a completed task triggers downstream dependents, the outcome summary is included in the trigger context passed to the dependent task's prompt. This gives downstream agents concrete information about what their upstream actually produced, not just that it completed.
 
 The outcome summary is derived, not authored. The platform computes it from git artifacts that already exist. The user does not write summaries; the agent does not produce them explicitly. The platform reads what happened and describes it.
@@ -294,7 +308,7 @@ The command bar's design rationale: the user's primary interaction with mAistro 
 - **Dispatch** — the operational center. A single three-column kanban that makes the entire task lifecycle visible at once:
   - **Upcoming** (left column) — the staging area. Newly created tasks land here by default. The user reviews, coalesces (merge and split), and curates tasks before promoting them. Pending tasks are not eligible for execution. Tasks are displayed by creation time. This column answers: "what work is waiting for my attention?"
   - **Active** (center column) — the execution pipeline. Contains queued tasks awaiting their turn and the currently running task. The running task (if any) appears at the top of the column, visually distinct from queued tasks below it. The user reorders queued tasks to control execution priority. This column answers: "what is running and what runs next?"
-  - **Resolved** (right column) — all terminal states. Every task that has finished — completed, failed, timed out, cancelled, interrupted, rejected — lands here. Each card carries a status badge identifying its terminal state. Completed (success) cards display the outcome summary and commit range. Non-success cards surface the error context inline — the user sees *why* it didn't succeed at a glance. Ordered by completion time (most recent first). This column answers: "what happened?"
+  - **Resolved** (right column) — all terminal states. Every task that has finished — completed, exhausted, failed, timed out, cancelled, interrupted, rejected — lands here. Each card carries a status badge identifying its terminal state. Completed (success) cards display the outcome summary and commit range. Non-success cards surface the error context inline — the user sees *why* it didn't succeed at a glance. Ordered by completion time (most recent first). This column answers: "what happened?"
 
   Tasks flow left to right through their lifecycle: Upcoming → Active → Resolved. The user drags tasks between Upcoming and Active to promote (pending → queued) or demote (queued → pending). Provides controls for cancelling active tasks, approving/rejecting tasks awaiting approval, and resuming/retrying resolved tasks.
 
@@ -327,6 +341,7 @@ Required tooltip surfaces:
 - **Coalesce Dispatches** — when enabled, the goal will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for goals that should catch up in one run rather than queuing redundant work.
 - **Dependencies** — the goal auto-dispatches when *any* selected upstream goal completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled tasks do not trigger dependents.
 - **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.
+- **Max Turns** — maximum number of agent turns before the session is stopped. A turn is one cycle of reasoning and output. Most tasks complete in well under the limit. When reached, the task is marked as exhausted (not completed) — the agent was cut off, not done. Exhausted tasks do not trigger downstream dependencies. Increase the limit if a goal consistently needs more interaction, or tighten the instructions if the agent is doing unnecessary work.
 - **Auto-queueing (Command Bar)** — when enabled, newly created tasks skip the pending column and go directly to queued, where the worker will pick them up. When disabled, all new tasks enter the pending column and must be manually transferred to queued before they can execute. The worker always runs — auto-queueing only controls the initial routing of new tasks. The user can override any individual task by dragging it between columns after creation.
 - **Model** — the LLM model for this goal. Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency goals.
 
@@ -434,10 +449,10 @@ Tool patterns are secondary to health and timing — they support investigation,
 ### Data Integrity
 
 - **Goal identity is immutable**: a goal's slug ID, once derived from its initial name, stays constant. All references (tasks, properties, dependencies) use the slug. Renaming changes only the display label.
-- **Task lifecycle is monotonic**: a task progresses from created → queued → started → terminal. Terminal states are: completed (success), failed, timed out, cancelled, interrupted, or rejected. A task may skip pending (via auto-queueing) or move back from queued to pending (via manual transfer), but once started, progression is forward-only. Retry creates a new cycle by resetting lifecycle fields on the same record, preserving task identity.
+- **Task lifecycle is monotonic**: a task progresses from created → queued → started → terminal. Terminal states are: completed (success), exhausted (turn limit), failed, timed out, cancelled, interrupted, or rejected. A task may skip pending (via auto-queueing) or move back from queued to pending (via manual transfer), but once started, progression is forward-only. Retry creates a new cycle by resetting lifecycle fields on the same record, preserving task identity.
 - **Trigger context is immutable at enqueue time**: each trigger entry's context string is built when the trigger fires. This preserves the causal record — the prompt reflects what was true when the trigger occurred.
 - **Goal deletion cascades**: removing a goal removes all associated data (properties, tasks, sessions). This prevents orphaned records.
-- **Running state is derived**: whether a task is active is computed from lifecycle timestamps (started_at IS NOT NULL AND completed_at IS NULL). Whether a task is queued is computed from `queued_at` (queued_at IS NOT NULL AND started_at IS NULL). Whether a task is pending is the absence of both. State is not persisted as a separate status field — it is derived from the presence of lifecycle timestamps.
+- **Task status is authoritative**: each task has a well-defined status that progresses through a validated state machine. Status transitions are enforced — invalid transitions (e.g., pending directly to completed, or any transition out of a terminal state) are rejected. The status is the single source of truth for where a task is in its lifecycle. Lifecycle timestamps record *when* transitions happened; the status records *where the task is now*.
 - **Outcome summaries are derived from git**: the summary is computed from commits between `start_commit` and `result_commit`. It reflects what the repository records, not what the agent claims. A task that produces no commits has no summary.
 - **Goal color is non-null**: every goal has a color from creation. The platform assigns a random color from a curated palette when a goal is created. The palette is chosen for visual distinguishability — high saturation, evenly distributed hues, readable against both light and dark backgrounds. The user can override the color at any time. Color has no behavioral effect — it is purely visual metadata.
 - **Merge preserves trigger history**: merging pending tasks concatenates their trigger arrays. No trigger entry is lost or rewritten. The surviving task's triggers are the union of all source tasks' triggers, ordered by original creation time.
