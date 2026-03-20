@@ -79,15 +79,51 @@ Another agent's task programmatically dispatches a job via the `dispatch_task` M
 
 ### Resume
 
-Continues a previous task using the CLI's session resume capability. Creates a new task record with `resume_session_id`. Never coalesces — each resume is distinct intent.
+Continues a previous task using the CLI's session resume capability. Creates a new task record with `resume_session_id` and inverts the coalesce relationship — see [Inverted Coalescing](#inverted-coalescing) below.
 
 **Entry point**: `POST /api/dispatch/{task_id}/resume`
+
+### Reply
+
+Creates a follow-up task targeting a resolved task. The user provides additional context or instructions. The reply task carries the original task's commit range in its trigger context and inverts the coalesce relationship — see [Inverted Coalescing](#inverted-coalescing) below.
+
+**Entry point**: `POST /api/tasks/{task_id}/reply`
 
 ### Retry
 
 Re-enqueues a failed or timed-out task. Unlike resume, retry resurrects the original record in-place — resets lifecycle fields, appends a retry trigger to the history, resets `created_at` so it doesn't jump ahead in the queue. Never coalesces.
 
 **Entry point**: `POST /api/dispatch/{task_id}/retry`
+
+## Inverted Coalescing (Reply and Resume)
+
+Reply and resume use the same `coalesced_id` mechanism as normal coalescing but **invert the direction**: the new task becomes the root and the original task becomes a subordinate. This is the opposite of normal coalescing, where new tasks subordinate to existing roots.
+
+The inversion is intentional. The newest task in a reply/resume chain is the one the worker should dispatch — it carries the latest intent. The original task (and any earlier chain members) become subordinates whose contexts are collected into the prompt.
+
+### Chain Behavior
+
+When replies chain (A → reply B → reply C):
+
+1. A is created as a standalone task (`coalesced_id = NULL`)
+2. B replies to A: `coalesce_under(A, B)` — A becomes subordinate to B
+3. C replies to B: `coalesce_under(B, C)` — B becomes subordinate to C, then `_flatten_coalesce` re-points A from B to C
+
+Result: C is root (`coalesced_id = NULL`), A and B are both flat subordinates of C. The depth-1 invariant holds — no nested coalesce chains.
+
+When C is dispatched, the worker collects subordinates A and B. The prompt includes:
+- C's context: "Reply to task #B — [user notes]"
+- B's context: "Reply to task #A — [user notes]"
+- A's context: the original trigger (manual, commit, etc.)
+
+The full provenance chain is readable through the subordinate contexts, ordered by creation time. Each task's `trigger_detail` references its predecessor by ID, making the chain traversable.
+
+### Structural Properties
+
+- **Inverted root**: the newest task is always the root. This ensures the worker dispatches the most recent intent.
+- **Flat subordinates**: `_flatten_coalesce` re-points all prior chain members to the new root. No depth > 1.
+- **Complete provenance**: every task in the chain retains its own record with original trigger, context, and timestamps. No data is lost or rewritten.
+- **Resume session threading**: resume tasks carry `resume_session_id` which the worker passes to the CLI's `--resume` flag. The session context from the original task is restored by the CLI, not reconstructed from subordinate contexts.
 
 ## Coalescing
 

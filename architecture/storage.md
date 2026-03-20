@@ -73,7 +73,7 @@ Eight tables:
 | `jobs` | Job identity (id, name, created_at) |
 | `job_property_defs` | EAV registry — defines property keys, default values, and types |
 | `job_properties` | EAV overrides — per-job property values |
-| `tasks` | Task identity, execution metadata, and materialized status |
+| `tasks` | Task identity, execution metadata (stop_reason, num_turns, cost_usd), and materialized status |
 | `task_events` | Immutable lifecycle event log — source of truth for when transitions happened |
 | `chat_sessions` | Session metadata, links jobs and tasks to their output |
 | `chat_messages` | Durable chat messages (role + content) |

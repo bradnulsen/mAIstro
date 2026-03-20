@@ -85,10 +85,13 @@ Five trigger types cause tasks to be enqueued:
 - **Dependency** — when a task completes successfully, goals declaring its goal as an upstream dependency are enqueued. Coalesces with other pending dependency-triggered tasks for the same goal. Only successful completion triggers dependents — exhausted, failed, timed-out, cancelled, interrupted, and rejected tasks do not.
 - **Agent** — another agent's task programmatically dispatches a goal via the `dispatch_task` MCP tool, with a message explaining why. The trigger context carries the dispatching task's identity and message. Coalesces with other pending agent-triggered tasks for the same goal. Agent dispatch is subject to goal-level dispatch control — a goal property governs which other goals an agent can dispatch.
 
-Two continuation triggers operate on existing tasks:
+Three continuation triggers operate on existing tasks:
 
-- **Resume** — continues a previous task using the CLI's session resume capability. Never coalesces.
+- **Resume** — continues a previous task using the CLI's session resume capability. Creates a new task and coalesces the original under it (inverted — the new task is the root, the original becomes subordinate). The CLI resumes the original session.
+- **Reply** — creates a follow-up task targeting a resolved task with additional user context. Like resume, the original task is coalesced under the new one. Unlike resume, reply starts a fresh session — it does not resume the original CLI session.
 - **Retry** — re-enqueues a failed or timed-out task. Resurrects the original record in-place (resets lifecycle fields and created_at to maintain fair queue ordering).
+
+Resume and reply use **inverted coalescing**: the new task becomes the root and the original becomes a subordinate. In chains (A → reply B → reply C), the latest task is always the root and all predecessors are flat subordinates. This preserves full provenance while keeping the newest intent as the dispatchable unit.
 
 ### Coalescing
 
@@ -100,7 +103,8 @@ Coalescing prevents redundant pre-execution tasks. Two mechanisms exist: **autom
 - `commit` and `dependency` triggers coalesce with other pre-execution tasks of the same trigger type for the same goal.
 - `schedule` triggers coalesce globally (any pre-execution task for the same goal absorbs the new trigger).
 - The `coalesce_dispatches` goal property enables global coalescing for all trigger types — the goal will never have more than one pre-execution task.
-- `manual`, `resume`, and `retry` never coalesce — each represents distinct explicit intent.
+- `manual` and `retry` never coalesce — each represents distinct explicit intent.
+- `resume` and `reply` do not participate in automatic coalescing (they always create a new task), but they establish an inverted coalesce relationship with the original task — the original becomes subordinate to the new task.
 
 #### Manual Queue Composition
 

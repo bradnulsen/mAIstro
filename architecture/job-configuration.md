@@ -21,6 +21,7 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `depends_on` | json | `[]` | List of upstream job IDs for dependency triggers |
 | `schedule` | string | `""` | Cron expression for scheduled dispatch |
 | `timeout` | integer | `900` | Maximum execution time in seconds |
+| `max_turns` | integer | `50` | Maximum agent turns per task — safety bound, not a target |
 | `require_approval` | boolean | `false` | Whether automated triggers require human approval |
 | `coalesce_tasks` | boolean | `false` | Global coalescing — never more than one pending task |
 | `allowed_tools` | json | `[]` | CLI tools the agent can use, selected from the platform's discovered tool inventory. When set, the platform computes the complement and hides all other tools from the agent |

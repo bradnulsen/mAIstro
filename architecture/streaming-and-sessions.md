@@ -102,6 +102,12 @@ Every NDJSON line from the CLI is stored as a `chat_event` (session_id, event_ty
 
 Additionally, tool invocations that flow through the platform's internal MCP server are recorded as structured events in the same session. These are richer than NDJSON-parsed tool_use events because they capture the actual operation the platform performed (see [Tool Mediation](tool-mediation.md)).
 
+### Incremental Persistence
+
+Chat events are persisted incrementally during streaming — each event is written to the database as it arrives, not accumulated in memory and flushed at the end. A crash or failure mid-stream must not discard all events captured up to that point.
+
+The stored session is the authoritative record of what the agent did. Its durability cannot depend on clean termination. This applies to all event types: text, thinking, tool_use, result, error, session_id.
+
 ## Relationship to Other Systems
 
 - [Dispatch Engine](dispatch-engine.md) drives the broadcast during task processing

@@ -54,6 +54,7 @@ These events correspond 1:1 with the task status state machine. The most recent 
 | `unqueued` | Demoted back to pending | — |
 | `active` | Worker picked up the task | `session_id`, `start_commit` |
 | `completed` | Agent finished successfully | `result_commit` |
+| `exhausted` | Agent hit the turn limit without finishing | Turns consumed, turn limit |
 | `failed` | Agent encountered an error | Error message |
 | `cancelled` | User or system cancelled | — |
 | `timed_out` | Watchdog terminated the agent | Timeout value |
@@ -71,6 +72,7 @@ The mapping from the most recent lifecycle event to the materialized `status` co
 | `unqueued` | `pending` |
 | `active` | `active` |
 | `completed` | `completed` |
+| `exhausted` | `exhausted` |
 | `failed` | `failed` |
 | `cancelled` | `cancelled` |
 | `timed_out` | `timed_out` |
@@ -138,7 +140,7 @@ Used by the frontend timeline display. Replaces the current pattern of condition
 
 Duration is computed from event pairs, not from column arithmetic:
 
-- **Execution duration**: time between the most recent `active` event and the most recent terminal event (`completed`, `failed`, `cancelled`, `timed_out`, `interrupted`)
+- **Execution duration**: time between the most recent `active` event and the most recent terminal event (`completed`, `exhausted`, `failed`, `cancelled`, `timed_out`, `interrupted`)
 - **Queue wait time**: time between the most recent `queued` event and the most recent `active` event
 - **Total lifecycle**: time between `created` and the terminal event
 
@@ -184,6 +186,7 @@ The task record retains columns that are either identity (immutable after creati
 | `session_id`, `resume_session_id` | Execution | Set once, read by worker and API on every task access |
 | `approval` | Orthogonal | Not lifecycle state — separate concern, queried with status |
 | `start_commit`, `result_commit` | Execution | Set once, read for outcome summaries and dependency context |
+| `stop_reason`, `num_turns`, `cost_usd` | Execution | Set once at terminal, read by API for execution metadata display |
 | `error` | Execution | Set once on terminal non-success, read by API for display |
 | `coalesced_id`, `sort_order` | Queue management | Not lifecycle state — separate concerns |
 | `created_at` | Identity | Record creation time, used for sort tiebreaking |

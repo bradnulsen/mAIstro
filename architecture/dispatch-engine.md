@@ -25,6 +25,9 @@ Each `tasks` row tracks:
 | `resume_session_id` | CLI session ID for resume tasks |
 | `approval` | Gate status: `null` (no gate), `pending`, `approved`, `rejected` |
 | `start_commit` | HEAD hash when execution began |
+| `stop_reason` | Why the agent stopped (end_turn, max_turns, error, etc.) |
+| `num_turns` | Agent turns consumed during execution |
+| `cost_usd` | Estimated API cost |
 | `created_at` | When the task was enqueued |
 | `queued_at` | When the task was promoted to queued state (NULL = still pending) |
 | `started_at` | When the worker began processing |
@@ -39,7 +42,7 @@ Task lifecycle is event-sourced. See [Task Lifecycle](task-lifecycle.md) for the
 
 The `status` column on the task record is a materialized view of the latest lifecycle event — it exists for query performance, not as a source of truth. The `task_events` table records every transition as an immutable event with a timestamp and optional detail.
 
-**Status values**: `pending`, `queued`, `active`, `completed`, `failed`, `cancelled`, `interrupted`, `timed_out`, `rejected`. Completed is success; everything else is non-success.
+**Status values**: `pending`, `queued`, `active`, `completed`, `exhausted`, `failed`, `cancelled`, `interrupted`, `timed_out`, `rejected`. Completed is success; everything else is non-success.
 
 **Transition rules** are enforced by `transition_task()`, which validates the transition, writes an event to `task_events`, and updates the materialized `status` — all in one transaction.
 
@@ -51,6 +54,7 @@ queued   → pending      (transfer back to staging — only backward transition
 queued   → active       (worker picks up task)
 queued   → cancelled    (cancel before execution)
 active   → completed    (agent finished successfully)
+active   → exhausted    (agent hit turn limit without finishing)
 active   → failed       (agent error)
 active   → cancelled    (user cancellation)
 active   → timed_out    (watchdog fires)
@@ -125,7 +129,7 @@ After successful completion (no error, no timeout), the worker scans all jobs fo
 
 Circular dependency chains are safe: coalescing absorbs redundant triggers, and sequential execution ensures no concurrent amplification. A cycle produces at most one pending task per job at any time.
 
-Only `status = 'completed'` triggers dependents — `failed`, `timed_out`, `cancelled`, `interrupted`, and `rejected` tasks do not.
+Only `status = 'completed'` triggers dependents — `exhausted`, `failed`, `timed_out`, `cancelled`, `interrupted`, and `rejected` tasks do not.
 
 ## Approval Gates
 
@@ -149,6 +153,25 @@ The worker captures `start_commit` (HEAD at task start) and `result_commit` (HEA
 - **Observable failure**: when `start_commit == result_commit` but the agent was supposed to produce changes, the task output and audit trail reveal what happened. This is more useful than silently committing unknown changes.
 
 The commit range (`start_commit..result_commit`) feeds into dependency trigger context — downstream jobs see exactly which commits their upstream produced.
+
+## Turn Limit
+
+Each goal has a configurable `max_turns` property. The value is passed to the CLI's `--max-turns` flag. When the agent reaches the limit, the CLI stops the session and the platform transitions the task to `exhausted`.
+
+The turn limit is a safety bound, not a target. Most tasks finish well within it. When a task hits the limit, it typically means the instructions are too broad, the agent is stuck in a loop, or the work genuinely requires more interaction than anticipated. Exhaustion is a distinct terminal state from timeout — turns vs. time — with different diagnostic responses.
+
+## Execution Metadata
+
+When a task reaches a terminal state, the platform records execution metadata alongside the lifecycle transition:
+
+- **Stop reason**: why the agent stopped — natural completion, turn limit reached, error, timeout, cancellation
+- **Turns consumed**: how many agent turns were used, relative to the configured limit
+- **Duration**: wall-clock execution time
+- **Cost**: estimated API cost in USD
+
+This metadata is surfaced in the Dispatch view alongside the outcome summary. "Completed in 3/50 turns at $0.02" is operationally useful; "completed" alone is not. The metadata enables the operator to assess efficiency, detect anomalies (e.g., a task that normally takes 5 turns suddenly consuming 40), and tune goal configuration.
+
+The metadata fields are stored on the task record, set once at task completion. They are informational — they do not affect the state machine or dependency propagation.
 
 ## Dispatch Outcomes
 
@@ -226,10 +249,13 @@ The coalesced_id approach has structural advantages:
 - **Route simplicity**: "act on all tasks with this coalesced_id" is a single WHERE clause, uniformly applied across all endpoints
 - **Automatic coalescing alignment**: the same mechanism can back automatic coalescing — instead of appending to a JSON array, create a new record with `coalesced_id` pointing to the existing pre-execution task
 
-## Retry and Resume
+## Retry, Resume, and Reply
 
 - **Retry**: creates a new task record with `retry` trigger. The original task is coalesced under the new one (preserving audit trail). The new task enters the queue normally — retry does not bypass the two-stage queue.
-- **Resume**: creates a new task record with `resume_session_id` set to the original CLI session ID. The worker passes this to the CLI's `--resume` flag. If the original chat session still exists, it's reused.
+- **Resume**: creates a new task record with `resume_session_id` set to the original CLI session ID. The worker passes this to the CLI's `--resume` flag. If the original chat session still exists, it's reused. The original task is coalesced under the new one via inverted coalescing (see [Trigger System — Inverted Coalescing](trigger-system.md#inverted-coalescing-reply-and-resume)).
+- **Reply**: creates a new task record with `reply` trigger and the user's follow-up context. The original task's commit range is included in the trigger context. The original task is coalesced under the new one via inverted coalescing. Unlike resume, reply does not reuse the CLI session — it starts a fresh session with the reply context.
+
+All three create new task records rather than mutating the original. The original becomes a subordinate of the new task, preserving full provenance. In reply chains (A → B → C), the latest task is always the root and all predecessors are flat subordinates — the depth-1 invariant is maintained by `_flatten_coalesce`.
 
 ## Relationship to Other Systems
 
