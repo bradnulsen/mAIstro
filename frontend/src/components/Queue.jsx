@@ -2,19 +2,36 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react
 import Markdown from 'react-markdown'
 import {
   getTaskQueue, cancelTask, updateTask, getTaskOutput,
-  getTaskDiff, getTaskOutcome, getQueueSettings, setQueueSettings, processOne,
+  getTaskDiff, getTaskOutcome, processOne,
   streamTask, approveTask, rejectTask,
   reorderTasks, mergeTasks, splitTask, uncoalesceTask, getSubordinates,
-  transferTask, resumeTask, retryTask,
+  transferTask, resumeTask, replyTask,
 } from '../api'
 import {
-  formatDate, formatDuration, TRIGGER_ICONS, mdBreaks,
-  STATUS_LABELS, TRIGGER_LABELS, getTaskStatus, triggerLabel, getMessageContent,
+  formatDate, formatDuration, formatDurationSecs, TRIGGER_ICONS, mdBreaks,
+  STATUS_LABELS, TRIGGER_LABELS, EVENT_LABELS, getTaskStatus, triggerLabel, getMessageContent,
 } from '../util'
 
 const getStatus = getTaskStatus
 
-const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'timed_out', 'interrupted', 'rejected'])
+const TERMINAL_STATES = new Set(['completed', 'failed', 'error', 'cancelled', 'timed_out', 'interrupted', 'rejected'])
+
+/** Deterministic goal color from CSS tokens — matches Dashboard timeline palette */
+let _goalColors = null
+function goalColorForId(goalId) {
+  if (!_goalColors) {
+    const root = document.documentElement
+    _goalColors = Array.from({ length: 10 }, (_, i) =>
+      getComputedStyle(root).getPropertyValue(`--goal-color-${i}`).trim()
+    )
+    if (_goalColors.every(c => !c)) {
+      _goalColors = ['#4a90d9','#d94a4a','#4ad97a','#d9a84a','#9b59b6','#1abc9c','#e67e22','#3498db','#e74c3c','#2ecc71']
+    }
+  }
+  let hash = 0
+  for (let i = 0; i < (goalId || '').length; i++) hash = ((hash << 5) - hash + goalId.charCodeAt(i)) | 0
+  return _goalColors[((hash % 10) + 10) % 10]
+}
 
 function isPreExecution(item) {
   const s = getStatus(item)
@@ -48,12 +65,11 @@ export default function Queue() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
-  const [autoDispatch, setAutoDispatch] = useState(false)
   const [output, setOutput] = useState(null)
   const [confirmCancel, setConfirmCancel] = useState(null)
   const [actionError, setActionError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
-  const [retryContext, setRetryContext] = useState(null)
+  const [replyContext, setReplyContext] = useState(null)
 
   // Drawer state
   const [drawerHeight, setDrawerHeight] = useState(DEFAULT_DRAWER_HEIGHT)
@@ -84,10 +100,6 @@ export default function Queue() {
   useEffect(() => { refresh() }, [refresh])
 
   useEffect(() => {
-    getQueueSettings().then(s => setAutoDispatch(s.auto_dispatch)).catch(() => {})
-  }, [])
-
-  useEffect(() => {
     const interval = setInterval(refresh, 5000)
     return () => clearInterval(interval)
   }, [refresh])
@@ -97,7 +109,7 @@ export default function Queue() {
   const [liveTools, setLiveTools] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
 
-  useEffect(() => { setActionError(''); setConfirmCancel(null); setRetryContext(null) }, [selected?.id])
+  useEffect(() => { setActionError(''); setConfirmCancel(null); setReplyContext(null) }, [selected?.id])
 
   useEffect(() => {
     if (!selected) { setOutput(null); setLiveText(''); setLiveTools([]); setIsStreaming(false); return }
@@ -159,11 +171,6 @@ export default function Queue() {
       return () => { cancelled = true }
     }
   }, [selected?.id, selected?.started_at, selected?.completed_at])
-
-  const handleToggleAuto = async (val) => {
-    await setQueueSettings({ auto_dispatch: val })
-    setAutoDispatch(val)
-  }
 
   const handleProcessOne = async (id) => {
     try {
@@ -254,11 +261,11 @@ export default function Queue() {
     }
   }
 
-  const handleRetry = async (id, context) => {
+  const handleReply = async (id, context) => {
     setActionError('')
     try {
-      await retryTask(id, context)
-      setRetryContext(null)
+      await replyTask(id, context)
+      setReplyContext(null)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -296,12 +303,12 @@ export default function Queue() {
     const handleKey = (e) => {
       if (e.key !== 'Escape') return
       if (confirmCancel !== null) { setConfirmCancel(null); return }
-      if (retryContext !== null) { setRetryContext(null); return }
+      if (replyContext !== null) { setReplyContext(null); return }
       if (selected) setSelected(null)
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [selected, confirmCancel, retryContext])
+  }, [selected, confirmCancel, replyContext])
 
   // Partition items into three columns
   const upcomingItems = sortPreExecution(items.filter(i => {
@@ -330,11 +337,6 @@ export default function Queue() {
         <button className="small" onClick={handleRefresh} disabled={refreshing}>
           {refreshing ? <span className="tool-spinner" /> : '↻'}
         </button>
-        <div className="toolbar-divider" />
-        <label className="checkbox-label">
-          <input type="checkbox" checked={autoDispatch} onChange={e => handleToggleAuto(e.target.checked)} />
-          Auto-queue
-        </label>
       </div>
 
       <div className="dispatch-body">
@@ -375,7 +377,7 @@ export default function Queue() {
               <div className="drawer-handle-bar" />
             </div>
             <div className="detail-drawer-header">
-              <h3>#{selected.id} — {selected.job_name}</h3>
+              <h3>#{selected.id} — {selected.goal_name}</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
@@ -445,15 +447,15 @@ export default function Queue() {
 
             {selectedIsTerminal && (
               <div className="detail-actions">
-                {retryContext !== null ? (
+                {replyContext !== null ? (
                   <>
-                    <label className="muted-text">Edit context before retrying</label>
-                    <ContextEditor value={retryContext} onChange={e => setRetryContext(e.target.value)} autoFocus />
+                    <label className="muted-text">Add context for your reply</label>
+                    <ContextEditor value={replyContext} onChange={e => setReplyContext(e.target.value)} autoFocus />
                     <div className="action-row compact">
-                      <button className="small primary" onClick={() => handleRetry(selected.id, retryContext)}>
-                        ↺ Retry
+                      <button className="small primary" onClick={() => handleReply(selected.id, replyContext)}>
+                        ↺ Reply
                       </button>
-                      <button className="small" onClick={() => setRetryContext(null)}>Cancel</button>
+                      <button className="small" onClick={() => setReplyContext(null)}>Cancel</button>
                     </div>
                   </>
                 ) : (
@@ -469,10 +471,10 @@ export default function Queue() {
                     )}
                     <button
                       className="small"
-                      onClick={() => setRetryContext('')}
-                      title="Queue a fresh task — edit context first"
+                      onClick={() => setReplyContext('')}
+                      title="Follow up on this task with additional context"
                     >
-                      ↺ Retry
+                      ↺ Reply
                     </button>
                   </div>
                 )}
@@ -491,7 +493,7 @@ export default function Queue() {
 
 /**
  * A single kanban column with specialized drag behavior:
- * - Upcoming (dragMode="merge"): drop onto same-job task to coalesce
+ * - Upcoming (dragMode="merge"): drop onto same-goal task to coalesce
  * - Active (dragMode="reorder"): drop between tasks to change priority
  * Both columns accept cross-column drops as transfers.
  */
@@ -508,7 +510,7 @@ function KanbanColumn({
 
   const computeDropZone = (e, rowEl, draggedItem, targetItem) => {
     if (dragMode === 'merge') {
-      const canMerge = targetItem && draggedItem && targetItem.job_id === draggedItem.job_id
+      const canMerge = targetItem && draggedItem && targetItem.goal_id === draggedItem.goal_id
       return canMerge ? 'merge' : null
     }
     const rect = rowEl.getBoundingClientRect()
@@ -594,13 +596,13 @@ function KanbanColumn({
                 className={`feed-item running ${selected?.id === item.id ? 'active' : ''}`}
                 onClick={() => onSelect(item)}
               >
-                <div className="feed-avatar">
-                  {(item.job_name || '?')[0].toUpperCase()}
+                <div className="feed-avatar" style={{ background: goalColorForId(item.goal_id) }}>
+                  {(item.goal_name || '?')[0].toUpperCase()}
                 </div>
                 <div className="feed-body">
                   <div className="feed-meta">
                     <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
-                    <span className="feed-author">{item.job_name}</span>
+                    <span className="feed-author">{item.goal_name}</span>
                     <span className="queue-status running">{STATUS_LABELS.running}</span>
                     <span>{formatDate(item.started_at, true)}</span>
                   </div>
@@ -636,8 +638,8 @@ function KanbanColumn({
               onDragLeave={() => { setDragOverIdx(null); setDropZone(null) }}
               onDragEnd={handleDragEnd}
             >
-              <div className="feed-avatar">
-                {(item.job_name || '?')[0].toUpperCase()}
+              <div className="feed-avatar" style={{ background: goalColorForId(item.goal_id) }}>
+                {(item.goal_name || '?')[0].toUpperCase()}
               </div>
               <div className="feed-body">
                 <div className="feed-meta">
@@ -645,7 +647,7 @@ function KanbanColumn({
                     {TRIGGER_ICONS[item.trigger] || ''}
                     {item.subordinate_count > 0 ? ` (${item.subordinate_count + 1})` : ''}
                   </span>
-                  <span className="feed-author">{item.job_name}</span>
+                  <span className="feed-author">{item.goal_name}</span>
                   {status === 'pending_approval' && (
                     <span className={`queue-status ${status}`}>
                       {STATUS_LABELS[status]}
@@ -692,13 +694,13 @@ function ResolvedColumn({ items, loading, selected, onSelect }) {
               className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status !== 'completed' ? status : ''}`}
               onClick={() => onSelect(item)}
             >
-              <div className="feed-avatar">
-                {(item.job_name || '?')[0].toUpperCase()}
+              <div className="feed-avatar" style={{ background: goalColorForId(item.goal_id) }}>
+                {(item.goal_name || '?')[0].toUpperCase()}
               </div>
               <div className="feed-body">
                 <div className="feed-meta">
                   <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
-                  <span className="feed-author">{item.job_name}</span>
+                  <span className="feed-author">{item.goal_name}</span>
                   <span className={`queue-status ${status}`}>
                     {STATUS_LABELS[status] || status}
                   </span>
@@ -750,6 +752,8 @@ function ContextEditor({ value, onChange, autoFocus = false }) {
 }
 
 function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, onUncoalesce }) {
+  // Merge detail-level data (events, durations) from the output fetch when available
+  const detail = output?.task || item
   const status = getStatus(item)
   const assistantMsgs = output?.messages?.filter(m => m.role === 'assistant') ?? []
   const isPending = status === 'pending' || status === 'queued'
@@ -840,21 +844,21 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
         </div>
 
         <div className="detail-section">
-          <label>Timeline</label>
-          <div className="detail-meta">
-            <div>Created: {formatDate(item.created_at, true)}</div>
-            {item.queued_at && <div>Queued: {formatDate(item.queued_at, true)}</div>}
-            {item.started_at && <div>Started: {formatDate(item.started_at, true)}</div>}
-            {item.completed_at && <div>Completed: {formatDate(item.completed_at, true)}</div>}
-            {item.started_at && item.completed_at && (
-              <div className="detail-duration">
-                Duration: {formatDuration(item.started_at, item.completed_at)}
-              </div>
-            )}
-            {item.started_at && !item.completed_at && (
-              <div className="detail-duration running">
-                Running for {formatDuration(item.started_at)}
-              </div>
+          <label>Timeline{detail.durations?.execution_duration != null
+            ? ` — ${formatDurationSecs(detail.durations.execution_duration)}`
+            : status === 'running' && item.started_at
+              ? ` — ${formatDuration(item.started_at)}`
+              : ''}</label>
+          <div className="event-chips">
+            {(detail.events || []).map((e, i) => (
+              <span key={i} className={`event-chip ${e.event}`} title={formatDate(e.created_at, true)}>
+                {EVENT_LABELS[e.event] || e.event}
+              </span>
+            ))}
+            {(!detail.events || detail.events.length === 0) && (
+              <span className="event-chip created" title={formatDate(item.created_at, true)}>
+                Created
+              </span>
             )}
           </div>
         </div>
