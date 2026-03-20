@@ -27,21 +27,50 @@ What's in place:
 
 The platform now has both execution capability and operational visibility. Agents can manage branches, dispatch work to other agents, query queue state, and be selectively restricted from tools. The Activity Dashboard surfaces goal health, task timing, dispatch chains, and tool usage — the operator can see patterns across tasks without clicking through history one by one. Dispatch depth limiting prevents runaway agent cascades.
 
-Two designed-but-unbuilt gaps remain, both now fully specified:
+Three gaps, in order of urgency:
 
-**Outcome interrogation.** When a task completes, the user can see the outcome summary, diff, and dashboard aggregates — but cannot ask follow-up questions. The agent's session — its full reasoning, decisions, and context — is locked behind the streamed output log. The user wants to have a conversation with the agent that did the work, not just read what it produced. Critically, this conversation must be read-only: interrogation is not a license to make more changes. All new work flows through new tasks. **Design complete** — session resume via `--resume`, read-only tool stripping, UI integration in chat tray, all specified. The `allowed_internal_tools` mechanism makes read-only restriction a configuration concern, not special-case code.
+**Accumulated technical debt.** A systematic remediation audit (REMEDIATION.md) identified 13 items across the backend. Two are already resolved — the task status state machine (R1) and project-switch DB coordination (R3). Route modularization (R9) is partially done. The remaining items fall into three tiers: user-visible gaps where the platform silently drops information (thinking blocks in streamed output, execution metadata like cost and stop reason, chat events lost on batch write failure), structural debt that slows every future change (database.py as a 2100-line god module, duplicated CLI execution harness in worker and chat, coalescing logic dispersed across 12+ touch points), and execution robustness issues (synchronous git calls blocking the async event loop). The debt is not theoretical — agents silently exhaust max turns with no indication, thinking blocks are dropped from the stream, and chat event failures discard all task output.
 
-**Proactive alerting.** The dashboard answers "how are my agents doing?" when the user looks — but doesn't tell them when something needs attention. As the system runs more autonomously (scheduled goals, agent-initiated dispatch chains, watch triggers), the operator is increasingly absent from the UI during task execution. Failures, timeouts, and anomalies go unnoticed until the next manual check. **Design complete** — in-app feed with read/unread state, desktop notifications via browser API, per-goal notification rules with conservative defaults, and outbound webhook integration, all specified in DESIGN.md. Safety constraints are explicit: notifications are read-only signals that never create or modify tasks.
+**Outcome interrogation.** When a task completes, the user can see the outcome summary, diff, and dashboard aggregates — but cannot ask follow-up questions. The agent's session is locked behind the streamed output log. **Design complete** — session resume via `--resume`, read-only tool stripping, UI integration in chat tray, all specified.
+
+**Proactive alerting.** The dashboard answers "how are my agents doing?" when the user looks — but doesn't tell them when something needs attention. **Design complete** — in-app feed, desktop notifications, per-goal rules, webhook integration, all specified in DESIGN.md.
 
 ## Guiding Policy
 
-**Ship the last designed features — reactive first, then proactive.** Both remaining features now have complete designs. Session interrogation is the final piece of reactive operator tooling — it completes the inspect-understand-decide loop. Notifications make the platform proactive — telling the operator when to look instead of requiring them to watch. The order is deliberate: interrogation first because the operator needs the investigation tool before the system starts nudging them to investigate. The guiding constraint: complete the reactive surface, then build the proactive one.
+**Fix the foundation, then ship the features.** The remediation items are not cosmetic — they represent silent data loss (chat events), invisible failures (max-turns exhaustion), and missing observability (thinking blocks, cost tracking). Building session interrogation on top of a duplicated CLI harness would create a third copy of the same code. Building notifications without execution metadata means alerting on events the platform doesn't fully capture. The order is: stabilize and surface what agents actually do (remediation), then let the operator interrogate it (session interrogation), then make the platform proactive about it (notifications).
 
-## Priority 1: Task Session Interrogation
+## Priority 1: Technical Remediation
+
+**The problem:** The backend has accumulated structural debt that silently degrades the operator's experience and blocks clean implementation of the remaining features. Agents drop thinking blocks from streamed output, silently exhaust max turns with no indication, lose all chat events on batch write failure, and block the async event loop on every git call. The 2100-line database.py monolith makes every schema change risky. The CLI execution harness is duplicated between worker and chat — adding session interrogation (P2) would create a third copy.
+
+**Why first:** Three reasons. (1) Some items fix silent data loss and invisible failures — these are operational correctness, not polish. (2) The shared CLI harness (R4) is a direct prerequisite for session interrogation — without it, P2 adds a third duplicate. (3) Execution metadata capture (R13) makes notifications (P3) more meaningful — alerting on events the platform doesn't fully record is half a feature.
+
+**Phase 1 — Surface what agents actually do (small effort, high visibility):**
+- **R12: Thinking blocks in assistant messages** — `_translate_event` in `cli.py` handles `thinking_delta` in the legacy stream path but drops `thinking` content blocks from the current `assistant` message format. Three lines in `cli.py`, SSE handler + render in `Queue.jsx`. *Partially implemented — legacy path works, current path drops.*
+- **R13: Execution metadata capture** — the CLI `result` event carries `stop_reason`, `num_turns`, `duration_ms`, `total_cost_usd`, `modelUsage` — all silently dropped. Max-turns exhaustion looks identical to success. Schema columns on `tasks`, extraction in `_translate_event`, `max_turns` as a configurable goal property (currently hardcoded at 50). Frontend surfaces turns used, cost, and distinct treatment for max-turns exhaustion.
+- **R11: Incremental chat event flush** — events accumulate in memory and flush once after CLI finishes. Failure discards everything (silent `pass` on exception). Fix: periodic flush during streaming (every ~50 events), retry with chunking on failure, fallback file for unrecoverable writes.
+- **R8: Move glob matching** — `_any_file_matches` and `_glob_to_regex` are trigger-matching functions living in the prompt-assembly module (`dispatch.py`). Move to `git.py` or a dedicated `matching.py`. Trivial.
+
+**Phase 2 — Structural clarity (mechanical, no behavior change):**
+- **R2: Split database.py** — 2100+ lines covering schema, migrations, goal CRUD, task lifecycle, coalescing, chat, config, dashboard, and property casting. Split into `db_core.py` (connection, schema, migrations), `db_jobs.py` (goal CRUD, property system), `db_tasks.py` (task CRUD, state transitions, coalescing, queue queries), `db_chat.py` (sessions, messages, events), `db_config.py` (config, MCP servers), `db_dashboard.py` (aggregation). Re-export from `database.py` for backward compatibility.
+- **R5: Consolidate coalescing** — fold into R2. Extract `coalesce_into`, `decoalesce`, `cascade_completion` as explicit functions in `db_tasks.py`. Add depth-1 CHECK constraint. Eliminate the three duplicate cascade paths in the worker.
+- **R9: Complete route extraction** — goal, queue, and chat routers exist. Extract remaining route groups from `main.py`: project, feed, git, dashboard, config. `main.py` becomes lifespan + CORS + `include_router` calls + health check.
+
+**Phase 3 — Execution robustness:**
+- **R4: Shared CLI execution harness** — extract `run_cli_session` from the duplicated patterns in `worker.py` and `chat.py`. Encapsulates session creation, `cli.invoke()` iteration, event buffering with incremental flush (from R11), response accumulation, optional timeout/cancellation. Worker and chat become thin callers. **This is prerequisite for P2** — session interrogation adds a third CLI execution path.
+- **R7: Async git operations** — all git functions use sync `subprocess.run`, blocking the event loop. Wrap in `asyncio.to_thread`, make all callers `await`. Mechanical but wide-reaching.
+
+**What's already done:** R1 (task status state machine with validated transitions), R3 (DB connection coordination with readers-draining protocol and `_switching` flag), R9 partial (goal, queue, chat routers extracted).
+
+**What's deferred from the remediation plan:** R6 (flatten EAV properties to JSON column) — the assembly overhead is real but not blocking. R10 (replace global `PROJECT_DIR` with `ProjectContext`) — structural change that only matters if multi-project becomes a requirement.
+
+**Second-order effects:** R13 unlocks cost tracking, which is currently listed as deferred with the rationale "CLI doesn't expose token counts cleanly" — but it does. The `result` event already carries `total_cost_usd` and per-model usage. R4 makes session interrogation (P2) a configuration concern rather than a third implementation. R2 makes every future schema change lower risk.
+
+## Priority 2: Task Session Interrogation
 
 **The problem:** Completed tasks produce outcome summaries and diffs, but the user cannot ask follow-up questions. "Why did you change this file?" "What alternatives did you consider?" "What did the test output look like?" These questions require conversational access to the agent's session — the same context, the same reasoning chain. Currently the user must read the raw streamed output log, which is noisy and non-interactive.
 
-**Why first:** This is the highest-leverage item that is also implementation-ready. The design is complete in DESIGN.md. The infrastructure already exists — every task creates a chat session, the CLI supports `--resume`. The only new work is (1) a UI surface to initiate read-only chat with a completed task's session, and (2) a tool restriction that strips write capabilities from the resumed session. Low implementation cost, high operator leverage, complete specification.
+**Why second:** Was P1 before remediation was prioritized. Still the highest-leverage feature — but building it on the shared CLI harness (R4 in P1) instead of creating a third duplicate is the right sequencing. The design is complete in DESIGN.md. Implementation-ready once R4 lands.
 
 **Specifically:**
 - **Session resume from Dispatch** — completed tasks in the Resolved column gain a "Chat" action that opens the task's session in a conversational interface. The agent resumes with its full prior context intact.
@@ -51,11 +80,11 @@ Two designed-but-unbuilt gaps remain, both now fully specified:
 
 **Second-order effects:** This changes how the operator relates to completed work. Instead of treating outcomes as final artifacts to accept or reject, the user can interrogate the reasoning, build understanding, and make better decisions about what to dispatch next. It also provides a natural feedback channel — the user's questions reveal what information the agent should have surfaced proactively, which can inform dashboard refinements and notification rule design.
 
-## Priority 2: Notifications
+## Priority 3: Notifications
 
 **The problem:** The platform requires the operator to be watching. Task completions, failures, timeouts, and anomalies are only visible when the user opens the UI and looks at the queue or dashboard. As the system becomes more autonomous — scheduled goals running overnight, agent-initiated dispatch chains executing while the operator is away, watch triggers firing on every commit — the gap between "something happened" and "the operator knows" grows. The dashboard made patterns visible; notifications make them timely.
 
-**Why second:** This is the transition from reactive to proactive operation. Session interrogation (P1) completes the reactive tooling: the operator can see, understand, and interrogate what agents did. Notifications complete the proactive tooling: the operator is told when to look. Together they close the full loop — the system alerts the operator, the operator investigates via dashboard and session interrogation, then dispatches corrective work through the queue. Without notifications, the operator must poll. Polling doesn't scale with autonomous task volume. **Design complete** — all four channels (in-app feed, desktop, rules, webhook) are specified in DESIGN.md with safety constraints. Implementation-ready.
+**Why third:** This is the transition from reactive to proactive operation. Remediation (P1) fixes what agents report. Session interrogation (P2) lets the operator investigate it. Notifications complete the loop — telling the operator when to look. Together they close the full cycle: the system captures everything (P1), alerts the operator (P3), the operator investigates (P2), then dispatches corrective work through the queue. Without notifications, the operator must poll. Polling doesn't scale with autonomous task volume. **Design complete** — all four channels (in-app feed, desktop, rules, webhook) are specified in DESIGN.md with safety constraints. Implementation-ready once P1 lands execution metadata.
 
 **Specifically:**
 - **In-app notification feed** — a lightweight notification center (badge + dropdown or panel) showing recent events: task completions, failures, timeouts, approval requests pending. This is the minimum viable surface — no external integrations required, works immediately.
@@ -76,7 +105,8 @@ Valuable but deliberately postponed:
 - **Conditional dependencies** — "only run if upstream output matches X." Adds significant complexity to the trigger model for a use case that hasn't surfaced yet.
 - **Structured output passing** — typed data exchange between tasks beyond the current outcome summary in trigger context. The current approach (commit messages + diff stats forwarded as text) works for most coordination. Full structured passing requires a data contract model that adds complexity without proven demand.
 - **Multi-project orchestration** — cross-project dispatch. Needs careful design around DB isolation and global `PROJECT_DIR` state.
-- **Cost tracking** — token usage per dispatch. Claude CLI doesn't expose token counts cleanly yet.
+- **EAV property flattening** (R6) — replace the three-table EAV join with a JSON column on `jobs`. The assembly overhead is real but not blocking. Revisit if property queries become a measurable bottleneck.
+- **Project context injection** (R10) — replace `PROJECT_DIR` global with a `ProjectContext` object. Large structural change only justified if multi-project becomes a requirement.
 
 ## Non-Goals
 
@@ -111,7 +141,8 @@ Valuable but deliberately postponed:
 - **Inter-Agent Coordination** (was P3) — `dispatch_task` MCP tool with `agent` trigger type, `get_queue_status` for situational awareness, `allowed_dispatch_targets` per-goal property (empty = deny-all), dispatch attribution to originating task, self-dispatch prohibition, loop prevention, and configurable dispatch depth limiting.
 - **Activity Dashboard** (was P2) — goal health summaries, task timeline visualization, agent dispatch chain tracing, tool usage patterns. Read-only aggregation over existing task and MCP tool call data with configurable time windows.
 - **External MCP Server Lifecycle** — full registration, connection, tool discovery, and per-goal assignment.
-- **Route Modularization** — separate routers, shared state module, Pydantic models.
+- **Route Modularization** (partial) — goal, queue, and chat routers extracted to separate modules. Remaining route groups (project, feed, git, dashboard, config) still in `main.py` — completion tracked in P1 Phase 2 (R9).
+- **Project Switch DB Coordination** (R3) — readers-draining protocol with `db_read_guard()`, `_closing` flag, `_switching` flag in state.py. Prevents mid-task project switch race conditions.
 - **Dispatch Diff View** — `start_commit`/`result_commit` with inline diff display.
 - **Dispatch Continuity** — resume via `--resume`, retry as re-enqueue.
 - **Dispatch Timeout Enforcement** — per-task timeout, watchdog, graceful terminate + kill.
