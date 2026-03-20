@@ -100,7 +100,7 @@ Coalescing prevents redundant pre-execution tasks. Two mechanisms exist: **autom
 #### Automatic Coalescing
 
 - When a new trigger would create a task but a compatible pre-execution task (pending or queued) already exists, the trigger is appended to the existing task's trigger list instead of creating a new record. Coalescing checks both columns — a new trigger coalesces into whichever matching task exists, regardless of whether it is pending or queued.
-- `commit` and `dependency` triggers coalesce with other pre-execution tasks of the same trigger type for the same goal.
+- `commit`, `dependency`, and `agent` triggers coalesce with other pre-execution tasks of the same trigger type for the same goal.
 - `schedule` triggers coalesce globally (any pre-execution task for the same goal absorbs the new trigger).
 - The `coalesce_dispatches` goal property enables global coalescing for all trigger types — the goal will never have more than one pre-execution task.
 - `manual` and `retry` never coalesce — each represents distinct explicit intent.
@@ -314,7 +314,9 @@ The command bar's design rationale: the user's primary interaction with mAistro 
   - **Active** (center column) — the execution pipeline. Contains queued tasks awaiting their turn and the currently running task. The running task (if any) appears at the top of the column, visually distinct from queued tasks below it. The user reorders queued tasks to control execution priority. This column answers: "what is running and what runs next?"
   - **Resolved** (right column) — all terminal states. Every task that has finished — completed, exhausted, failed, timed out, cancelled, interrupted, rejected — lands here. Each card carries a status badge identifying its terminal state. Completed (success) cards display the outcome summary and commit range. Non-success cards surface the error context inline — the user sees *why* it didn't succeed at a glance. Ordered by completion time (most recent first). This column answers: "what happened?"
 
-  Tasks flow left to right through their lifecycle: Upcoming → Active → Resolved. The user drags tasks between Upcoming and Active to promote (pending → queued) or demote (queued → pending). Provides controls for cancelling active tasks, approving/rejecting tasks awaiting approval, and resuming/retrying resolved tasks.
+  Tasks flow left to right through their lifecycle: Upcoming → Active → Resolved. The user drags tasks between Upcoming and Active to promote (pending → queued) or demote (queued → pending). Provides controls for cancelling active tasks, approving/rejecting tasks awaiting approval, and resuming/retrying/replying to resolved tasks.
+
+  **Reply** — the user can reply to a resolved task with additional context or follow-up instructions. Reply creates a new task (via the `reply` trigger) and coalesces the original under it. The reply action requires a text input — the user must provide the follow-up message that becomes the new task's context. This is distinct from resume (which continues the same session without new input) and from session interrogation (which is read-only and does not create a task).
 
   **Detail drawer** — selecting any task opens a drawer that slides up from the bottom of the view. For active tasks, the drawer shows live streamed output (text, tool use, thinking indicators). For resolved tasks, it shows the stored session output, outcome summary, and diff. For upcoming tasks, it shows trigger context and task metadata. The drawer is resizable — the user controls how much vertical space it occupies. Closing the drawer returns full space to the columns. The drawer keeps the column layout visible above it, preserving spatial context while the user inspects a specific task.
 - **Feed** — git history enriched with task metadata. Shows what changed and which tasks produced those changes.

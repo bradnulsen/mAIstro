@@ -12,7 +12,7 @@ What's in place:
 - **Goal colors** — visual identifiers distinguishing goals across all surfaces
 - **Five trigger types** — manual, commit (watch via subscriptions), schedule (cron), dependency (declarative `depends_on`, circular chains permitted), agent (imperative cross-goal dispatch)
 - **Approval gates** — per-task `require_approval`, pending/approved/rejected lifecycle, manual dispatch bypasses
-- **Dispatch continuity** — resume (CLI `--resume`) and retry for failed/timed-out dispatches
+- **Dispatch continuity** — resume (CLI `--resume`), retry for failed/timed-out dispatches, and reply for follow-up context on resolved tasks
 - **Dispatch diff view** — `start_commit`/`result_commit` tracking with inline diff display
 - **Live dispatch streaming** — SSE with real-time text, tool use, and thinking indicator
 - **Timeout enforcement** — configurable per-task with watchdog, graceful terminate then kill
@@ -144,7 +144,7 @@ Valuable but deliberately postponed:
 - **Route Modularization** (partial) — goal, queue, and chat routers extracted to separate modules. Remaining route groups (project, feed, git, dashboard, config) still in `main.py` — completion tracked in P1 Phase 2 (R9).
 - **Project Switch DB Coordination** (R3) — readers-draining protocol with `db_read_guard()`, `_closing` flag, `_switching` flag in state.py. Prevents mid-task project switch race conditions.
 - **Dispatch Diff View** — `start_commit`/`result_commit` with inline diff display.
-- **Dispatch Continuity** — resume via `--resume`, retry as re-enqueue.
+- **Dispatch Continuity** — resume via `--resume`, retry as re-enqueue, reply with follow-up context.
 - **Dispatch Timeout Enforcement** — per-task timeout, watchdog, graceful terminate + kill.
 - **Task Status State Machine** — authoritative `status` column with validated transitions, batch cascading for coalesced tasks, automatic timestamp management via `transition_task()`.
 - **Event-Sourced Task Lifecycle** — `task_events` table (schema v4) with dual-write, backfill from existing timestamps. Foundation for notifications and audit trail.
