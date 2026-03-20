@@ -82,17 +82,17 @@
   --width-rail: 52px;
   --size-icon: 36px;
   --height-header: 42px;
-  /* Job color palette — 10 stable colors for job identity in charts and timelines */
-  --job-color-0: #4a90d9;
-  --job-color-1: #d94a4a;
-  --job-color-2: #4ad97a;
-  --job-color-3: #d9a84a;
-  --job-color-4: #9b59b6;
-  --job-color-5: #1abc9c;
-  --job-color-6: #e67e22;
-  --job-color-7: #3498db;
-  --job-color-8: #e74c3c;
-  --job-color-9: #2ecc71;
+  /* Goal color palette — 10 stable colors for goal identity in charts and timelines */
+  --goal-color-0: #4a90d9;
+  --goal-color-1: #d94a4a;
+  --goal-color-2: #4ad97a;
+  --goal-color-3: #d9a84a;
+  --goal-color-4: #9b59b6;
+  --goal-color-5: #1abc9c;
+  --goal-color-6: #e67e22;
+  --goal-color-7: #3498db;
+  --goal-color-8: #e74c3c;
+  --goal-color-9: #2ecc71;
 }
 
 body {
@@ -205,19 +205,31 @@ body {
   border-color: var(--text-muted);
 }
 
-/* ── Status Chips ── */
+/* ── Command Bar ── */
 
-.status-bar {
+.command-bar {
   display: flex;
-  gap: var(--space-3);
+  align-items: center;
+  gap: var(--space-4);
   padding: var(--space-3) var(--space-7);
   border-bottom: 1px solid var(--border-light);
   background: var(--rail-bg);
-  flex-wrap: wrap;
   font-size: var(--text-sm);
 }
 
-.status-chip {
+.command-bar-goals {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.command-bar-indicator-wrap {
+  position: relative;
+}
+
+.command-bar-indicator {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -225,25 +237,36 @@ body {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-light);
   background: var(--surface);
-}
-
-.status-chip.running {
-  border-color: var(--running);
   cursor: pointer;
+  font-size: var(--text-sm);
+  transition: border-color 0.15s;
+}
+.command-bar-indicator:hover {
+  border-color: var(--goal-c);
+  background: var(--hover-bg);
+}
+.command-bar-indicator.active {
+  border-color: var(--goal-c);
+  box-shadow: 0 0 0 1px var(--goal-c);
 }
 
-.status-chip.running:hover {
-  background: var(--rail-bg);
+.command-bar-name {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.status-dot {
+.command-bar-dot {
   width: var(--size-dot);
   height: var(--size-dot);
   border-radius: var(--radius-circle);
-  background: var(--text-muted);
+  flex-shrink: 0;
 }
-
-.status-dot.running {
+.command-bar-dot.idle { background: var(--text-muted); }
+.command-bar-dot.pending { background: var(--warning, #d9a84a); }
+.command-bar-dot.queued { background: var(--accent); }
+.command-bar-dot.active {
   background: var(--running);
   animation: dot-pulse 1.4s ease-in-out infinite;
 }
@@ -252,12 +275,64 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
-.status-dot.error { background: var(--danger); }
 
-.status-idle-task {
-  color: var(--text-muted);
+/* Dispatch popout */
+.command-bar-popout {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  z-index: var(--z-popover, 100);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 24rem;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.command-bar-popout-header {
+  font-weight: 600;
+  font-size: var(--text-md);
+}
+.command-bar-popout-context {
+  font-family: var(--font);
   font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-3);
+  resize: vertical;
+  max-height: 8rem;
+}
+
+/* Actions group */
+.command-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.command-bar-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.command-bar-toggle input { cursor: pointer; }
+.command-bar-toggle:has(input:checked) { color: var(--text); }
+
+/* Keep status-dot for backward compat (used in task list items) */
+.status-dot {
+  width: var(--size-dot);
+  height: var(--size-dot);
+  border-radius: var(--radius-circle);
+  background: var(--text-muted);
+}
+.status-dot.running {
+  background: var(--running);
+  animation: dot-pulse 1.4s ease-in-out infinite;
 }
 
 /* ── Buttons ── */
@@ -657,6 +732,14 @@ label.muted-text {
   flex: 1;
   overflow-y: auto;
   padding: var(--space-7);
+  display: flex;
+  flex-direction: column;
+}
+.task-detail > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .task-detail h2 {
@@ -669,6 +752,41 @@ label.muted-text {
   color: var(--text-muted);
   margin-bottom: var(--space-6);
   line-height: var(--line-height-body);
+}
+
+.goal-summary-inline {
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-4);
+  resize: none;
+  width: 100%;
+  line-height: var(--line-height-body);
+  transition: border-color 0.15s;
+}
+.goal-summary-inline:hover {
+  border-color: var(--border);
+}
+.goal-summary-inline:focus {
+  border-color: var(--accent);
+  outline: none;
+  background: var(--surface);
+}
+
+.goal-summary-display {
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  margin-bottom: var(--space-4);
+  padding: var(--space-1) var(--space-2);
+  line-height: var(--line-height-body);
+  border-radius: var(--radius-sm);
+  cursor: text;
+}
+.goal-summary-display:hover {
+  background: var(--surface-hover);
 }
 
 .task-save-bar {
@@ -690,6 +808,25 @@ label.muted-text {
   color: var(--text-muted);
 }
 
+.instructions-stack {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.instructions-stack .instructions-textarea {
+  flex: 1;
+}
+.instructions-stack .instructions-preview {
+  position: absolute;
+  inset: 0;
+}
+.instructions-stack .instructions-preview.hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .instructions-preview {
   font-size: var(--text-md);
   line-height: var(--line-height-body);
@@ -698,7 +835,6 @@ label.muted-text {
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   min-height: 200px;
-  max-height: 300px;
   overflow-y: auto;
   cursor: text;
 }
@@ -787,11 +923,17 @@ label.muted-text {
 
 .task-tab-panel {
   padding-top: 2px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .task-tab-panel--definition {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .field-group--grow {
@@ -808,9 +950,11 @@ label.muted-text {
 }
 
 .instructions-textarea {
-  resize: vertical;
-  min-height: calc(100vh - 440px);
+  flex: 1;
+  resize: none;
+  min-height: 0;
   width: 100%;
+  overflow-y: auto;
 }
 
 .trigger-options {
@@ -826,31 +970,6 @@ label.muted-text {
   gap: var(--space-2) var(--space-7);
 }
 
-.task-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  margin-bottom: var(--space-7);
-}
-
-.dispatch-queued {
-  font-size: var(--text-sm);
-  color: var(--success);
-  margin-bottom: var(--space-4);
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.dispatch-queued button {
-  font-size: var(--text-xs);
-  color: var(--success);
-  border-color: var(--success);
-}
-
-.task-actions textarea {
-  min-height: 28px;
-}
 
 .field-group {
   margin-bottom: var(--space-5);
@@ -1454,14 +1573,14 @@ label.muted-text {
   margin-bottom: var(--space-2);
 }
 
-.health-job-dot {
+.health-goal-dot {
   width: var(--size-dot-lg);
   height: var(--size-dot-lg);
   border-radius: var(--radius-circle);
   flex-shrink: 0;
 }
 
-.health-job-name {
+.health-goal-name {
   font-size: var(--text-md);
   font-weight: bold;
   flex: 1;
@@ -1665,7 +1784,7 @@ label.muted-text {
   margin-bottom: var(--space-3);
 }
 
-.tool-usage-job-name {
+.tool-usage-goal-name {
   font-size: var(--text-md);
   font-weight: bold;
 }
@@ -1880,6 +1999,31 @@ label.muted-text {
   background: var(--danger);
   color: var(--text-on-accent);
 }
+
+/* Event timeline chips — horizontal row like trigger chips */
+.event-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.event-chip {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  cursor: default;
+}
+
+.event-chip.completed { color: var(--success); border-color: var(--success); }
+.event-chip.failed { color: var(--danger); border-color: var(--danger); }
+.event-chip.cancelled { color: var(--text-muted); border-color: var(--border); }
+.event-chip.timed_out { color: var(--warning); border-color: var(--warning); }
+.event-chip.interrupted { color: var(--warning); border-color: var(--warning); }
+.event-chip.rejected { color: var(--danger); border-color: var(--danger); }
+.event-chip.active { color: var(--accent); border-color: var(--accent); }
 
 .empty-state {
   display: flex;
@@ -2656,13 +2800,13 @@ label.muted-text {
 
 /* ── Job Detail Header Row ── */
 
-.job-header {
+.goal-header {
   display: flex;
   align-items: center;
   gap: var(--space-4);
 }
 
-.job-header h2 {
+.goal-header h2 {
   flex: 1;
   margin-bottom: 0;
 }
@@ -2697,8 +2841,6 @@ label.muted-text {
 /* File size column in resolved file list */
 .resolved-file-item .file-size { color: var(--text-muted); }
 
-/* Dispatch error message spacing */
-.dispatch-error { margin-bottom: var(--space-4); }
 
 /* Danger zone sub-errors */
 .task-section.danger .error-text { margin-top: var(--space-3); }
