@@ -109,11 +109,12 @@ Newly created tasks are appended to the end of their target column (pending by d
 
 1. **Session creation**: creates (or reuses for resume) a `chat_session` linked to the task
 2. **Lifecycle start**: records `started_at`, `start_commit`, and `session_id` on the task record
-3. **Timeout watchdog**: spawns an async task that fires the cancellation event after the configured timeout
-4. **Task execution**: calls `run_task()` which assembles prompts and invokes the CLI — yields events
-5. **Event processing**: raw events go to the audit trail; translated events go to live subscribers; text accumulates for the final chat message. MCP tool invocation events are recorded as structured audit entries
-6. **Completion**: records `completed_at` and `result_commit`; triggers dependent jobs if successful
-7. **Cleanup**: cancels watchdog, broadcasts `_done` to subscribers, clears active task state
+3. **External MCP health check**: probes all external MCP servers assigned to the task's job. If any server is unreachable or disabled, the task fails immediately with a specific error naming the server and the failure reason. This gate ensures the task never runs with a silently missing tool surface. See [Tool Mediation — Pre-Dispatch Health Check](tool-mediation.md#lifecycle)
+4. **Timeout watchdog**: spawns an async task that fires the cancellation event after the configured timeout
+5. **Task execution**: calls `run_task()` which assembles prompts and invokes the CLI — yields events
+6. **Event processing**: raw events go to the audit trail; translated events go to live subscribers; text accumulates for the final chat message. MCP tool invocation events are recorded as structured audit entries
+7. **Completion**: records `completed_at` and `result_commit`; triggers dependent jobs if successful
+8. **Cleanup**: cancels watchdog, broadcasts `_done` to subscribers, clears active task state
 
 ### Cancellation
 
@@ -147,7 +148,7 @@ The worker captures `start_commit` (HEAD at task start) and `result_commit` (HEA
 
 **The platform does not auto-commit.** Agents have structured git tools via the internal MCP server (see [Tool Mediation](tool-mediation.md)) and are instructed to commit in the system prompt. The platform trusts agents to commit their own work. Rationale:
 
-- **Authorship integrity**: every commit carries the job's identity (`[JobName]` prefix, job-specific author). An auto-commit would break this — the platform would have to guess what message and authorship to apply.
+- **Authorship integrity**: every commit carries the job's identity (`[GoalName]` prefix, job-specific author). An auto-commit would break this — the platform would have to guess what message and authorship to apply.
 - **Atomic intent**: agents decide what constitutes a logical commit. They may make multiple commits for distinct changes or one commit for related changes. Auto-commit would force a single "catch-all" commit with no meaningful message.
 - **Parallel execution future**: if tasks ever run concurrently, auto-commit becomes intractable — the working tree contains interleaved changes from multiple agents, and there's no way to attribute which changes belong to which task.
 - **Observable failure**: when `start_commit == result_commit` but the agent was supposed to produce changes, the task output and audit trail reveal what happened. This is more useful than silently committing unknown changes.
@@ -156,7 +157,7 @@ The commit range (`start_commit..result_commit`) feeds into dependency trigger c
 
 ## Turn Limit
 
-Each goal has a configurable `max_turns` property. The value is passed to the CLI's `--max-turns` flag. When the agent reaches the limit, the CLI stops the session and the platform transitions the task to `exhausted`.
+Each job has a configurable `max_turns` property. The value is passed to the CLI's `--max-turns` flag. When the agent reaches the limit, the CLI stops the session and the platform transitions the task to `exhausted`.
 
 The turn limit is a safety bound, not a target. Most tasks finish well within it. When a task hits the limit, it typically means the instructions are too broad, the agent is stuck in a loop, or the work genuinely requires more interaction than anticipated. Exhaustion is a distinct terminal state from timeout — turns vs. time — with different diagnostic responses.
 
@@ -169,7 +170,7 @@ When a task reaches a terminal state, the platform records execution metadata al
 - **Duration**: wall-clock execution time
 - **Cost**: estimated API cost in USD
 
-This metadata is surfaced in the Dispatch view alongside the outcome summary. "Completed in 3/50 turns at $0.02" is operationally useful; "completed" alone is not. The metadata enables the operator to assess efficiency, detect anomalies (e.g., a task that normally takes 5 turns suddenly consuming 40), and tune goal configuration.
+This metadata is surfaced in the Dispatch view alongside the outcome summary. "Completed in 3/50 turns at $0.02" is operationally useful; "completed" alone is not. The metadata enables the operator to assess efficiency, detect anomalies (e.g., a task that normally takes 5 turns suddenly consuming 40), and tune job configuration.
 
 The metadata fields are stored on the task record, set once at task completion. They are informational — they do not affect the state machine or dependency propagation.
 

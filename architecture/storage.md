@@ -78,7 +78,7 @@ Eight tables:
 | `chat_sessions` | Session metadata, links jobs and tasks to their output |
 | `chat_messages` | Durable chat messages (role + content) |
 | `chat_events` | Raw NDJSON audit trail per session |
-| `mcp_servers` | External tool server registrations |
+| `mcp_servers` | External tool server registrations (name, command, args, env, enabled) |
 | `config` | Key-value configuration store |
 
 Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent. A lightweight migration system (`_migrate`) runs after schema creation, gated on a `schema_version` integer in the `config` table. Each migration checks the current version and advances it atomically. This handles changes that `CREATE TABLE IF NOT EXISTS` cannot express (e.g., adding FK constraints to existing tables via table recreation). The seed SQL populates `job_property_defs` with core property definitions and sets default config values.
@@ -87,7 +87,7 @@ Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call —
 
 Job properties use EAV rather than columns. `job_property_defs` defines the universe of property keys with a default value and a type (`string`, `json`, `integer`, `boolean`). `job_properties` holds per-job overrides.
 
-On read, `get_job()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
+On read, `get_goal()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
 
 This design means adding a new property requires only a seed SQL insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
@@ -124,6 +124,7 @@ The primary worker index is on `(status, approval, coalesced_id)` — covers the
 
 - The `tasks.context` column stores pre-formatted context text built at the enqueue site
 - All foreign keys referencing `jobs(id)` — on `job_properties`, `tasks`, and `chat_sessions` — use `ON DELETE CASCADE`. Deleting a job is a single `DELETE FROM jobs` statement; the database handles dependent row cleanup automatically
+- Deleting an external MCP server cascades to job references: the platform removes the server name from every job's `mcp_servers` property list in the same transaction as the server deletion. This is an application-level cascade (not FK-based) because `mcp_servers` is a JSON property stored in the EAV system, not a relational reference
 - Task state is materialized in the `status` column, set exclusively through `transition_task`. The `task_events` table is the source of truth for transition history. If the two ever disagree, the event log wins
 - Tasks with non-null `coalesced_id` are invisible in queue listings but included when their root task is dispatched or acted upon
 

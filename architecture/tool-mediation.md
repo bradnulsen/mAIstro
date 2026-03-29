@@ -41,7 +41,7 @@ This is not a stylistic choice — it follows from headless execution. A headles
 
 Structured tools for git interaction with enforced conventions:
 
-- **`git_commit`** — commits with enforced authorship (`<JobName> <<job-id>@maistro.local>`) and message format (`[JobName] description`). Path restrictions can limit which files a job is allowed to commit.
+- **`git_commit`** — commits with enforced authorship (`<GoalName> <<job-id>@maistro.local>`) and message format (`[GoalName] description`). Path restrictions can limit which files a job is allowed to commit.
 - **`git_diff`** — returns structured diff output for specified paths or the working tree
 - **`git_log`** — returns commit history with configurable depth and format
 - **`git_status`** — returns working tree status
@@ -123,7 +123,11 @@ External MCP servers extend the tool surface beyond built-in CLI and internal pl
 
 ### Lifecycle
 
-**Registration** — external servers are registered at the platform level via the dedicated MCP Servers view. Each registration specifies: server name (primary key), command to launch, and command arguments. A registered server can be enabled or disabled globally — disabled servers are unavailable to any job regardless of per-job configuration.
+**Registration** — external servers are registered at the platform level via the dedicated MCP Servers view. Each registration specifies: server name (primary key), command to launch, command arguments (structured list), and environment variables (key-value pairs). A registered server can be enabled or disabled globally — disabled servers are unavailable to any job regardless of per-job configuration.
+
+**Registration Validation** — the platform validates server configuration at registration time. The command must be a resolvable executable — it must exist on `PATH` (resolved via `shutil.which()`) or be a valid absolute path. Arguments must parse as a structured list. Environment variables must be well-formed key-value pairs. Invalid registrations are rejected with specific error messages. This is an eager validation gate: invalid configuration never reaches the database.
+
+**Environment Variables** — external MCP servers frequently require environment variables (API keys, configuration paths, service URLs). The registration stores env vars as a JSON object alongside the server's command and args. At launch time (both probing and dispatch), the platform merges server-specific env vars with the process environment and passes the combined set to the server subprocess. This keeps server configuration self-contained within the platform — the operator does not need to set env vars outside the platform for servers to function.
 
 **Connection and Discovery** — the platform discovers external server capabilities through ephemeral probes. A probe spawns the server process, performs the MCP initialize/tools/list handshake over stdio, extracts the tool names, and terminates the process. This is a short-lived, stateless interaction — no persistent connection is maintained outside of dispatch.
 
@@ -137,9 +141,15 @@ Probes are on-demand — triggered by the inventory endpoint or by a dedicated p
 
 If a server cannot be reached or fails the handshake, the platform reports the failure state. Discovered tools from healthy servers become visible in the per-job configuration surface alongside built-in tools.
 
-**Per-Job Assignment** — a job's `mcp_servers` property controls which registered external servers connect during dispatch. The configuration surface presents registered servers as selectable options (not free-text). Only servers that are both registered and globally enabled appear as options.
+**Per-Job Assignment** — a job's `mcp_servers` property controls which registered external servers connect during dispatch. The configuration surface presents registered servers as selectable options (not free-text). Only servers that are both registered and globally enabled appear as options. The per-job configuration surface shows each server's current health status so the user sees problems before dispatching.
 
-**Invocation** — at dispatch time, the MCP config builder (`mcp_config.py`) assembles a config file containing the internal server (always) plus any external servers enabled for the job. This file is passed to the CLI via `--mcp-config`. Both internal and external servers are connected to the CLI at subprocess invocation time.
+**Pre-Dispatch Health Check** — before a task begins execution, the worker probes all external MCP servers assigned to the task's job. If any server is unreachable (command not found, timeout, handshake failure) or disabled, the task fails immediately with a specific error naming the server and the failure reason. This is a dispatch-time gate in the worker's execution flow — it runs after session creation and before CLI invocation. A task never runs with a silently missing tool surface.
+
+**Error Attribution** — when an MCP server failure occurs (either at the pre-dispatch gate or during execution), the error identifies the server by name and describes the failure mode. Pre-dispatch failures produce a structured error on the task record naming the failing server. Runtime MCP errors from the CLI stream are enriched with server-specific context before being surfaced to the operator in the task detail view.
+
+**Stale Reference Integrity** — when a server is deleted, the platform removes it from every job's `mcp_servers` property list. This is an atomic cascade: the deletion and reference cleanup happen in a single transaction. No job silently loses tools because it references a server that no longer exists. When a server is disabled, jobs referencing it see a visible warning on their configuration surface. Disabled servers are excluded from dispatch configuration unconditionally — the `enabled` flag is authoritative.
+
+**Invocation** — at dispatch time (after the pre-dispatch health check passes), the MCP config builder (`mcp_config.py`) assembles a config file containing the internal server (always) plus any external servers enabled for the job. Each server entry includes its command, parsed args, and parsed env vars. This file is passed to the CLI via `--mcp-config`. Both internal and external servers are connected to the CLI at subprocess invocation time.
 
 ## Relationship to Other Systems
 

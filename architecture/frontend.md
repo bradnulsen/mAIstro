@@ -1,6 +1,6 @@
 # Frontend
 
-The frontend is a single-page React application that provides the operator interface for project management, goal configuration, dispatch monitoring, and interactive chat.
+The frontend is a single-page React application that provides the operator interface for project management, job configuration, dispatch monitoring, and interactive chat.
 
 **Stack**: React 19, Vite 6, no TypeScript, no state management library.
 
@@ -8,18 +8,18 @@ The frontend is a single-page React application that provides the operator inter
 
 `App.jsx` provides the outer layout:
 
-- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Goals, Files, MCP Servers, Dashboard, Settings
-- **Command bar**: persistent operational control surface pinned to the top of every view, containing goal indicators, dispatch popouts, auto-queue toggle, and batch queue actions (see below)
+- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, MCP Servers, Dashboard, Settings
+- **Command bar**: persistent operational control surface pinned to the top of every view, containing job indicators, dispatch popouts, auto-queue toggle, and batch queue actions (see below)
 - **Main area**: renders the active view
 - **Chat tray**: a resizable side panel (drag-to-resize, click-to-toggle) housing the interactive chat
 
-The app polls goal status every 5 seconds to keep the command bar current.
+The app polls job status every 5 seconds to keep the command bar current.
 
 ## Command Bar
 
 The command bar is the primary interaction point for dispatch and queue management — accessible from every view without navigation.
 
-**Goal indicators** — one colored indicator per goal, using the goal's identity color. Each shows operational state: idle, has pending tasks, has queued tasks, or has an active task. Clicking an indicator opens a **dispatch popout** — a lightweight panel anchored to the indicator with a context field and dispatch action for immediate manual dispatch. The popout closes after dispatch or on click-away.
+**Job indicators** — one colored indicator per job, using the job's identity color. Each shows operational state: idle, has pending tasks, has queued tasks, or has an active task. Clicking an indicator opens a **dispatch popout** — a lightweight panel anchored to the indicator with a context field and dispatch action for immediate manual dispatch. The popout closes after dispatch or on click-away.
 
 **Auto-queue toggle** — the global setting controlling whether new tasks skip pending and go directly to queued. Elevated from Settings because it directly governs how every trigger routes into the queue.
 
@@ -42,23 +42,29 @@ Tasks flow left to right through their lifecycle: Upcoming → Active → Resolv
 
 **Drag Interaction Model** — drag operations are specialized by column, reflecting the distinct purpose of each stage:
 
-- **Upcoming column (coalescing)** — drag operations in Upcoming support **merge** (drop onto a same-goal task to coalesce) and **transfer** (drop into the Active column to promote). Reordering within Upcoming is not meaningful — it is a staging area, not a priority queue.
+- **Upcoming column (coalescing)** — drag operations in Upcoming support **merge** (drop onto a same-job task to coalesce) and **transfer** (drop into the Active column to promote). Reordering within Upcoming is not meaningful — it is a staging area, not a priority queue.
 - **Active column (sorting)** — drag operations in Active support **reorder** (drop between tasks to change execution priority) and **transfer** (drop into the Upcoming column to demote). Merge is not available in Active — coalescing decisions are made during staging, not after commitment to run.
 - **Transfer** (between Upcoming and Active) — drop into the other column. Moves the task from pending to queued or from queued to pending. The transferred task is appended to the end of the target column. Visual feedback: the target column highlights as a drop zone.
 
 Each column has one primary drag operation plus transfer. Upcoming owns coalescing (merge); Active owns sorting (reorder). Cross-column drag is exclusively a transfer — it changes state without merging or reordering within the target column. The Resolved column does not participate in drag operations.
 
 ### Activity Feed (`Feed.jsx`)
-Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked goal and trigger type.
+Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked job and trigger type.
 
-### Goals (`Tasks.jsx`)
-The goal configuration surface. Goal configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Each goal expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Manual dispatch is not on this view — it lives on the command bar, where operational actions belong. The Goals view is purely for defining what goals are, not for triggering them.
+### Jobs (`Tasks.jsx`)
+The job configuration surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Each job expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Manual dispatch is not on this view — it lives on the command bar, where operational actions belong. The Jobs view is purely for defining what jobs are, not for triggering them.
 
 ### Files
 A project file browser providing read-only access to project content. The user searches for files by glob pattern and views their contents inline. Markdown files render as formatted documents; code files render with syntax highlighting. This view enables direct inspection of project files without leaving the application or switching to an external editor.
 
 ### MCP Servers
-A dedicated surface for managing external tool servers. MCP servers extend what agents can do — they are a primary capability concern, not a secondary platform setting. The view manages the global server registry: registration, health monitoring, enable/disable, and removal. Per-goal server assignment remains on the Goals configuration surface. See [Tool Mediation — External MCP Servers](tool-mediation.md#external-mcp-servers) for lifecycle details.
+A dedicated surface for managing external tool servers. MCP servers extend what agents can do — they are a primary capability concern, not a secondary platform setting. The view manages the global server registry: registration, validation, health monitoring, enable/disable, editing, and removal. Per-job server assignment remains on the Jobs configuration surface. See [Tool Mediation — External MCP Servers](tool-mediation.md#external-mcp-servers) for lifecycle details.
+
+The registration form collects: server name, command, arguments (structured list — each argument is a discrete entry, not space-separated text), and environment variables (key-value pairs with add/remove controls). The form validates eagerly: the command must be a resolvable executable, args and env vars must parse correctly. Invalid registrations are rejected with specific error messages.
+
+Each registered server displays: name, command, arguments, environment variable count, enabled state, health status, and discovered tools (when healthy). Per-server actions: enable/disable toggle, test connection, edit configuration (command, args, env vars), and remove. Deletion shows a confirmation listing all jobs that reference the server — after deletion, the server is removed from all jobs' `mcp_servers` lists automatically.
+
+Error messages are inline and actionable: "command not found" means the executable is missing or not on PATH; "connection refused" means the server started but isn't responding; "handshake failed" means the process started but didn't complete the MCP protocol exchange.
 
 ### Dashboard
 
@@ -68,21 +74,21 @@ Aggregated operational visibility — a read-only surface that answers "how are 
 
 **Four sections:**
 
-- **Goal Health Summary** — per-goal task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Goals are ordered by health — low success rates and degrading trends are visually prominent. Terminal state breakdown uses the `status` column directly — each terminal status (`completed`, `failed`, `cancelled`, `timed_out`, `interrupted`, `rejected`) maps to a health category (see [Dispatch Engine — Task Status](dispatch-engine.md#task-status)).
+- **Job Health Summary** — per-job task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Jobs are ordered by health — low success rates and degrading trends are visually prominent. Terminal state breakdown uses the `status` column directly — each terminal status (`completed`, `failed`, `cancelled`, `timed_out`, `interrupted`, `rejected`) maps to a health category (see [Dispatch Engine — Task Status](dispatch-engine.md#task-status)).
 
-- **Timeline** — horizontal bars per task positioned by `started_at` and sized by duration (`completed_at - started_at`), color-coded by goal. Rendered with positioned HTML/CSS elements — no chart library. Reveals scheduling density, idle gaps, and duration outliers. Long-running tasks (significantly above the goal's median) are visually distinct.
+- **Timeline** — horizontal bars per task positioned by `started_at` and sized by duration (`completed_at - started_at`), color-coded by job. Rendered with positioned HTML/CSS elements — no chart library. Reveals scheduling density, idle gaps, and duration outliers. Long-running tasks (significantly above the job's median) are visually distinct.
 
-- **Agent Dispatch Chains** — visualizes the `agent` trigger type. For agent-initiated tasks, traces the chain back to the original trigger using `trigger_detail` (which carries the originating task reference). Shows chain depth and goal-to-goal dispatch patterns aggregated over the time window. This makes the coordination topology legible — which goals dispatch which, how deep chains go, where coordination breaks down.
+- **Agent Dispatch Chains** — visualizes the `agent` trigger type. For agent-initiated tasks, traces the chain back to the original trigger using `trigger_detail` (which carries the originating task reference). Shows chain depth and job-to-job dispatch patterns aggregated over the time window. This makes the coordination topology legible — which jobs dispatch which, how deep chains go, where coordination breaks down.
 
-- **Tool Usage Patterns** — per-goal tool frequency and error rates derived from `chat_events` where `event_type = 'mcp_tool_use'`. Joins through `chat_sessions` (session → task → goal) to attribute tool calls to goals. Surfaces persistent tool errors that indicate configuration or instruction problems. Secondary to health and timing — supports investigation after triage.
+- **Tool Usage Patterns** — per-job tool frequency and error rates derived from `chat_events` where `event_type = 'mcp_tool_use'`. Joins through `chat_sessions` (session → task → job) to attribute tool calls to jobs. Surfaces persistent tool errors that indicate configuration or instruction problems. Secondary to health and timing — supports investigation after triage.
 
 **Data access pattern**: the dashboard introduces a new query surface over existing tables but requires no schema changes. The key queries are time-windowed aggregations:
-- `tasks` grouped by `job_id` (goal) with terminal state classification (from `status` column), filtered by `completed_at` within the time window
+- `tasks` grouped by `job_id` (job) with terminal state classification (from `status` column), filtered by `completed_at` within the time window
 - `tasks` with `started_at` and `completed_at` for timeline positioning, filtered by time window
 - `tasks` filtered by `trigger = 'agent'` with `trigger_detail` for dispatch chain reconstruction
-- `chat_events` joined through `chat_sessions` → `tasks` for per-goal tool attribution, filtered by event timestamp
+- `chat_events` joined through `chat_sessions` → `tasks` for per-job tool attribution, filtered by event timestamp
 
-These queries may benefit from an index on `tasks(completed_at)` for efficient time-window filtering — the current indexes (`idx_tasks_status_worker`, `idx_tasks_job_status`) are optimized for queue operations, not historical aggregation. `idx_tasks_completed_at` covers the dashboard time-window predicate.
+These queries may benefit from an index on `tasks(completed_at)` for efficient time-window filtering — the current indexes (`idx_tasks_status_worker`, `idx_tasks_goal_status`) are optimized for queue operations, not historical aggregation. `idx_tasks_completed_at` covers the dashboard time-window predicate.
 
 ### Settings (`Settings.jsx`)
 Platform configuration: default model, default timeout. The auto-queueing toggle previously here has been elevated to the command bar for immediate access.
@@ -116,7 +122,7 @@ The landing screen when no project is loaded. Provides:
 
 ## State Management
 
-No state library. React `useState` and `useEffect` throughout. The app component holds project state and goal list; views manage their own local state. Goal list refresh is centralized in the app and passed down.
+No state library. React `useState` and `useEffect` throughout. The app component holds project state and job list; views manage their own local state. Job list refresh is centralized in the app and passed down.
 
 ## Relationship to Other Systems
 
