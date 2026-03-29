@@ -273,13 +273,23 @@ This is a discoverability requirement, not a UI prescription. The essential beha
 
 ### External MCP Servers
 
-External MCP servers extend the tool surface available to agents beyond the platform's built-in and internal tools. The platform manages their full lifecycle: registration, connection, discovery, per-goal assignment.
+External MCP servers extend the tool surface available to agents beyond the platform's built-in and internal tools. They are the platform's extensibility mechanism — every third-party integration, every domain-specific tool, every custom capability flows through this surface. The platform manages their full lifecycle: registration, validation, connection, discovery, per-goal assignment, and dispatch-time verification.
 
-**Registration** — external servers are registered at the platform level (MCP Servers view). Each registration specifies a server name, the command to launch it, and command arguments. A registered server can be enabled or disabled globally — disabled servers are not available to any goal regardless of per-goal configuration.
+**Registration** — external servers are registered at the platform level (MCP Servers view). Each registration specifies a server name, the command to launch it, command arguments, and environment variables. A registered server can be enabled or disabled globally — disabled servers are not available to any goal regardless of per-goal configuration.
+
+**Registration Validation** — the platform validates server configuration at registration time, not at dispatch time. The command must be a valid executable (exists on PATH or is a valid absolute path). Arguments must parse correctly as a structured list. Environment variables must be well-formed key-value pairs. Invalid registrations are rejected with specific error messages explaining what is wrong. The user fixes problems when they create them, not when a task fails minutes later with an opaque error.
+
+**Environment Variables** — external MCP servers frequently require environment variables (API keys, configuration paths, service URLs). The registration surface provides explicit key-value environment variable management. Env vars are stored as part of the server configuration and passed to the server process at launch. This keeps server configuration self-contained within the platform — the operator does not need to set env vars outside the platform for servers to function.
 
 **Connection and Discovery** — when an external server is registered and enabled, the platform can connect to it and discover its tool inventory. The discovered tools are what the user sees when configuring per-goal server assignments. If a server cannot be reached or fails to report its tools, the platform surfaces this state clearly — the user knows which servers are healthy and which are not.
 
-**Per-Goal Assignment** — a goal's `mcp_servers` property controls which registered external servers are connected during that goal's task execution. The configuration surface presents registered servers as selectable options (not free-text). Only servers that are both registered and globally enabled appear as options. The platform's internal MCP server is always connected and is not subject to per-goal selection.
+**Per-Goal Assignment** — a goal's `mcp_servers` property controls which registered external servers are connected during that goal's task execution. The configuration surface presents registered servers as selectable options (not free-text). Only servers that are both registered and globally enabled appear as options. The platform's internal MCP server is always connected and is not subject to per-goal selection. The per-goal configuration surface shows each server's current health status (healthy, unreachable, disabled) so the user sees problems before dispatching.
+
+**Pre-Dispatch Health Check** — before a task dispatches, the platform probes all external MCP servers assigned to the task's goal. If any server is unreachable, the task fails immediately with a specific error naming the server and the failure reason (command not found, timeout, handshake failure, disabled). The operator sees exactly what broke and can fix it before retrying. This is a dispatch-time gate, not a background monitor — the check happens at the moment of execution.
+
+**Error Attribution** — when an MCP server fails during task execution, the error is surfaced with the server name and failure mode, not as a generic CLI error. The task detail view shows which external MCP servers were included in the dispatch configuration, so when a task fails the operator can immediately correlate the failure with a specific server.
+
+**Stale Reference Integrity** — when a server is deleted, the platform removes it from all goals' `mcp_servers` lists. A goal configured with a server that no longer exists never silently loses tools — the reference is cleaned up at the source. When a server is disabled, goals referencing it see a visible warning that tools from this server will not be available at dispatch time. Disabled servers are never included in dispatch configuration.
 
 **Tool Surface Composition** — during dispatch, the agent's available tools are the union of: (1) CLI tools selected via `allowed_tools` (or the full default set if empty), (2) internal MCP server tools (always present), and (3) tools from external MCP servers enabled for the goal. The user can see this composed tool surface when configuring a goal — what the agent will actually have access to.
 
@@ -342,7 +352,7 @@ Required tooltip surfaces:
 - **Allowed Tools** — select which CLI tools the agent can use. The platform presents the full inventory of available tools; the user selects from this list. When any tools are selected, the agent sees only those tools plus tools from connected MCP servers. When none are selected, the agent gets the full default tool set. Tools not selected are removed from the agent's environment entirely — the agent has no awareness they exist.
 - **Allowed Internal Tools** — select which internal MCP tools the agent can access. When any are selected, only those internal tools are presented. When none are selected, all internal tools are available. Use this to create read-only goals (restrict to `list_files`, `read_file`, `git_log`, `git_diff`) or to grant branch management tools (`git_branch_create`, `git_branch_switch`, `git_branch_merge`) only to orchestrator goals.
 - **Allowed Dispatch Targets** — select which goals this agent can programmatically dispatch via the `dispatch_task` tool. When none are selected, the agent cannot dispatch other goals. This prevents unconstrained cross-agent triggering.
-- **MCP Servers (per-goal)** — select which registered external MCP servers this goal's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Register servers in the MCP Servers view first, then enable them here per-goal.
+- **MCP Servers (per-goal)** — select which registered external MCP servers this goal's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Each server in the selection list shows its current health status (healthy, unreachable, disabled) — the user sees problems before dispatching, not after. Register servers in the MCP Servers view first, then enable them here per-goal.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce tasks that wait for manual approval before executing. Manual dispatches bypass this gate.
 - **Coalesce Dispatches** — when enabled, the goal will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for goals that should catch up in one run rather than queuing redundant work.
 - **Dependencies** — the goal auto-dispatches when *any* selected upstream goal completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled tasks do not trigger dependents.
@@ -358,21 +368,21 @@ MCP server configuration is a first-class surface with its own rail item. It is 
 **Design principles:**
 
 - **Progressive disclosure.** The empty state is not a blank page — it explains what MCP servers are, why you might add one, and how to do it. Configuration complexity is revealed only as the user engages. A user with zero servers sees guidance. A user with three servers sees status and management.
-- **Guided registration.** Adding a server requires three pieces of information: a name, a command, and arguments. The form makes this obvious — labeled fields with placeholder examples that show real, working patterns (e.g., `npx @modelcontextprotocol/server-filesystem /path/to/dir`). No unlabeled inputs, no ambiguous fields. The form validates before submission and explains what went wrong in plain language.
+- **Guided registration.** Adding a server requires a name and a command. Arguments and environment variables are optional but first-class. The form makes each field obvious — labeled inputs with placeholder examples that show real, working patterns (e.g., command: `npx`, args: `@modelcontextprotocol/server-filesystem`, `/path/to/dir`). Arguments are a structured list — each argument is a discrete entry, not a space-separated text field. This eliminates the class of errors where quoting or spaces produce wrong arguments. Environment variables are key-value pairs with add/remove controls. The form validates before submission: the command must be a resolvable executable, args and env vars must parse correctly. Validation errors explain what went wrong in plain language.
 - **Immediate feedback.** After adding a server, the platform tests connectivity automatically and shows the result — healthy with a tool count, or an error with a plain-language explanation. The user never wonders "did it work?" The test action is also available on demand for any registered server.
 - **Health at a glance.** Each server shows its current state: enabled/disabled, healthy/unreachable, and the tools it provides. The user can scan the list and immediately understand which servers are working.
 - **Safe defaults.** New servers are enabled by default — the most common intent when adding a server is to use it. Disabling is a deliberate choice the user makes later if needed.
 
 **What the view shows:**
 
-- The list of registered servers, each displaying: name, command, enabled state, health status, and discovered tools (when healthy).
+- The list of registered servers, each displaying: name, command, arguments, environment variable count, enabled state, health status, and discovered tools (when healthy).
 - A registration form for adding new servers.
-- Per-server actions: enable/disable toggle, test connection, remove.
-- When a server is unhealthy, the error is shown inline — not hidden behind a click. Error messages should help the user fix the problem: "command not found" means the command isn't installed or isn't on PATH; "connection refused" means the server started but isn't responding correctly.
+- Per-server actions: enable/disable toggle, test connection, edit configuration, remove. Editing allows changing the command, arguments, and environment variables after registration.
+- When a server is unhealthy, the error is shown inline — not hidden behind a click. Error messages should help the user fix the problem: "command not found" means the command isn't installed or isn't on PATH; "connection refused" means the server started but isn't responding correctly; "handshake failed" means the process started but didn't respond with a valid MCP protocol exchange.
+- When a server is deleted, a confirmation shows which goals currently reference it. After deletion, the server is removed from all goals' `mcp_servers` lists — no stale references remain.
 
 **What the view does not do:**
 
-- No environment variable editing in the initial version. Keep the configuration surface minimal — name, command, args. Environment variables can be added later if users need them.
 - No per-goal assignment. That stays on the goal configuration surface where it belongs — the MCP Servers view manages the global registry; goals select from it.
 
 **Relationship to goal configuration:** The MCP Servers view is where servers are registered and managed. The goal configuration surface (Goals view) is where servers are assigned to specific goals via the `mcp_servers` property. The per-goal tooltip directs users to the MCP Servers view when they need to register new servers. This separation keeps each surface focused: one place to manage servers, another to assign them.
@@ -467,6 +477,15 @@ Tool patterns are secondary to health and timing — they support investigation,
 - **Sorting belongs to Active**: reordering operates exclusively on queued tasks in the Active column. Queue position determines execution priority. The Upcoming column displays tasks by creation time — it has no user-controlled sort order.
 - **Cross-column drag is transfer only**: dragging between Upcoming and Active changes state (pending ↔ queued) without merging or reordering within the target column. Transfer and composition/sorting are distinct user intentions that must not be conflated in a single gesture.
 - **Same-goal constraint on merge**: only tasks belonging to the same goal can be merged. A task's identity is bound to one goal; cross-goal merging would violate prompt assembly, tool configuration, and commit authorship invariants. The UI enforces this structurally — the merge affordance does not appear when tasks belong to different goals, so the invalid operation is never offered.
+
+### External MCP Integrity
+
+- **Registration validates eagerly**: an external MCP server registration is rejected if the command is not a resolvable executable or if arguments and environment variables do not parse correctly. Invalid configuration never reaches the database — errors surface at the moment the user submits the form, not when a task dispatches minutes or hours later.
+- **Dispatch gates on server health**: before a task begins execution, all external MCP servers assigned to its goal are probed. If any server is unreachable, the task fails with a specific error naming the server and the failure reason. A task never runs with a silently missing tool surface.
+- **Disabled servers are never dispatched**: a disabled server is excluded from dispatch configuration unconditionally. The `enabled` flag is authoritative — there is no default-to-enabled fallback for missing or ambiguous state. Goals referencing a disabled server see a visible warning on their configuration surface.
+- **Server deletion cascades to goal references**: deleting a server removes it from every goal's `mcp_servers` list. No goal silently loses tools because it references a server that no longer exists — the reference is cleaned up atomically with the deletion.
+- **MCP errors are attributed to their source**: when an MCP server failure occurs during task execution, the error identifies the server by name and describes the failure mode. Generic CLI errors that originate from MCP server failures are enriched with server-specific context before being surfaced to the user.
+- **Server configuration is self-contained**: environment variables required by a server are stored as part of the server's registration, not as external system state. The platform passes them to the server process at launch. A server registration contains everything needed to launch and connect to the server.
 
 ### Accountability
 
