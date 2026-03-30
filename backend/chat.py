@@ -93,7 +93,7 @@ async def _build_chat_context() -> str:
     queue = await db.get_task_queue(limit=10)
     task_lines = []
     for t in (queue or []):
-        status = "error" if t.get("error") else "completed" if t.get("completed_at") else "running" if t.get("started_at") else "pending"
+        status = t.get("status", "pending")
         task_lines.append(f"- #{t['id']} {t.get('job_name', '?')} [{status}] {t.get('created_at', '')}")
     task_summary = "\n".join(task_lines) if task_lines else "(no recent tasks)"
 
@@ -145,7 +145,6 @@ async def chat(req: ChatRequest):
         full_response = []
         streaming_text = []
         new_cli_session_id = None
-        raw_event_buffer: list[tuple[str, str]] = []
         try:
             async for event in cli.invoke(
                 prompt=message,
@@ -156,8 +155,12 @@ async def chat(req: ChatRequest):
             ):
                 etype = event["type"]
 
+                # Incremental persistence: write each raw event immediately
                 if etype == "_raw":
-                    raw_event_buffer.append((event["event_type"], event["raw_json"]))
+                    try:
+                        await db.add_chat_event(session_id, event["event_type"], event["raw_json"])
+                    except Exception:
+                        pass
                     continue
 
                 if etype == "assistant_complete":
@@ -166,20 +169,29 @@ async def chat(req: ChatRequest):
 
                 if etype == "text":
                     streaming_text.append(event.get("content", ""))
-                elif etype == "session_id":
+                elif etype == "result_meta":
                     new_cli_session_id = event.get("cli_session_id")
+                    # Emit as session_id event for SSE stream compatibility
+                    if new_cli_session_id:
+                        await event_queue.put({"type": "session_id", "cli_session_id": new_cli_session_id})
+                    continue
 
                 await event_queue.put(event)
         except Exception as e:
             log.exception("[chat] CLI error for session %s: %s", session_id, e)
             await event_queue.put({"type": "error", "message": str(e)})
         finally:
-            await db.add_chat_events_batch(session_id, raw_event_buffer)
             response_text = "".join(full_response) or "".join(streaming_text)
             if response_text:
-                await db.add_chat_message(session_id, "assistant", response_text)
+                try:
+                    await db.add_chat_message(session_id, "assistant", response_text)
+                except Exception:
+                    log.exception("[chat] Failed to write response for session %s", session_id)
             if new_cli_session_id:
-                await db.update_chat_session(session_id, cli_session_id=new_cli_session_id)
+                try:
+                    await db.update_chat_session(session_id, cli_session_id=new_cli_session_id)
+                except Exception:
+                    log.exception("[chat] Failed to update session %s", session_id)
             await event_queue.put(None)
             _active_chats.pop(session_id, None)
 

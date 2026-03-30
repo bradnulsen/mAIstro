@@ -60,16 +60,18 @@ async def run_task(
     log.info("[task:%d] MCP config written to %s", task_id, mcp_config_path)
 
     try:
-        allowed = props.get("allowed_tools") or None
-        disallowed = None
-        if allowed:
-            disallowed = sorted(cli.CLI_NATIVE_TOOLS - set(allowed))
+        allowed = props.get("allowed_tools") or []
+        if not allowed:
+            # Empty list = all tools enabled (UI default)
+            allowed = sorted(cli.CLI_NATIVE_TOOLS)
+        disallowed = sorted(cli.CLI_NATIVE_TOOLS - set(allowed))
 
         async for event in cli.invoke(
             prompt=user_prompt,
             system_prompt=system_prompt,
             cwd=project_dir,
             model=props.get("model"),
+            max_turns=props.get("max_turns", 50),
             allowed_tools=allowed,
             disallowed_tools=disallowed,
             mcp_config_path=mcp_config_path,
@@ -93,11 +95,12 @@ async def run_task(
 
 DISPATCH_SYSTEM_PROMPT = """\
 You are an autonomous agent in mAistro, a development engine where tasks coordinate through git.
+Your job is {job_name}.
 
 ## Execution Mode
 You are running in HEADLESS DISPATCH mode in {project_dir}. There is no human in the loop.
 - Act autonomously — do not ask questions or wait for confirmation.
-- If instructions are ambiguous, use your best judgment and document your reasoning in commit messages.
+- If ambiguous, use your best judgment and document your reasoning in commit messages.
 - Doing nothing is a valid outcome. If the triggering context doesn't require changes within your scope, say so briefly and stop. Not every trigger demands action.
 
 ## Output Standards
@@ -120,16 +123,15 @@ def build_user_prompt(job: dict, project_dir: str,
     sections = []
 
     name = job["name"]
+    summary = props.get("summary") or ""
     description = props.get("description") or ""
-    instructions = props.get("instructions") or ""
 
-    identity_parts = [f"# Job: {name}"]
     if description:
-        identity_parts.append(description)
-    sections.append("\n".join(identity_parts))
-
-    if instructions:
-        sections.append(f"## Instructions\n{instructions}")
+        sections.append(f"# {name}\n{description}")
+    elif summary:
+        sections.append(f"# {name}\n{summary}")
+    else:
+        sections.append(f"# {name}")
 
     if queue_context:
         sections.append(queue_context)
@@ -162,11 +164,11 @@ async def build_job_manifest() -> str:
         return ""
     lines = ["Jobs in this project:"]
     for j in jobs:
-        desc = j["properties"].get("description") or ""
+        summary = j["properties"].get("summary") or ""
         subs = j["properties"].get("subscriptions") or []
-        summary = desc[:100] + "..." if len(desc) > 100 else desc
+        short = summary[:100] + "..." if len(summary) > 100 else summary
         sub_str = ", ".join(subs) if subs else "(none)"
-        lines.append(f"- **{j['name']}** — {summary or '(no description)'}")
+        lines.append(f"- **{j['name']}** — {short or '(no summary)'}")
         lines.append(f"  Subscriptions: {sub_str}")
     return "\n".join(lines)
 
@@ -252,8 +254,8 @@ def build_trigger_context(
         head_note = f" at {commit_hash[:8]}" if commit_hash else ""
         return f"**Schedule** (`{schedule_expr}`){head_note}"
 
-    if trigger == "dependency":
-        header = f"**Dependency** — triggered by completion of {upstream_name} (task #{upstream_task_id})"
+    if trigger == "cascade":
+        header = f"**Cascade** — triggered by completion of {upstream_name} (task #{upstream_task_id})"
         git_ctx = None
         if project_dir and start_commit and result_commit:
             git_ctx = git.build_commit_context(project_dir, start_commit, result_commit)
@@ -268,8 +270,8 @@ def build_trigger_context(
     if trigger == "resume":
         return f"**Resume** — continuing from task #{original_task_id}"
 
-    if trigger == "retry":
-        parts = [f"**Retry** of task #{original_task_id}"]
+    if trigger == "reply":
+        parts = [f"**Reply** to task #{original_task_id}"]
         git_ctx = None
         if project_dir and start_commit and result_commit:
             git_ctx = git.build_commit_context(project_dir, start_commit, result_commit)

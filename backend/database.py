@@ -98,384 +98,179 @@ async def init_db(project_dir: str):
     db = await get_db()
     await db.executescript(SCHEMA_SQL)
     await db.executescript(SEED_SQL)
+    await _run_migrations(db)
     await db.commit()
-    await _migrate(db)
 
 
-async def _migrate(db: aiosqlite.Connection):
-    """Run column-level migrations for existing databases."""
-    # Add queued_at column (two-stage queue: pending → queued → active)
-    try:
-        await db.execute("ALTER TABLE tasks ADD COLUMN queued_at DATETIME")
-        # Backfill: if auto_dispatch was enabled, existing pending tasks were
-        # effectively queued — set queued_at so the worker can still reach them.
-        rows = await db.execute_fetchall(
-            "SELECT value FROM config WHERE key = 'queue_auto_dispatch'"
-        )
-        if rows and rows[0]["value"] == "true":
-            await db.execute(
-                "UPDATE tasks SET queued_at = created_at "
-                "WHERE started_at IS NULL AND error IS NULL"
+async def _run_migrations(db: aiosqlite.Connection):
+    """Apply incremental schema changes to existing databases."""
+    # M3: Convert jobs.id from TEXT slug to INTEGER AUTOINCREMENT (run first)
+    job_col_types = {c["name"]: c["type"] for c in await db.execute_fetchall("PRAGMA table_info(jobs)")}
+    if job_col_types.get("id") == "TEXT":
+        log.info("[database] Migration M3: converting jobs.id from TEXT slug to INTEGER")
+        await db.execute("PRAGMA foreign_keys=OFF")
+
+        old_jobs = await db.execute_fetchall("SELECT id, name, created_at FROM jobs")
+        slug_to_int: dict[str, int] = {j["id"]: i + 1 for i, j in enumerate(old_jobs)}
+
+        # Recreate jobs with INTEGER PK; old id column was the slug
+        await db.execute("ALTER TABLE jobs RENAME TO _jobs_old")
+        await db.execute("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL,
+                name TEXT NOT NULL,
+                created_at DATETIME DEFAULT (datetime('now'))
             )
-        await db.commit()
-    except Exception:
-        pass  # Column already exists
-
-    # Drop rating column (removed from architecture — no longer tracked)
-    try:
-        await db.execute("ALTER TABLE tasks DROP COLUMN rating")
-        await db.commit()
-    except Exception:
-        pass  # Column already removed or never existed
-
-    # Index for dashboard time-windowed aggregation queries
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_completed_at "
-        "ON tasks (completed_at)"
-    )
-    await db.commit()
-
-    # Add ON DELETE CASCADE to tasks.job_id and chat_sessions.job_id.
-    # These FKs were missing CASCADE — inconsistent with job_properties which has it.
-    # Gate on schema version so this runs exactly once.
-    rows = await db.execute_fetchall(
-        "SELECT value FROM config WHERE key = 'schema_version'"
-    )
-    schema_version = int(rows[0]["value"]) if rows else 0
-
-    if schema_version < 1:
-        await _migrate_cascade_fks(db)
-        await db.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '1')"
-        )
-        await db.commit()
-
-    if schema_version < 2:
-        await _migrate_status_column(db)
-        await db.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '2')"
-        )
-        await db.commit()
-
-    if schema_version < 3:
-        await _migrate_stale_indices(db)
-        await db.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '3')"
-        )
-        await db.commit()
-
-    if schema_version < 4:
-        await _migrate_task_events_backfill(db)
-        await db.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '4')"
-        )
-        await db.commit()
-
-    if schema_version < 5:
-        await _migrate_fix_chat_fks(db)
-        await db.execute(
-            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', '5')"
-        )
-        await db.commit()
-
-
-async def _migrate_cascade_fks(db: aiosqlite.Connection):
-    """Add ON DELETE CASCADE to tasks.job_id and chat_sessions.job_id.
-
-    SQLite doesn't support ALTER CONSTRAINT — recreate the tables.
-    Runs inside a single transaction with foreign_keys temporarily OFF
-    (required because SQLite enforces FKs during the copy step).
-    """
-    await db.execute("PRAGMA foreign_keys=OFF")
-
-    # -- tasks table --
-    # Check if status column exists already (if v2 migration ran before v1 somehow)
-    cols = await db.execute_fetchall("PRAGMA table_info(tasks)")
-    col_names = [c["name"] for c in cols]
-    has_status = "status" in col_names
-
-    await db.execute("ALTER TABLE tasks RENAME TO _tasks_old")
-    await db.execute("""
-        CREATE TABLE tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-            status TEXT NOT NULL DEFAULT 'pending',
-            trigger TEXT NOT NULL,
-            trigger_detail TEXT,
-            context TEXT,
-            session_id TEXT,
-            resume_session_id TEXT,
-            approval TEXT,
-            start_commit TEXT,
-            created_at DATETIME DEFAULT (datetime('now')),
-            started_at DATETIME,
-            completed_at DATETIME,
-            result_commit TEXT,
-            error TEXT,
-            queued_at DATETIME,
-            sort_order INTEGER,
-            coalesced_id INTEGER REFERENCES tasks(id)
-        )
-    """)
-    if has_status:
-        await db.execute("""
-            INSERT INTO tasks (id, job_id, status, trigger, trigger_detail, context,
-                session_id, resume_session_id, approval, start_commit, created_at,
-                started_at, completed_at, result_commit, error, queued_at,
-                sort_order, coalesced_id)
-            SELECT id, job_id, status, trigger, trigger_detail, context,
-                session_id, resume_session_id, approval, start_commit, created_at,
-                started_at, completed_at, result_commit, error, queued_at,
-                sort_order, coalesced_id
-            FROM _tasks_old
         """)
-    else:
+        for j in old_jobs:
+            await db.execute(
+                "INSERT INTO jobs (id, slug, name, created_at) VALUES (?, ?, ?, ?)",
+                (slug_to_int[j["id"]], j["id"], j["name"], j["created_at"])
+            )
+        await db.execute("DROP TABLE _jobs_old")
+
+        # Recreate job_properties with INTEGER job_id
+        old_props = await db.execute_fetchall("SELECT job_id, key, value FROM job_properties")
+        await db.execute("ALTER TABLE job_properties RENAME TO _job_properties_old")
         await db.execute("""
-            INSERT INTO tasks (id, job_id, trigger, trigger_detail, context,
-                session_id, resume_session_id, approval, start_commit, created_at,
-                started_at, completed_at, result_commit, error, queued_at,
-                sort_order, coalesced_id)
-            SELECT id, job_id, trigger, trigger_detail, context,
-                session_id, resume_session_id, approval, start_commit, created_at,
-                started_at, completed_at, result_commit, error, queued_at,
-                sort_order, coalesced_id
-            FROM _tasks_old
+            CREATE TABLE job_properties (
+                job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+                key TEXT REFERENCES job_property_defs(key),
+                value TEXT NOT NULL,
+                PRIMARY KEY (job_id, key)
+            )
         """)
+        for p in old_props:
+            new_jid = slug_to_int.get(p["job_id"])
+            if new_jid:
+                await db.execute(
+                    "INSERT OR IGNORE INTO job_properties (job_id, key, value) VALUES (?, ?, ?)",
+                    (new_jid, p["key"], p["value"])
+                )
+        await db.execute("DROP TABLE _job_properties_old")
 
-    await db.execute("DROP TABLE _tasks_old")
+        # Recreate tasks with job_id INTEGER
+        old_tasks = await db.execute_fetchall("SELECT * FROM tasks")
+        task_cols = [c["name"] for c in await db.execute_fetchall("PRAGMA table_info(tasks)")]
+        await db.execute("ALTER TABLE tasks RENAME TO _tasks_old")
+        await db.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                trigger TEXT NOT NULL,
+                trigger_detail TEXT,
+                context TEXT,
+                session_id TEXT,
+                resume_session_id TEXT,
+                approval TEXT,
+                start_commit TEXT,
+                stop_reason TEXT,
+                num_turns INTEGER,
+                cost_usd REAL,
+                created_at DATETIME DEFAULT (datetime('now')),
+                started_at DATETIME,
+                completed_at DATETIME,
+                result_commit TEXT,
+                error TEXT,
+                queued_at DATETIME,
+                sort_order INTEGER,
+                coalesced_id INTEGER REFERENCES tasks(id)
+            )
+        """)
+        new_task_cols = [c["name"] for c in await db.execute_fetchall("PRAGMA table_info(tasks)")]
+        copy_cols = [c for c in task_cols if c in set(new_task_cols) and c != "job_id"]
+        for t in old_tasks:
+            row = dict(t)
+            new_jid = slug_to_int.get(row["job_id"])
+            if new_jid is None:
+                continue
+            row["job_id"] = new_jid
+            all_cols = ["job_id"] + copy_cols
+            vals = [row[c] for c in all_cols]
+            ph = ", ".join("?" * len(all_cols))
+            await db.execute(f"INSERT INTO tasks ({', '.join(all_cols)}) VALUES ({ph})", vals)
+        await db.execute("DROP TABLE _tasks_old")
 
-    # Recreate all tasks indexes
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_pending "
-        "ON tasks (started_at, error, sort_order, created_at)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_job_coalesce "
-        "ON tasks (job_id, started_at, error)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_running "
-        "ON tasks (started_at, completed_at)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_coalesced "
-        "ON tasks (coalesced_id)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_job_running "
-        "ON tasks (job_id, started_at, completed_at)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_coalesce_lookup "
-        "ON tasks (job_id, started_at, error, coalesced_id)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_queued "
-        "ON tasks (queued_at, started_at, error, coalesced_id)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_queued_worker "
-        "ON tasks (queued_at, started_at, error, coalesced_id, approval)"
-    )
+        # Recreate chat_sessions with job_id INTEGER
+        old_sessions = await db.execute_fetchall("SELECT * FROM chat_sessions")
+        cs_cols = [c["name"] for c in await db.execute_fetchall("PRAGMA table_info(chat_sessions)")]
+        await db.execute("ALTER TABLE chat_sessions RENAME TO _chat_sessions_old")
+        await db.execute("""
+            CREATE TABLE chat_sessions (
+                id TEXT PRIMARY KEY,
+                job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+                task_id INTEGER REFERENCES tasks(id),
+                title TEXT,
+                cli_session_id TEXT,
+                created_at DATETIME DEFAULT (datetime('now'))
+            )
+        """)
+        new_cs_cols = [c["name"] for c in await db.execute_fetchall("PRAGMA table_info(chat_sessions)")]
+        copy_cs_cols = [c for c in cs_cols if c in set(new_cs_cols) and c != "job_id"]
+        for s in old_sessions:
+            row = dict(s)
+            old_jid = row.get("job_id")
+            new_jid = slug_to_int.get(old_jid) if old_jid else None
+            row["job_id"] = new_jid
+            all_cols = ["job_id"] + copy_cs_cols
+            vals = [row[c] for c in all_cols]
+            ph = ", ".join("?" * len(all_cols))
+            await db.execute(f"INSERT INTO chat_sessions ({', '.join(all_cols)}) VALUES ({ph})", vals)
+        await db.execute("DROP TABLE _chat_sessions_old")
 
-    # -- chat_sessions table --
-    await db.execute("ALTER TABLE chat_sessions RENAME TO _chat_sessions_old")
-    await db.execute("""
-        CREATE TABLE chat_sessions (
-            id TEXT PRIMARY KEY,
-            job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
-            task_id INTEGER REFERENCES tasks(id),
-            title TEXT,
-            cli_session_id TEXT,
-            created_at DATETIME DEFAULT (datetime('now'))
-        )
-    """)
-    await db.execute("""
-        INSERT INTO chat_sessions SELECT * FROM _chat_sessions_old
-    """)
-    await db.execute("DROP TABLE _chat_sessions_old")
+        await db.execute("PRAGMA foreign_keys=ON")
+        log.info("[database] Migration M3: done — %d jobs converted", len(old_jobs))
 
-    # Recreate chat_sessions indexes
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_cli_session "
-        "ON chat_sessions (cli_session_id)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_task "
-        "ON chat_sessions (task_id)"
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chat_sessions_job "
-        "ON chat_sessions (job_id)"
-    )
+    # M2: Rename goals→jobs tables and goal_id→job_id columns (run before M1)
+    tables = {r["name"] for r in await db.execute_fetchall("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "goals" in tables:
+        log.info("[database] Migration M2: renaming goals→jobs tables and columns")
+        # SCHEMA_SQL may have already created empty jobs/job_property_defs/job_properties
+        # tables — drop them so we can rename the real ones from goals.
+        for empty_table in ("jobs", "job_property_defs", "job_properties"):
+            if empty_table in tables:
+                await db.execute(f"DROP TABLE {empty_table}")
+        await db.execute("ALTER TABLE goals RENAME TO jobs")
+        await db.execute("ALTER TABLE goal_property_defs RENAME TO job_property_defs")
+        await db.execute("ALTER TABLE goal_properties RENAME TO job_properties")
+        await db.execute("ALTER TABLE tasks RENAME COLUMN goal_id TO job_id")
+        await db.execute("ALTER TABLE chat_sessions RENAME COLUMN goal_id TO job_id")
+        # job_properties.goal_id column rename (table was just renamed from goal_properties)
+        await db.execute("ALTER TABLE job_properties RENAME COLUMN goal_id TO job_id")
+        log.info("[database] Migration M2: done")
 
-    await db.execute("PRAGMA foreign_keys=ON")
+    # Cleanup: drop any leftover _*_old tables from previous migration runs
+    tables = {r["name"] for r in await db.execute_fetchall("SELECT name FROM sqlite_master WHERE type='table'")}
+    for stale in ("_tasks_old", "_jobs_old", "_job_properties_old", "_chat_sessions_old"):
+        if stale in tables:
+            await db.execute(f"DROP TABLE {stale}")
+            log.warning("[database] Dropped stale migration table: %s", stale)
 
-
-async def _migrate_status_column(db: aiosqlite.Connection):
-    """Add status column and backfill from existing lifecycle columns.
-
-    Derives the correct status value for every existing task using the
-    migration rules defined in dispatch-engine.md § Task Status § Migration.
-    """
-    try:
-        await db.execute("ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
-    except Exception:
-        pass  # Column already exists (e.g. fresh DB created with schema that includes it)
-
-    # Backfill status from lifecycle columns — order matters (most specific first)
-    await db.execute("""
-        UPDATE tasks SET status = CASE
-            WHEN completed_at IS NOT NULL AND error IS NULL THEN 'completed'
-            WHEN completed_at IS NOT NULL AND error = 'cancelled' THEN 'cancelled'
-            WHEN completed_at IS NOT NULL AND error = 'timed out' THEN 'timed_out'
-            WHEN completed_at IS NOT NULL AND error = 'interrupted' THEN 'interrupted'
-            WHEN completed_at IS NOT NULL AND error = 'rejected' THEN 'rejected'
-            WHEN completed_at IS NOT NULL AND error IS NOT NULL THEN 'failed'
-            WHEN started_at IS NOT NULL AND completed_at IS NULL THEN 'active'
-            WHEN queued_at IS NOT NULL AND started_at IS NULL AND error IS NULL THEN 'queued'
-            WHEN started_at IS NULL AND queued_at IS NULL AND error IS NULL THEN 'pending'
-            WHEN completed_at IS NULL AND error IS NOT NULL THEN 'cancelled'
-            ELSE 'pending'
-        END
-    """)
-
-    # New primary worker index replaces the old multi-column predicate indexes
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_status_worker "
-        "ON tasks (status, approval, coalesced_id)"
-    )
-    await db.commit()
-
-
-async def _migrate_stale_indices(db: aiosqlite.Connection):
-    """Drop stale timestamp-based indices and add idx_tasks_job_status.
-
-    Before the status state machine (schema v2), queue queries filtered on
-    (started_at, error, queued_at) combinations. All hot paths now filter
-    on the status column instead. The timestamp-based indices are dead weight
-    — they consume write overhead and storage without serving any query.
-
-    idx_tasks_job_status covers the (job_id, status) predicate used by:
-      - get_job() single-job fetch: WHERE job_id = ? AND status = 'active'
-      - enqueue_task() coalescing: WHERE job_id = ? AND status IN ('pending','queued')
-    """
-    stale = [
-        "idx_tasks_pending",
-        "idx_tasks_job_coalesce",
-        "idx_tasks_running",
-        "idx_tasks_job_running",
-        "idx_tasks_coalesce_lookup",
-        "idx_tasks_queued",
-        "idx_tasks_queued_worker",
-    ]
-    for name in stale:
-        await db.execute(f"DROP INDEX IF EXISTS {name}")
-
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_job_status "
-        "ON tasks (job_id, status)"
-    )
-    await db.commit()
-
-
-async def _migrate_task_events_backfill(db: aiosqlite.Connection):
-    """Backfill task_events from existing task records (Phase 1 dual-write).
-
-    Synthesizes lifecycle events from the timestamp columns on existing tasks.
-    After this migration, all tasks have at least a 'created' event, and those
-    with queued_at/started_at/completed_at get corresponding transition events.
-    New tasks going forward get events via dual-write in transition_task().
-    """
-    # The table is created by SCHEMA_SQL (CREATE TABLE IF NOT EXISTS).
-    # Only backfill if the table is empty — avoids double-backfilling on re-run.
-    rows = await db.execute_fetchall("SELECT COUNT(*) as cnt FROM task_events")
-    if rows[0]["cnt"] > 0:
-        return
-
-    # Synthesize 'created' event for every task
-    await db.execute("""
-        INSERT INTO task_events (task_id, event, detail, created_at)
-        SELECT id, 'created', trigger, created_at FROM tasks
-    """)
-
-    # Synthesize 'queued' event for tasks that were queued
-    await db.execute("""
-        INSERT INTO task_events (task_id, event, created_at)
-        SELECT id, 'queued', queued_at FROM tasks WHERE queued_at IS NOT NULL
-    """)
-
-    # Synthesize 'active' event for tasks that were started
-    await db.execute("""
-        INSERT INTO task_events (task_id, event, created_at)
-        SELECT id, 'active', started_at FROM tasks WHERE started_at IS NOT NULL
-    """)
-
-    # Synthesize terminal events from status + completed_at
-    await db.execute("""
-        INSERT INTO task_events (task_id, event, detail, created_at)
-        SELECT id, status, error, completed_at
-        FROM tasks
-        WHERE status IN ('completed', 'failed', 'cancelled', 'timed_out',
-                         'interrupted', 'rejected')
-          AND completed_at IS NOT NULL
-    """)
-
-    await db.commit()
-
-
-async def _migrate_fix_chat_fks(db: aiosqlite.Connection):
-    """Fix broken FK references in chat_events and chat_messages.
-
-    The v1 cascade FK migration renamed chat_sessions to _chat_sessions_old
-    and recreated it, but didn't recreate the dependent tables. SQLite
-    automatically updated their FK targets to _chat_sessions_old, which was
-    then dropped — leaving dangling FK references that cause every INSERT
-    to fail.
-    """
-    await db.execute("PRAGMA foreign_keys=OFF")
-
-    # -- chat_events --
-    await db.execute("ALTER TABLE chat_events RENAME TO _chat_events_old")
-    await db.execute("""
-        CREATE TABLE chat_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-            event_type TEXT NOT NULL,
-            raw_json TEXT NOT NULL,
-            created_at DATETIME DEFAULT (datetime('now'))
-        )
-    """)
-    await db.execute("INSERT INTO chat_events SELECT * FROM _chat_events_old")
-    await db.execute("DROP TABLE _chat_events_old")
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chat_events_session ON chat_events (session_id)"
-    )
-
-    # -- chat_messages --
-    await db.execute("ALTER TABLE chat_messages RENAME TO _chat_messages_old")
-    await db.execute("""
-        CREATE TABLE chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at DATETIME DEFAULT (datetime('now'))
-        )
-    """)
-    await db.execute("INSERT INTO chat_messages SELECT * FROM _chat_messages_old")
-    await db.execute("DROP TABLE _chat_messages_old")
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, created_at)"
-    )
-
-    await db.execute("PRAGMA foreign_keys=ON")
-    await db.commit()
+    # M1: Add slug column to jobs if missing (added after INTEGER PK migration)
+    cols = await db.execute_fetchall("PRAGMA table_info(jobs)")
+    col_names = {c["name"] for c in cols}
+    if "slug" not in col_names:
+        log.info("[database] Migration M1: adding slug column to jobs")
+        await db.execute("ALTER TABLE jobs ADD COLUMN slug TEXT")
+        rows = await db.execute_fetchall("SELECT id, name FROM jobs")
+        for row in rows:
+            slug = slugify(row["name"])
+            # Ensure uniqueness by appending ID on collision
+            existing = await db.execute_fetchall(
+                "SELECT id FROM jobs WHERE slug = ? AND id != ?", (slug, row["id"])
+            )
+            if existing:
+                slug = f"{slug}-{row['id']}"
+            await db.execute("UPDATE jobs SET slug = ? WHERE id = ?", (slug, row["id"]))
+        log.info("[database] Migration M1: done")
 
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     created_at DATETIME DEFAULT (datetime('now'))
 );
@@ -487,7 +282,7 @@ CREATE TABLE IF NOT EXISTS job_property_defs (
 );
 
 CREATE TABLE IF NOT EXISTS job_properties (
-    job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
     key TEXT REFERENCES job_property_defs(key),
     value TEXT NOT NULL,
     PRIMARY KEY (job_id, key)
@@ -495,7 +290,7 @@ CREATE TABLE IF NOT EXISTS job_properties (
 
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'pending',
     trigger TEXT NOT NULL,
     trigger_detail TEXT,
@@ -504,6 +299,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     resume_session_id TEXT,
     approval TEXT,
     start_commit TEXT,
+    stop_reason TEXT,
+    num_turns INTEGER,
+    cost_usd REAL,
     created_at DATETIME DEFAULT (datetime('now')),
     started_at DATETIME,
     completed_at DATETIME,
@@ -516,7 +314,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id TEXT PRIMARY KEY,
-    job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
     task_id INTEGER REFERENCES tasks(id),
     title TEXT,
     cli_session_id TEXT,
@@ -566,13 +364,17 @@ CREATE TABLE IF NOT EXISTS config (
     value TEXT NOT NULL
 );
 
--- Indices for hot query paths
 CREATE INDEX IF NOT EXISTS idx_tasks_coalesced
     ON tasks (coalesced_id);
 
--- idx_tasks_status_worker is created by _migrate_status_column (schema v2)
--- because the status column may not exist on legacy databases when SCHEMA_SQL runs.
--- idx_tasks_job_status is created by _migrate_stale_indices (schema v3) for the same reason.
+CREATE INDEX IF NOT EXISTS idx_tasks_job_status
+    ON tasks (job_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status_worker
+    ON tasks (status, approval, coalesced_id);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_completed_at
+    ON tasks (completed_at);
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session
     ON chat_messages (session_id, created_at);
@@ -599,8 +401,8 @@ CREATE INDEX IF NOT EXISTS idx_job_properties_job_id
 
 SEED_SQL = """
 INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
+    ('summary', '', 'string'),
     ('description', '', 'string'),
-    ('instructions', '', 'string'),
     ('model', 'sonnet', 'string'),
     ('allowed_tools', '[]', 'json'),
     ('mcp_servers', '[]', 'json'),
@@ -609,7 +411,8 @@ INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
     ('sort_order', '0', 'integer'),
     ('schedule', '', 'string'),
     ('timeout', '900', 'integer'),
-    ('depends_on', '[]', 'json'),
+    ('max_turns', '50', 'integer'),
+    ('cascades_from', '[]', 'json'),
     ('require_approval', 'false', 'boolean'),
     ('allowed_internal_tools', '[]', 'json'),
     ('allowed_dispatch_targets', '[]', 'json');
@@ -624,12 +427,13 @@ def slugify(name: str) -> str:
     return slug
 
 
-# ── Job CRUD ──────────────────────────────────────────────
+# ── Job CRUD ─────────────────────────────────────────────
 
 async def create_job(name: str, properties: dict | None = None) -> dict:
-    job_id = slugify(name)
+    slug = slugify(name)
     db = await get_db()
-    await db.execute("INSERT INTO jobs (id, name) VALUES (?, ?)", (job_id, name))
+    cursor = await db.execute("INSERT INTO jobs (slug, name) VALUES (?, ?)", (slug, name))
+    job_id = cursor.lastrowid
     if properties:
         for key, value in properties.items():
             val = json.dumps(value) if isinstance(value, (list, dict)) else str(value)
@@ -651,10 +455,10 @@ async def _get_property_defs() -> list:
     return _property_defs_cache
 
 
-async def get_job(job_id: str, running_ids: set | None = None) -> dict | None:
+async def get_job(job_id: int, running_ids: set | None = None) -> dict | None:
     db = await get_db()
     row = await db.execute_fetchall(
-        "SELECT id, name, created_at FROM jobs WHERE id = ?", (job_id,)
+        "SELECT id, slug, name, created_at FROM jobs WHERE id = ?", (job_id,)
     )
     if not row:
         return None
@@ -690,17 +494,29 @@ async def get_job(job_id: str, running_ids: set | None = None) -> dict | None:
 async def list_jobs() -> list[dict]:
     """Return all jobs. Uses 3 batch queries instead of 2N+2 (N+1 avoided)."""
     conn = await get_db()
-    job_rows = await conn.execute_fetchall("SELECT id, name, created_at FROM jobs")
+    job_rows = await conn.execute_fetchall("SELECT id, slug, name, created_at FROM jobs")
     if not job_rows:
         return []
 
-    running_rows = await conn.execute_fetchall(
-        "SELECT DISTINCT job_id FROM tasks WHERE status = 'active'"
+    # Task state counts per job for command bar indicators
+    state_rows = await conn.execute_fetchall(
+        "SELECT job_id, status, COUNT(*) as cnt FROM tasks "
+        "WHERE status IN ('pending', 'queued', 'active') GROUP BY job_id, status"
     )
-    running_ids = {r["job_id"] for r in running_rows}
+    running_ids = set()
+    pending_counts: dict[int, int] = {}
+    queued_counts: dict[int, int] = {}
+    for r in state_rows:
+        jid, st, cnt = r["job_id"], r["status"], r["cnt"]
+        if st == "active":
+            running_ids.add(jid)
+        elif st == "pending":
+            pending_counts[jid] = cnt
+        elif st == "queued":
+            queued_counts[jid] = cnt
 
     prop_rows = await conn.execute_fetchall("SELECT job_id, key, value FROM job_properties")
-    props_by_job: dict[str, dict] = {}
+    props_by_job: dict[int, dict] = {}
     for p in prop_rows:
         props_by_job.setdefault(p["job_id"], {})[p["key"]] = p["value"]
 
@@ -717,20 +533,24 @@ async def list_jobs() -> list[dict]:
         for key, value in props_by_job.get(job["id"], {}).items():
             props[key] = _cast_property(value, def_types.get(key, "string"))
         props["running"] = job["id"] in running_ids
+        props["pending_count"] = pending_counts.get(job["id"], 0)
+        props["queued_count"] = queued_counts.get(job["id"], 0)
         job["properties"] = props
         jobs.append(job)
     jobs.sort(key=lambda j: j["properties"].get("sort_order", 0))
     return jobs
 
 
-async def update_job(job_id: str, updates: dict) -> dict | None:
+async def update_job(job_id: int, updates: dict) -> dict | None:
     db = await get_db()
     row = await db.execute_fetchall("SELECT 1 FROM jobs WHERE id = ?", (job_id,))
     if not row:
         return None
 
     if "name" in updates:
-        await db.execute("UPDATE jobs SET name = ? WHERE id = ?", (updates.pop("name"), job_id))
+        new_name = updates.pop("name")
+        new_slug = slugify(new_name)
+        await db.execute("UPDATE jobs SET name = ?, slug = ? WHERE id = ?", (new_name, new_slug, job_id))
 
     for key, value in updates.items():
         val = json.dumps(value) if isinstance(value, (list, dict)) else str(value)
@@ -742,7 +562,7 @@ async def update_job(job_id: str, updates: dict) -> dict | None:
     return await get_job(job_id)
 
 
-async def reorder_jobs(job_ids: list[str]):
+async def reorder_jobs(job_ids: list[int]):
     """Set sort_order for multiple jobs in a single transaction."""
     db = await get_db()
     await db.executemany(
@@ -752,7 +572,7 @@ async def reorder_jobs(job_ids: list[str]):
     await db.commit()
 
 
-async def delete_job(job_id: str) -> bool:
+async def delete_job(job_id: int) -> bool:
     """Delete a job. CASCADE FKs on tasks, chat_sessions, and job_properties
     automatically remove dependent rows."""
     db = await get_db()
@@ -761,25 +581,26 @@ async def delete_job(job_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-async def get_jobs_depending_on(job_id: str) -> list[dict]:
-    """Return jobs whose depends_on property includes job_id.
+async def get_cascade_targets(completed_job_id: int) -> list[dict]:
+    """Return jobs that cascade from the completed job.
 
-    Fetches all depends_on values, parses JSON, and checks exact list
-    membership — no LIKE/substring matching.
+    Each job may declare cascades_from: a list of upstream job IDs.
+    When a job completes, we find all jobs whose cascades_from list
+    includes the completed job and enqueue them.
     """
     conn = await get_db()
     rows = await conn.execute_fetchall(
-        "SELECT job_id, value FROM job_properties WHERE key = 'depends_on'"
+        "SELECT job_id, value FROM job_properties WHERE key = 'cascades_from'"
     )
 
     # Parse JSON and filter to exact membership
     candidate_ids = []
     for r in rows:
         try:
-            deps = json.loads(r["value"])
+            upstreams = json.loads(r["value"])
         except (json.JSONDecodeError, TypeError):
             continue
-        if isinstance(deps, list) and job_id in deps:
+        if isinstance(upstreams, list) and completed_job_id in upstreams:
             candidate_ids.append(r["job_id"])
 
     if not candidate_ids:
@@ -788,7 +609,7 @@ async def get_jobs_depending_on(job_id: str) -> list[dict]:
     placeholders = ",".join("?" * len(candidate_ids))
 
     job_rows = await conn.execute_fetchall(
-        f"SELECT id, name, created_at FROM jobs WHERE id IN ({placeholders})",
+        f"SELECT id, slug, name, created_at FROM jobs WHERE id IN ({placeholders})",
         candidate_ids,
     )
     if not job_rows:
@@ -803,7 +624,7 @@ async def get_jobs_depending_on(job_id: str) -> list[dict]:
         f"SELECT job_id, key, value FROM job_properties WHERE job_id IN ({placeholders})",
         candidate_ids,
     )
-    props_by_job: dict[str, dict] = {}
+    props_by_job: dict[int, dict] = {}
     for p in prop_rows:
         props_by_job.setdefault(p["job_id"], {})[p["key"]] = p["value"]
 
@@ -826,7 +647,7 @@ async def get_jobs_depending_on(job_id: str) -> list[dict]:
 
 # ── Tasks (atomic work items) ─────────────────────────────
 
-async def enqueue_task(job_id: str, trigger: str,
+async def enqueue_task(job_id: int, trigger: str,
                        trigger_detail: str | None = None,
                        context: str | None = None) -> int:
     """Enqueue an atomic task. Coalescing links via coalesced_id instead of mutating data.
@@ -835,7 +656,7 @@ async def enqueue_task(job_id: str, trigger: str,
     - 'schedule' always coalesces globally
     - 'commit', 'dependency', and 'agent' coalesce with other pending tasks of the same type
     - coalesce_tasks=true coalesces globally
-    - All other triggers (manual, resume, retry) never coalesce
+    - All other triggers (manual, resume, reply) never coalesce
     """
     db = await get_db()
 
@@ -846,7 +667,7 @@ async def enqueue_task(job_id: str, trigger: str,
     )
     job_props = {r["key"]: r["value"] for r in prop_rows}
     coalesce_global = (trigger == "schedule") or (job_props.get("coalesce_tasks", "").lower() == "true")
-    coalesce_same_type = trigger in ("commit", "dependency", "agent")
+    coalesce_same_type = trigger in ("commit", "cascade", "agent")
 
     # Approval gate: manual tasks bypass, others check job property
     approval = None
@@ -871,9 +692,9 @@ async def enqueue_task(job_id: str, trigger: str,
     )
     new_id = cursor.lastrowid
 
-    # Dual-write: emit 'created' event (and 'queued' if auto-queued)
+    # Emit lifecycle events: dispatched (and queued if auto-queued)
     await db.execute(
-        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'created', ?, ?)",
+        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'dispatched', ?, ?)",
         (new_id, trigger, now)
     )
     if queued_at:
@@ -900,11 +721,6 @@ async def enqueue_task(job_id: str, trigger: str,
                 "UPDATE tasks SET coalesced_id = ? WHERE id = ?",
                 (root_id, new_id)
             )
-            # Metadata event: record the coalescing
-            await db.execute(
-                "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'coalesced', ?, ?)",
-                (new_id, str(root_id), now)
-            )
 
     # Single commit: insert + optional coalesce link land atomically
     await db.commit()
@@ -917,7 +733,11 @@ async def get_task(task_id: int) -> dict | None:
         "SELECT t.*, j.name as job_name FROM tasks t JOIN jobs j ON j.id = t.job_id WHERE t.id = ?",
         (task_id,)
     )
-    return dict(rows[0]) if rows else None
+    if not rows:
+        return None
+    task = dict(rows[0])
+    apply_events(task, await get_task_events(task_id, db))
+    return task
 
 
 async def get_agent_dispatch_depth(task_id: int) -> int:
@@ -1020,21 +840,22 @@ LEGAL_TRANSITIONS: set[tuple[str, str]] = {
     ("queued", "active"),
     ("queued", "cancelled"),
     ("active", "completed"),
+    ("active", "exhausted"),
     ("active", "failed"),
     ("active", "cancelled"),
     ("active", "timed_out"),
     ("active", "interrupted"),
 }
 
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted", "timed_out", "rejected"})
+TERMINAL_STATUSES = frozenset({"completed", "exhausted", "failed", "cancelled", "interrupted", "timed_out", "rejected"})
 
-# Map new_status to the event name for task_events dual-write.
-# Most map 1:1; "pending" (from queued→pending demotion) maps to "unqueued".
+# Map status → event name for task_events writes.
 _STATUS_TO_EVENT = {
-    "pending": "unqueued",
+    "pending": "restored",
     "queued": "queued",
-    "active": "active",
+    "active": "activated",
     "completed": "completed",
+    "exhausted": "exhausted",
     "failed": "failed",
     "cancelled": "cancelled",
     "timed_out": "timed_out",
@@ -1042,11 +863,76 @@ _STATUS_TO_EVENT = {
     "rejected": "rejected",
 }
 
+# Reverse mapping: event name → status.
+# Includes both current and legacy event names for backward compat with pre-migration data.
+_EVENT_TO_STATUS = {
+    # Current event names
+    "dispatched": "pending",
+    "restored": "pending",
+    "queued": "queued",
+    "activated": "active",
+    "completed": "completed",
+    "exhausted": "exhausted",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "timed_out": "timed_out",
+    "interrupted": "interrupted",
+    "rejected": "rejected",
+    # Legacy event names (pre-migration data)
+    "created": "pending",
+    "unqueued": "pending",
+    "active": "active",
+}
+
+_STATUS_EVENTS = frozenset(_EVENT_TO_STATUS.keys())
+
+
+async def get_task_status_from_events(task_id: int, conn=None) -> str | None:
+    """Derive current task status from the latest lifecycle event.
+
+    Returns None if the task has no events.
+    """
+    if conn is None:
+        conn = await get_db()
+    placeholders = ",".join(f"'{e}'" for e in _STATUS_EVENTS)
+    rows = await conn.execute_fetchall(
+        f"SELECT event FROM task_events WHERE task_id = ? AND event IN ({placeholders}) ORDER BY id DESC LIMIT 1",
+        (task_id,)
+    )
+    if not rows:
+        return None
+    return _EVENT_TO_STATUS[rows[0]["event"]]
+
+
+async def _resolve_task_status(task_id: int, conn) -> str:
+    """Get current task status, backfilling from the status column if no events exist.
+
+    Tasks created before task_events was introduced have no events. This
+    synthesises the missing event so subsequent transitions work normally.
+    Raises ValueError if the task doesn't exist.
+    """
+    from backend.state import utcnow
+    status = await get_task_status_from_events(task_id, conn)
+    if status is not None:
+        return status
+    rows = await conn.execute_fetchall("SELECT status FROM tasks WHERE id = ?", (task_id,))
+    if not rows:
+        raise ValueError(f"Task #{task_id} not found")
+    status = rows[0]["status"]
+    synth_event = _STATUS_TO_EVENT.get(status, status)
+    await conn.execute(
+        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
+        (task_id, synth_event, "backfilled", utcnow())
+    )
+    log.warning("[database] Task #%d had no events — backfilled from status=%s", task_id, status)
+    return status
+
 # Map status to the timestamp column that should be set on transition
 _STATUS_TIMESTAMP = {
     "queued": "queued_at",
     "active": "started_at",
     "completed": "completed_at",
+    "exhausted": "completed_at",
     "failed": "completed_at",
     "cancelled": "completed_at",
     "timed_out": "completed_at",
@@ -1061,7 +947,7 @@ def _build_event_detail(new_status: str, fields: dict) -> str | None:
     Selects the most meaningful field for the event type: error message for
     failures, session_id for activation, result_commit for completion.
     """
-    if new_status in ("failed", "cancelled", "timed_out", "interrupted"):
+    if new_status in ("failed", "cancelled", "timed_out", "interrupted", "exhausted"):
         return fields.get("error")
     if new_status == "active":
         parts = {}
@@ -1086,13 +972,7 @@ async def transition_task(task_id: int, new_status: str, _commit: bool = True, *
     Raises ValueError if the transition is illegal.
     """
     conn = await get_db()
-    rows = await conn.execute_fetchall(
-        "SELECT status FROM tasks WHERE id = ?", (task_id,)
-    )
-    if not rows:
-        raise ValueError(f"Task #{task_id} not found")
-
-    current_status = rows[0]["status"]
+    current_status = await _resolve_task_status(task_id, conn)
 
     if (current_status, new_status) not in LEGAL_TRANSITIONS:
         raise ValueError(
@@ -1170,19 +1050,155 @@ async def transition_tasks_batch(task_ids: list[int], new_status: str, **fields)
     await conn.commit()
 
 
+# ── Task Event Queries ────────────────────────────────────
+
+async def get_task_events(task_id: int, conn=None) -> list[dict]:
+    """Full event chain for a task, ordered chronologically.
+
+    This is the canonical read — every event the task has ever experienced,
+    in the order it happened. The chain is append-only and immutable.
+    """
+    if conn is None:
+        conn = await get_db()
+    rows = await conn.execute_fetchall(
+        "SELECT event, detail, created_at FROM task_events WHERE task_id = ? ORDER BY id ASC",
+        (task_id,)
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_task_events_batch(task_ids: list[int], conn=None) -> dict[int, list[dict]]:
+    """Full event chains for multiple tasks, keyed by task_id.
+
+    Same as get_task_events but batched — one query instead of N.
+    """
+    if not task_ids:
+        return {}
+    if conn is None:
+        conn = await get_db()
+    placeholders = ",".join("?" * len(task_ids))
+    rows = await conn.execute_fetchall(
+        f"SELECT task_id, event, detail, created_at FROM task_events WHERE task_id IN ({placeholders}) ORDER BY id ASC",
+        task_ids
+    )
+    result: dict[int, list[dict]] = {}
+    for r in rows:
+        result.setdefault(r["task_id"], []).append(dict(r))
+    return result
+
+
+_TERMINAL_EVENTS = frozenset({"completed", "exhausted", "failed", "cancelled", "timed_out", "interrupted", "rejected"})
+
+
+def status_from_events(events: list[dict]) -> str | None:
+    """Derive current status from an ordered event list (ascending by id).
+
+    Returns None if no lifecycle events are present.
+    """
+    status = None
+    for e in events:
+        mapped = _EVENT_TO_STATUS.get(e["event"])
+        if mapped is not None:
+            status = mapped
+    return status
+
+
+def apply_events(task: dict, events: list[dict]) -> None:
+    """Overlay event-derived fields onto a task dict (mutates in place).
+
+    Sets status, timestamps, durations, and the event chain itself.
+    This is the single point where event data is materialized onto a task —
+    every read path should call this rather than doing ad-hoc derivation.
+    """
+    task["events"] = events
+    event_status = status_from_events(events)
+    if event_status is not None:
+        task["status"] = event_status
+    task.update(timestamps_from_events(events))
+    task["durations"] = compute_durations_from_events(events)
+
+
+def _parse_event_timestamps(events: list[dict]) -> tuple:
+    """Extract lifecycle timestamps from an ordered event list.
+
+    Returns (created_at, queued_at, active_at, terminal_at) — each a datetime
+    string or None.
+    """
+    created_at = None
+    queued_at = None
+    active_at = None
+    terminal_at = None
+
+    for e in events:
+        evt = e["event"]
+        ts = e["created_at"]
+        if not isinstance(ts, str):
+            continue  # skip bad data (e.g. integer queue positions from v4 migration)
+        if evt in ("dispatched", "created") and created_at is None:
+            created_at = ts
+        elif evt == "queued":
+            queued_at = ts
+        elif evt in ("activated", "active"):
+            active_at = ts
+        elif evt in _TERMINAL_EVENTS:
+            terminal_at = ts
+
+    return created_at, queued_at, active_at, terminal_at
+
+
+def timestamps_from_events(events: list[dict]) -> dict:
+    """Derive the same timestamps as the legacy columns from the event log.
+
+    Returns dict with queued_at, started_at, completed_at — matching the column
+    names so the frontend doesn't need to change.
+    """
+    created_at, queued_at, active_at, terminal_at = _parse_event_timestamps(events)
+    return {
+        "queued_at": queued_at,
+        "started_at": active_at,
+        "completed_at": terminal_at,
+    }
+
+
+def compute_durations_from_events(events: list[dict]) -> dict:
+    """Compute execution duration, queue wait, and total lifecycle from an event list.
+
+    Returns a dict with keys: execution_duration, queue_wait, total_duration (all in seconds,
+    None if the relevant event pair is missing).
+    """
+    created_at, queued_at, active_at, terminal_at = _parse_event_timestamps(events)
+
+    def _diff_secs(a, b):
+        if a is None or b is None:
+            return None
+        from datetime import datetime
+        if isinstance(a, str):
+            a = datetime.fromisoformat(a)
+        if isinstance(b, str):
+            b = datetime.fromisoformat(b)
+        return max(0, (b - a).total_seconds())
+
+    return {
+        "execution_duration": _diff_secs(active_at, terminal_at),
+        "queue_wait": _diff_secs(queued_at, active_at),
+        "total_duration": _diff_secs(created_at, terminal_at),
+    }
+
+
 async def transfer_task(task_id: int, to_queued: bool):
     """Move a task between pending and queued columns. Sets or clears queued_at.
     Also transfers subordinate tasks to maintain group cohesion."""
     from backend.state import utcnow
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, status, coalesced_id FROM tasks WHERE id = ?",
+        "SELECT id, coalesced_id FROM tasks WHERE id = ?",
         (task_id,)
     )
     if not rows:
         raise ValueError("Task not found")
     task = rows[0]
-    if task["status"] not in ("pending", "queued"):
+    current_status = await _resolve_task_status(task_id, db)
+    if current_status not in ("pending", "queued"):
         raise ValueError("Can only transfer pre-execution tasks")
     if task["coalesced_id"] is not None:
         raise ValueError("Cannot transfer a subordinate — transfer its root instead")
@@ -1190,7 +1206,7 @@ async def transfer_task(task_id: int, to_queued: bool):
     now = utcnow()
     new_status = "queued" if to_queued else "pending"
     queued_at = now if to_queued else None
-    event_type = "queued" if to_queued else "unqueued"
+    event_type = "queued" if to_queued else "restored"
 
     # Transfer root and all subordinates; clear sort_order (append to end of target column)
     await db.execute(
@@ -1223,6 +1239,65 @@ async def transfer_task(task_id: int, to_queued: bool):
     return task_id
 
 
+async def transfer_all_tasks(to_queued: bool) -> int:
+    """Batch transfer: all pending→queued or all queued→pending.
+
+    Skips subordinate tasks — they follow their root.
+    Returns count of tasks transferred.
+    """
+    from backend.state import utcnow
+    conn = await get_db()
+    now = utcnow()
+
+    source_status = "pending" if to_queued else "queued"
+    target_status = "queued" if to_queued else "pending"
+    queued_at = now if to_queued else None
+    event_type = "queued" if to_queued else "restored"
+
+    # Find root tasks (not subordinates) in the source status
+    rows = await conn.execute_fetchall(
+        "SELECT id FROM tasks WHERE status = ? AND coalesced_id IS NULL",
+        (source_status,)
+    )
+    if not rows:
+        return 0
+
+    root_ids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(root_ids))
+
+    # Transfer roots
+    await conn.execute(
+        f"UPDATE tasks SET status = ?, queued_at = ?, sort_order = NULL "
+        f"WHERE id IN ({placeholders})",
+        [target_status, queued_at] + root_ids
+    )
+
+    # Transfer subordinates of those roots
+    sub_rows = await conn.execute_fetchall(
+        f"SELECT id FROM tasks WHERE coalesced_id IN ({placeholders}) "
+        f"AND status = ?",
+        root_ids + [source_status]
+    )
+    if sub_rows:
+        sub_ids = [s["id"] for s in sub_rows]
+        sub_ph = ",".join("?" * len(sub_ids))
+        await conn.execute(
+            f"UPDATE tasks SET status = ?, queued_at = ? "
+            f"WHERE id IN ({sub_ph})",
+            [target_status, queued_at] + sub_ids
+        )
+
+    # Dual-write events
+    all_ids = root_ids + [s["id"] for s in sub_rows]
+    await conn.executemany(
+        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, ?, ?)",
+        [(tid, event_type, now) for tid in all_ids]
+    )
+
+    await conn.commit()
+    return len(root_ids)
+
+
 async def reorder_tasks(task_ids: list[int]):
     """Set explicit sort_order on pending tasks to control execution priority."""
     db = await get_db()
@@ -1241,6 +1316,17 @@ async def _flatten_coalesce(conn: aiosqlite.Connection, task_id: int, new_root_i
         "UPDATE tasks SET coalesced_id = ? WHERE coalesced_id = ?",
         (new_root_id, task_id)
     )
+
+
+async def coalesce_under(task_id: int, new_root_id: int):
+    """Coalesce task_id (and any of its subordinates) under new_root_id."""
+    conn = await get_db()
+    await conn.execute(
+        "UPDATE tasks SET coalesced_id = ? WHERE id = ?",
+        (new_root_id, task_id)
+    )
+    await _flatten_coalesce(conn, task_id, new_root_id)
+    await conn.commit()
 
 
 async def get_subordinate_tasks(root_id: int) -> list[dict]:
@@ -1263,7 +1349,7 @@ async def merge_tasks(task_ids: list[int]) -> int:
     db = await get_db()
     placeholders = ",".join("?" * len(task_ids))
     rows = await db.execute_fetchall(
-        f"""SELECT id, job_id, status, approval, coalesced_id, created_at
+        f"""SELECT id, job_id, approval, coalesced_id, created_at
             FROM tasks WHERE id IN ({placeholders})
             ORDER BY created_at ASC""",
         task_ids,
@@ -1272,9 +1358,12 @@ async def merge_tasks(task_ids: list[int]) -> int:
     if len(rows) != len(task_ids):
         raise ValueError("Some task IDs not found")
 
+    events_by_task = await get_task_events_batch(task_ids, db)
+
     job_ids = set()
     for r in rows:
-        if r["status"] != "pending":
+        task_status = status_from_events(events_by_task.get(r["id"], []))
+        if task_status != "pending":
             raise ValueError(f"Task #{r['id']} is not pending — merge is a pending-column operation")
         if r["approval"] == "pending":
             raise ValueError(f"Task #{r['id']} is pending approval")
@@ -1297,13 +1386,7 @@ async def merge_tasks(task_ids: list[int]) -> int:
     for sid in sub_ids:
         await _flatten_coalesce(db, sid, root_id)
 
-    # Metadata events: record coalescing for each subordinate
     from backend.state import utcnow
-    now = utcnow()
-    await db.executemany(
-        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'coalesced', ?, ?)",
-        [(sid, str(root_id), now) for sid in sub_ids]
-    )
 
     await db.commit()
     return root_id
@@ -1314,7 +1397,7 @@ async def split_task(root_id: int) -> list[int]:
     db = await get_db()
 
     root_rows = await db.execute_fetchall(
-        "SELECT id, job_id, status, coalesced_id FROM tasks WHERE id = ?",
+        "SELECT id, job_id, coalesced_id FROM tasks WHERE id = ?",
         (root_id,)
     )
     if not root_rows:
@@ -1322,7 +1405,8 @@ async def split_task(root_id: int) -> list[int]:
     root = root_rows[0]
     if root["coalesced_id"] is not None:
         raise ValueError("Task is a subordinate, not a root")
-    if root["status"] != "pending":
+    root_status = await get_task_status_from_events(root_id, db)
+    if root_status != "pending":
         raise ValueError("Can only split pending tasks — split is a pending-column operation")
 
     sub_rows = await db.execute_fetchall(
@@ -1353,9 +1437,9 @@ async def split_task(root_id: int) -> list[int]:
         [now, approval_val] + sub_ids,
     )
 
-    # Metadata events: record uncoalescing for each subordinate
+    # Lifecycle event: freed tasks reset to pending
     await db.executemany(
-        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'uncoalesced', ?)",
+        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'restored', ?)",
         [(sid, now) for sid in sub_ids]
     )
 
@@ -1368,7 +1452,7 @@ async def uncoalesce_task(task_id: int) -> int:
     db = await get_db()
 
     rows = await db.execute_fetchall(
-        "SELECT id, job_id, coalesced_id, status FROM tasks WHERE id = ?",
+        "SELECT id, job_id, coalesced_id FROM tasks WHERE id = ?",
         (task_id,)
     )
     if not rows:
@@ -1376,16 +1460,14 @@ async def uncoalesce_task(task_id: int) -> int:
     task = rows[0]
     if not task["coalesced_id"]:
         raise ValueError("Task is not a subordinate — use split on the root task")
-    if task["status"] not in ("pending", "queued"):
+    task_status = await get_task_status_from_events(task_id, db)
+    if task_status not in ("pending", "queued"):
         raise ValueError("Can only uncoalesce pre-execution tasks")
 
     # Verify root is in pending (uncoalesce is a pending-column operation)
-    root_rows = await db.execute_fetchall(
-        "SELECT status FROM tasks WHERE id = ?", (task["coalesced_id"],)
-    )
-    if root_rows:
-        if root_rows[0]["status"] != "pending":
-            raise ValueError("Can only uncoalesce from a pending root — split is a pending-column operation")
+    root_status = await get_task_status_from_events(task["coalesced_id"], db)
+    if root_status is not None and root_status != "pending":
+        raise ValueError("Can only uncoalesce from a pending root — split is a pending-column operation")
 
     # Look up the job's current require_approval setting
     prop_rows = await db.execute_fetchall(
@@ -1403,9 +1485,9 @@ async def uncoalesce_task(task_id: int) -> int:
         (now, approval_val, task_id),
     )
 
-    # Metadata event: record uncoalescing
+    # Lifecycle event: freed task resets to pending
     await db.execute(
-        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'uncoalesced', ?)",
+        "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'restored', ?)",
         (task_id, now)
     )
 
@@ -1414,20 +1496,21 @@ async def uncoalesce_task(task_id: int) -> int:
 
 
 async def sweep_stale_tasks(now: str):
-    """Mark any in-flight tasks as interrupted (e.g. after restart)."""
+    """Mark any in-flight tasks as interrupted (e.g. after restart).
+
+    Uses transition_task for each stale task so the event log records
+    the interruption — status is never updated without an event.
+    """
     db = await get_db()
     rows = await db.execute_fetchall(
         "SELECT id FROM tasks WHERE status = 'active'"
     )
     if not rows:
         return []
-    await db.execute(
-        "UPDATE tasks SET status = 'interrupted', completed_at = ?, error = 'interrupted'"
-        " WHERE status = 'active'",
-        (now,)
-    )
-    await db.commit()
-    return [row["id"] for row in rows]
+    ids = [row["id"] for row in rows]
+    for task_id in ids:
+        await transition_task(task_id, "interrupted", error="interrupted", completed_at=now)
+    return ids
 
 
 async def approve_task(task_id: int) -> bool:
@@ -1443,17 +1526,25 @@ async def approve_task(task_id: int) -> bool:
 
 
 async def reject_task(task_id: int) -> bool:
-    """Reject a pending-approval task (and its subordinates)."""
+    """Reject a pending-approval task (and its subordinates).
+
+    Uses transition_task so the event log records each rejection.
+    """
     db = await get_db()
-    from backend.state import utcnow
-    now = utcnow()
-    cursor = await db.execute(
-        "UPDATE tasks SET status = 'rejected', approval = 'rejected', completed_at = ?, error = 'rejected'"
-        " WHERE (id = ? OR coalesced_id = ?) AND approval = 'pending'",
-        (now, task_id, task_id)
+    # Find all tasks in the coalesce group with pending approval
+    rows = await db.execute_fetchall(
+        "SELECT id FROM tasks WHERE (id = ? OR coalesced_id = ?) AND approval = 'pending'",
+        (task_id, task_id)
     )
-    await db.commit()
-    return cursor.rowcount > 0
+    if not rows:
+        return False
+    for row in rows:
+        tid = row["id"]
+        await db.execute(
+            "UPDATE tasks SET approval = 'rejected' WHERE id = ?", (tid,)
+        )
+        await transition_task(tid, "rejected", error="rejected")
+    return True
 
 
 async def find_session_by_cli_session(cli_session_id: str) -> str | None:
@@ -1468,7 +1559,7 @@ async def find_session_by_cli_session(cli_session_id: str) -> str | None:
 
 # ── Chat ────────────────────────────────────────────────────
 
-async def create_chat_session(job_id: str | None = None, title: str | None = None,
+async def create_chat_session(job_id: int | None = None, title: str | None = None,
                                task_id: int | None = None) -> dict:
     session_id = str(uuid.uuid4())
     db = await get_db()
@@ -1537,6 +1628,16 @@ async def add_chat_event(session_id: str, event_type: str, raw_json: str):
     await db.commit()
 
 
+async def add_chat_event(session_id: str, event_type: str, raw_json: str):
+    """Insert a single chat event — used for incremental persistence during streaming."""
+    db = await get_db()
+    await db.execute(
+        "INSERT INTO chat_events (session_id, event_type, raw_json) VALUES (?, ?, ?)",
+        (session_id, event_type, raw_json),
+    )
+    await db.commit()
+
+
 async def add_chat_events_batch(session_id: str, events: list[tuple[str, str]]):
     """Insert multiple chat events in a single transaction."""
     if not events:
@@ -1597,6 +1698,46 @@ async def delete_mcp_server(name: str):
     db = await get_db()
     await db.execute("DELETE FROM mcp_servers WHERE name = ?", (name,))
     await db.commit()
+
+
+async def get_jobs_referencing_mcp_server(server_name: str) -> list[dict]:
+    """Return jobs whose mcp_servers property contains the given server name."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT jp.job_id, jp.value, j.name FROM job_properties jp JOIN jobs j ON j.id = jp.job_id "
+        "WHERE jp.key = 'mcp_servers'",
+    )
+    result = []
+    for row in rows:
+        try:
+            servers = json.loads(row["value"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+        if server_name in servers:
+            result.append({"id": row["job_id"], "name": row["name"]})
+    return result
+
+
+async def delete_mcp_server_cascade(name: str):
+    """Delete an MCP server and remove it from all jobs' mcp_servers properties."""
+    conn = await get_db()
+    # Find and update all jobs referencing this server
+    rows = await conn.execute_fetchall(
+        "SELECT job_id, value FROM job_properties WHERE key = 'mcp_servers'",
+    )
+    for row in rows:
+        try:
+            servers = json.loads(row["value"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+        if name in servers:
+            servers = [s for s in servers if s != name]
+            await conn.execute(
+                "UPDATE job_properties SET value = ? WHERE job_id = ? AND key = 'mcp_servers'",
+                (json.dumps(servers), row["job_id"]),
+            )
+    await conn.execute("DELETE FROM mcp_servers WHERE name = ?", (name,))
+    await conn.commit()
 
 
 # ── Config ──────────────────────────────────────────────────
@@ -1684,16 +1825,31 @@ async def dashboard_health(window_days: int) -> list[dict]:
 
 
 async def dashboard_timeline(window_days: int) -> list[dict]:
-    """Tasks with start/end times for timeline visualization."""
+    """Tasks with start/end times for timeline visualization.
+
+    Derives start and end timestamps from task_events (active/terminal pairs)
+    rather than the transitional timestamp columns on the task record.
+    """
     db = await get_db()
+    # Join task_events to get the 'active' event as start time and the latest
+    # terminal event as end time per task.
     rows = await db.execute_fetchall(
         """SELECT t.id, t.job_id, j.name AS job_name,
-                  t.started_at, t.completed_at, t.error, t.status
+                  te_start.created_at AS started_at,
+                  te_end.created_at AS completed_at,
+                  t.error, t.status
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
-           WHERE t.started_at IS NOT NULL
-             AND t.started_at >= datetime('now', ?)
-           ORDER BY t.started_at""",
+           JOIN task_events te_start ON te_start.task_id = t.id AND te_start.event IN ('activated', 'active')
+           LEFT JOIN task_events te_end ON te_end.task_id = t.id
+             AND te_end.event IN ('completed', 'failed', 'cancelled', 'timed_out', 'interrupted')
+             AND te_end.id = (
+               SELECT MAX(e2.id) FROM task_events e2
+               WHERE e2.task_id = t.id
+                 AND e2.event IN ('completed', 'failed', 'cancelled', 'timed_out', 'interrupted')
+             )
+           WHERE te_start.created_at >= datetime('now', ?)
+           ORDER BY te_start.created_at""",
         (f"-{window_days} days",)
     )
     return [dict(r) for r in rows]
@@ -1731,7 +1887,7 @@ async def dashboard_tool_usage(window_days: int) -> list[dict]:
 
     # Aggregate: per-job tool counts and error counts
     from collections import defaultdict
-    job_tools: dict[str, dict] = {}  # job_id -> {job_name, tools: {tool -> {count, errors}}}
+    job_tools: dict[int, dict] = {}  # job_id -> {job_name, tools: {tool -> {count, errors}}}
     for r in rows:
         jid = r["job_id"]
         if jid not in job_tools:

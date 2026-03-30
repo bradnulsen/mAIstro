@@ -82,17 +82,17 @@
   --width-rail: 52px;
   --size-icon: 36px;
   --height-header: 42px;
-  /* Goal color palette — 10 stable colors for goal identity in charts and timelines */
-  --goal-color-0: #4a90d9;
-  --goal-color-1: #d94a4a;
-  --goal-color-2: #4ad97a;
-  --goal-color-3: #d9a84a;
-  --goal-color-4: #9b59b6;
-  --goal-color-5: #1abc9c;
-  --goal-color-6: #e67e22;
-  --goal-color-7: #3498db;
-  --goal-color-8: #e74c3c;
-  --goal-color-9: #2ecc71;
+  /* Job color palette — 10 stable colors for job identity in charts and timelines */
+  --job-color-0: #4a90d9;
+  --job-color-1: #d94a4a;
+  --job-color-2: #4ad97a;
+  --job-color-3: #d9a84a;
+  --job-color-4: #9b59b6;
+  --job-color-5: #1abc9c;
+  --job-color-6: #e67e22;
+  --job-color-7: #3498db;
+  --job-color-8: #e74c3c;
+  --job-color-9: #2ecc71;
 }
 
 body {
@@ -217,7 +217,7 @@ body {
   font-size: var(--text-sm);
 }
 
-.command-bar-goals {
+.command-bar-jobs {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
@@ -242,13 +242,13 @@ body {
   transition: border-color 0.15s;
 }
 .command-bar-indicator:hover {
-  border-color: var(--goal-c);
+  border-color: var(--job-c);
   background: var(--hover-bg);
   color: var(--text);
 }
 .command-bar-indicator.active {
-  border-color: var(--goal-c);
-  box-shadow: 0 0 0 1px var(--goal-c);
+  border-color: var(--job-c);
+  box-shadow: 0 0 0 1px var(--job-c);
 }
 
 .command-bar-name {
@@ -597,6 +597,12 @@ label.muted-text {
   margin-top: 1px;
 }
 
+.feed-exec-meta {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
 .feed-stats {
   flex-shrink: 0;
   display: flex;
@@ -641,6 +647,7 @@ label.muted-text {
   animation: dot-pulse 1.4s ease-in-out infinite;
 }
 .queue-status.completed { color: var(--success); }
+.queue-status.exhausted { color: var(--warning); }
 .queue-status.error { color: var(--danger); }
 .queue-status.cancelled { color: var(--text-muted); text-decoration: line-through; }
 .queue-status.timed_out { color: var(--warning); }
@@ -755,7 +762,7 @@ label.muted-text {
   line-height: var(--line-height-body);
 }
 
-.goal-summary-inline {
+.job-summary-inline {
   font-size: var(--text-md);
   color: var(--text-muted);
   background: transparent;
@@ -768,16 +775,16 @@ label.muted-text {
   line-height: var(--line-height-body);
   transition: border-color 0.15s;
 }
-.goal-summary-inline:hover {
+.job-summary-inline:hover {
   border-color: var(--border);
 }
-.goal-summary-inline:focus {
+.job-summary-inline:focus {
   border-color: var(--accent);
   outline: none;
   background: var(--surface);
 }
 
-.goal-summary-display {
+.job-summary-display {
   font-size: var(--text-md);
   color: var(--text-muted);
   margin-bottom: var(--space-4);
@@ -786,7 +793,7 @@ label.muted-text {
   border-radius: var(--radius-sm);
   cursor: text;
 }
-.goal-summary-display:hover {
+.job-summary-display:hover {
   background: var(--surface-hover);
 }
 
@@ -1575,14 +1582,14 @@ label.muted-text {
   margin-bottom: var(--space-2);
 }
 
-.health-goal-dot {
+.health-job-dot {
   width: var(--size-dot-lg);
   height: var(--size-dot-lg);
   border-radius: var(--radius-circle);
   flex-shrink: 0;
 }
 
-.health-goal-name {
+.health-job-name {
   font-size: var(--text-md);
   font-weight: bold;
   flex: 1;
@@ -1786,7 +1793,7 @@ label.muted-text {
   margin-bottom: var(--space-3);
 }
 
-.tool-usage-goal-name {
+.tool-usage-job-name {
   font-size: var(--text-md);
   font-weight: bold;
 }
@@ -2020,6 +2027,7 @@ label.muted-text {
 }
 
 .event-chip.completed { color: var(--success); border-color: var(--success); }
+.event-chip.exhausted { color: var(--warning); border-color: var(--warning); }
 .event-chip.failed { color: var(--danger); border-color: var(--danger); }
 .event-chip.cancelled { color: var(--text-muted); border-color: var(--border); }
 .event-chip.timed_out { color: var(--warning); border-color: var(--warning); }
@@ -2802,13 +2810,13 @@ label.muted-text {
 
 /* ── Job Detail Header Row ── */
 
-.goal-header {
+.job-header {
   display: flex;
   align-items: center;
   gap: var(--space-4);
 }
 
-.goal-header h2 {
+.job-header h2 {
   flex: 1;
   margin-bottom: 0;
 }

@@ -22,8 +22,8 @@ class CreateJobRequest(BaseModel):
 
 class UpdateJobRequest(BaseModel):
     name: str | None = None
+    summary: str | None = None
     description: str | None = None
-    instructions: str | None = None
     model: str | None = None
     allowed_tools: list[str] | None = None
     mcp_servers: list[str] | None = None
@@ -31,12 +31,15 @@ class UpdateJobRequest(BaseModel):
     coalesce_tasks: bool | None = None
     schedule: str | None = None
     timeout: int | None = None
-    depends_on: list[str] | None = None
+    max_turns: int | None = None
+    cascades_from: list[int] | None = None
     require_approval: bool | None = None
     sort_order: int | None = None
+    allowed_internal_tools: list[str] | None = None
+    allowed_dispatch_targets: list[int] | None = None
 
 class ReorderRequest(BaseModel):
-    job_ids: list[str]
+    job_ids: list[int]
 
 
 # ── Routes ─────────────────────────────────────────────────
@@ -54,7 +57,7 @@ async def create_job(req: CreateJobRequest):
 
 
 @router.get("/api/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: int):
     require_project()
     job = await db.get_job(job_id)
     if not job:
@@ -63,16 +66,16 @@ async def get_job(job_id: str):
 
 
 @router.patch("/api/jobs/{job_id}")
-async def update_job(job_id: str, req: UpdateJobRequest):
+async def update_job(job_id: int, req: UpdateJobRequest):
     require_project()
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No updates provided")
 
-    if "depends_on" in updates:
-        new_deps = updates["depends_on"]
-        if job_id in new_deps:
-            raise HTTPException(400, "A job cannot depend on itself")
+    if "cascades_from" in updates:
+        upstreams = updates["cascades_from"]
+        if job_id in upstreams:
+            raise HTTPException(400, "A job cannot cascade from itself")
 
     job = await db.update_job(job_id, updates)
     if not job:
@@ -81,7 +84,7 @@ async def update_job(job_id: str, req: UpdateJobRequest):
 
 
 @router.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str):
+async def delete_job(job_id: int):
     require_project()
     ok = await db.delete_job(job_id)
     if not ok:
@@ -97,7 +100,7 @@ async def reorder_jobs(req: ReorderRequest):
 
 
 @router.get("/api/jobs/{job_id}/subscriptions")
-async def get_job_subscriptions(job_id: str):
+async def get_job_subscriptions(job_id: int):
     require_project()
     job = await db.get_job(job_id)
     if not job:

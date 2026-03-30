@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listGoals, enqueueTask, getQueueSettings, setQueueSettings, queueAll, shelveAll } from './api'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTask, getQueueSettings, setQueueSettings, queueAll, shelveAll } from './api'
 import Feed from './components/Feed'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
@@ -15,7 +15,7 @@ export default function App() {
   const [project, setProject] = useState(null)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState(VIEWS.dashboard)
-  const [goals, setGoals] = useState([])
+  const [jobs, setJobs] = useState([])
   const [chatOpen, setChatOpen] = useState(false)
   const [chatWidth, setChatWidth] = useState(380)
   const chatTrayRef = useRef(null)
@@ -27,22 +27,22 @@ export default function App() {
       .finally(() => setLoading(false))
   }, [])
 
-  const refreshGoals = useCallback(async () => {
+  const refreshJobs = useCallback(async () => {
     try {
-      const list = await listGoals()
-      setGoals(list)
+      const list = await listJobs()
+      setJobs(list)
     } catch {}
   }, [])
 
   useEffect(() => {
-    if (project) refreshGoals()
-  }, [project, refreshGoals])
+    if (project) refreshJobs()
+  }, [project, refreshJobs])
 
   useEffect(() => {
     if (!project) return
-    const interval = setInterval(refreshGoals, 5000)
+    const interval = setInterval(refreshJobs, 5000)
     return () => clearInterval(interval)
-  }, [project, refreshGoals])
+  }, [project, refreshJobs])
 
   const handleTabMouseDown = useCallback((e) => {
     e.preventDefault()
@@ -77,7 +77,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <nav className="rail">
-        <div className="rail-logo" onClick={() => { setProject(null); setGoals([]) }} title="Switch project">⬡</div>
+        <div className="rail-logo" onClick={() => { setProject(null); setJobs([]) }} title="Switch project">⬡</div>
         <button
           className={`rail-icon ${view === VIEWS.dashboard ? 'active' : ''}`}
           onClick={() => setView(VIEWS.dashboard)}
@@ -96,7 +96,7 @@ export default function App() {
         <button
           className={`rail-icon ${view === VIEWS.tasks ? 'active' : ''}`}
           onClick={() => setView(VIEWS.tasks)}
-          title="Goals"
+          title="Jobs"
         >◉</button>
         <button
           className={`rail-icon ${view === VIEWS.files ? 'active' : ''}`}
@@ -117,10 +117,10 @@ export default function App() {
       </nav>
 
       <div className="main-area">
-        <CommandBar goals={goals} onNavigate={setView} refreshGoals={refreshGoals} />
+        <CommandBar jobs={jobs} onNavigate={setView} refreshJobs={refreshJobs} />
 
         {view === VIEWS.feed && <Feed />}
-        {view === VIEWS.tasks && <Tasks goals={goals} onRefresh={refreshGoals} />}
+        {view === VIEWS.tasks && <Tasks jobs={jobs} onRefresh={refreshJobs} />}
         {view === VIEWS.queue && <Queue />}
         {view === VIEWS.files && <Files />}
         {view === VIEWS.mcp && <McpServers />}
@@ -144,9 +144,9 @@ export default function App() {
   )
 }
 
-function CommandBar({ goals, onNavigate, refreshGoals }) {
+function CommandBar({ jobs, onNavigate, refreshJobs }) {
   const [autoQueue, setAutoQueue] = useState(false)
-  const [popout, setPopout] = useState(null) // goal id
+  const [popout, setPopout] = useState(null) // job id
   const [context, setContext] = useState('')
   const [dispatching, setDispatching] = useState(false)
   const popoutRef = useRef(null)
@@ -175,53 +175,54 @@ function CommandBar({ goals, onNavigate, refreshGoals }) {
     await setQueueSettings({ auto_dispatch: next }).catch(() => setAutoQueue(!next))
   }
 
-  const handleDispatch = async (goalId) => {
+  const handleDispatch = async (jobId) => {
     setDispatching(true)
     try {
-      await enqueueTask(goalId, context || undefined)
+      await enqueueTask(jobId, context || undefined)
       setPopout(null)
       setContext('')
-      refreshGoals()
+      refreshJobs()
+      window.dispatchEvent(new Event('queue-refresh'))
     } catch {}
     setDispatching(false)
   }
 
   const handleQueueAll = async () => {
     await queueAll().catch(() => {})
-    refreshGoals()
+    refreshJobs()
     window.dispatchEvent(new Event('queue-refresh'))
   }
 
   const handleShelveAll = async () => {
     await shelveAll().catch(() => {})
-    refreshGoals()
+    refreshJobs()
     window.dispatchEvent(new Event('queue-refresh'))
   }
 
-  const hasPending = goals.some(g => (g.properties?.pending_count || 0) > 0)
-  const hasQueued = goals.some(g => (g.properties?.queued_count || 0) > 0)
+  const hasPending = jobs.some(j => (j.properties?.pending_count || 0) > 0)
+  const hasQueued = jobs.some(j => (j.properties?.queued_count || 0) > 0)
 
   return (
     <div className="command-bar">
-      <div className="command-bar-goals">
-        {goals.map((g, i) => {
-          const p = g.properties || {}
+      <div className="command-bar-jobs">
+        {jobs.map((j, i) => {
+          const p = j.properties || {}
           const colorIdx = i % 10
           const state = p.running ? 'active' : (p.queued_count > 0 ? 'queued' : (p.pending_count > 0 ? 'pending' : 'idle'))
           return (
-            <div key={g.id} className="command-bar-indicator-wrap" ref={popout === g.id ? popoutRef : undefined}>
+            <div key={j.id} className="command-bar-indicator-wrap" ref={popout === j.id ? popoutRef : undefined}>
               <button
                 className={`command-bar-indicator ${state}`}
-                style={{ '--goal-c': `var(--goal-color-${colorIdx})` }}
-                onClick={() => { setPopout(popout === g.id ? null : g.id); setContext('') }}
-                title={`${g.name} — ${state}`}
+                style={{ '--job-c': `var(--job-color-${colorIdx})` }}
+                onClick={() => { setPopout(popout === j.id ? null : j.id); setContext('') }}
+                title={`${j.name} — ${state}`}
               >
                 <span className={`command-bar-dot ${state}`} />
-                <span className="command-bar-name">{g.name}</span>
+                <span className="command-bar-name">{j.name}</span>
               </button>
-              {popout === g.id && (
+              {popout === j.id && (
                 <div className="command-bar-popout">
-                  <div className="command-bar-popout-header">{g.name}</div>
+                  <div className="command-bar-popout-header">{j.name}</div>
                   <textarea
                     className="command-bar-popout-context"
                     value={context}
@@ -232,14 +233,14 @@ function CommandBar({ goals, onNavigate, refreshGoals }) {
                     onKeyDown={e => {
                       if (e.key === 'Enter' && !e.shiftKey && !dispatching) {
                         e.preventDefault()
-                        handleDispatch(g.id)
+                        handleDispatch(j.id)
                       }
                       if (e.key === 'Escape') { setPopout(null); setContext('') }
                     }}
                   />
                   <button
                     className="primary small"
-                    onClick={() => handleDispatch(g.id)}
+                    onClick={() => handleDispatch(j.id)}
                     disabled={dispatching}
                   >
                     {dispatching ? 'Dispatching...' : '▶ Dispatch'}
@@ -249,7 +250,7 @@ function CommandBar({ goals, onNavigate, refreshGoals }) {
             </div>
           )
         })}
-        {goals.length === 0 && <span className="muted-text">No goals configured</span>}
+        {jobs.length === 0 && <span className="muted-text">No jobs configured</span>}
       </div>
 
       <div className="command-bar-actions">

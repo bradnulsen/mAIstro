@@ -11,7 +11,7 @@ reviewed-by: Architect
 executes three queries unconditionally:
 
 ```python
-jobs  = await db.list_jobs()          # 3 SQL queries (jobs + running + all properties)
+jobs = await db.list_jobs()         # 3 SQL queries (jobs + running + all properties)
 queue = await db.get_task_queue(limit=10)  # JOIN + GROUP BY
 git_summary = git.log_oneline(...)    # subprocess
 ```

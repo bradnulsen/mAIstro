@@ -7,8 +7,8 @@ export const TRIGGER_ICONS = {
   human: '👤',
   task: '🤖',
   resume: '↻',
-  retry: '⟳',
-  dependency: '⛓',
+  reply: '⟳',
+  cascade: '⛓',
   schedule: '⏰',
 }
 
@@ -68,6 +68,36 @@ export function formatDuration(startStr, endStr) {
   return `${hrs}h ${remMins}m`
 }
 
+/** Format a duration in seconds as a human-readable string. */
+export function formatDurationSecs(secs) {
+  if (secs == null) return ''
+  secs = Math.max(0, Math.round(secs))
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  const remSecs = secs % 60
+  if (mins < 60) return `${mins}m ${remSecs}s`
+  const hrs = Math.floor(mins / 60)
+  const remMins = mins % 60
+  return `${hrs}h ${remMins}m`
+}
+
+/** Human-readable labels for task event types. */
+export const EVENT_LABELS = {
+  created: 'Created',
+  queued: 'Queued',
+  unqueued: 'Unqueued',
+  active: 'Started',
+  completed: 'Completed',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  timed_out: 'Timed Out',
+  interrupted: 'Interrupted',
+  rejected: 'Rejected',
+  approved: 'Approved',
+  coalesced: 'Coalesced',
+  uncoalesced: 'Uncoalesced',
+}
+
 /* ── Task status derivation and labels ── */
 
 export const STATUS_LABELS = {
@@ -76,6 +106,7 @@ export const STATUS_LABELS = {
   pending_approval: 'Needs Approval',
   running: 'Running',
   completed: 'Completed',
+  exhausted: 'Exhausted',
   error: 'Error',
   cancelled: 'Cancelled',
   timed_out: 'Timed Out',
@@ -87,44 +118,29 @@ export const TRIGGER_LABELS = {
   manual: 'User',
   commit: 'Commit',
   resume: 'Resume',
-  retry: 'Retry',
-  dependency: 'Dependency',
+  reply: 'Reply',
+  cascade: 'Cascade',
   schedule: 'Schedule',
 }
 
-/** Get task status — uses authoritative status column from backend,
- *  with fallback derivation for backward compatibility. */
+/** Get task status — uses authoritative status column from backend.
+ *  The status column is materialized from the task_events log. */
 export function getTaskStatus(item) {
-  // Use authoritative status column when available
-  if (item.status) {
-    const s = item.status
-    // Map backend statuses to UI statuses
-    if (s === 'active') return 'running'
-    if (s === 'failed') return 'error'
-    // Check approval gate overlay (orthogonal to lifecycle status)
-    if ((s === 'pending' || s === 'queued') && item.approval === 'pending') return 'pending_approval'
-    return s
-  }
-  // Fallback: derive from lifecycle fields (pre-migration data)
-  if (item.error) {
-    if (item.error === 'cancelled') return 'cancelled'
-    if (item.error === 'timed out') return 'timed_out'
-    if (item.error === 'interrupted') return 'interrupted'
-    if (item.error === 'rejected') return 'rejected'
-    return 'error'
-  }
-  if (item.completed_at) return 'completed'
-  if (item.started_at) return 'running'
-  if (item.approval === 'pending') return 'pending_approval'
-  if (item.queued_at) return 'queued'
-  return 'pending'
+  const s = item.status
+  if (!s) return 'pending'
+  // Map backend statuses to UI statuses
+  if (s === 'active') return 'running'
+  if (s === 'failed') return 'error'
+  // Check approval gate overlay (orthogonal to lifecycle status)
+  if ((s === 'pending' || s === 'queued') && item.approval === 'pending') return 'pending_approval'
+  return s
 }
 
 /** Format trigger type with detail suffix */
 export function triggerLabel(item) {
   const base = TRIGGER_LABELS[item.trigger] || item.trigger
   if (item.trigger === 'commit' && item.trigger_detail) return `${base} (${item.trigger_detail.slice(0, 8)})`
-  if (item.trigger === 'dependency' && item.trigger_detail) return `${base} (${item.trigger_detail})`
+  if (item.trigger === 'cascade' && item.trigger_detail) return `${base} (${item.trigger_detail})`
   if (item.trigger === 'manual' && item.trigger_detail) return `${base} @ ${item.trigger_detail.slice(0, 8)}`
   if (item.trigger === 'schedule' && item.trigger_detail) return `${base} (${item.trigger_detail})`
   return base

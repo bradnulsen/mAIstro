@@ -112,17 +112,17 @@ function HealthSummary({ health, jobColorMap }) {
     <section className="dashboard-section">
       <h3>Job Health</h3>
       <div className="health-grid">
-        {sorted.map(job => {
-          const rate = job.total > 0 ? job.completed / job.total : 1
+        {sorted.map(g => {
+          const rate = g.total > 0 ? g.completed / g.total : 1
           const pct = Math.round(rate * 100)
-          const trend = getTrend(rate, job.prev_success_rate)
-          const color = jobColor(job.job_id, jobColorMap)
+          const trend = getTrend(rate, g.prev_success_rate)
+          const color = jobColor(g.job_id, jobColorMap)
 
           return (
-            <div key={job.job_id} className={`health-card ${pct < 80 ? 'warn' : ''} ${pct < 50 ? 'danger' : ''}`}>
+            <div key={g.job_id} className={`health-card ${pct < 80 ? 'warn' : ''} ${pct < 50 ? 'danger' : ''}`}>
               <div className="health-card-header">
                 <span className="health-job-dot" style={{ background: color }} />
-                <span className="health-job-name">{job.job_name}</span>
+                <span className="health-job-name">{g.job_name}</span>
                 <span className={`health-trend ${trend}`}>{trend === 'up' ? '\u2191' : trend === 'down' ? '\u2193' : '\u2013'}</span>
               </div>
               <div className="health-rate">{pct}%</div>
@@ -130,12 +130,12 @@ function HealthSummary({ health, jobColorMap }) {
                 <div className="health-bar-fill" style={{ width: `${pct}%` }} />
               </div>
               <div className="health-breakdown">
-                <span title="Completed">{job.completed} ok</span>
-                {job.failed > 0 && <span className="health-bad" title="Failed">{job.failed} fail</span>}
-                {job.timed_out > 0 && <span className="health-bad" title="Timed out">{job.timed_out} timeout</span>}
-                {job.cancelled > 0 && <span title="Cancelled">{job.cancelled} cancel</span>}
-                {job.interrupted > 0 && <span title="Interrupted">{job.interrupted} int</span>}
-                {job.rejected > 0 && <span title="Rejected">{job.rejected} rej</span>}
+                <span title="Completed">{g.completed} ok</span>
+                {g.failed > 0 && <span className="health-bad" title="Failed">{g.failed} fail</span>}
+                {g.timed_out > 0 && <span className="health-bad" title="Timed out">{g.timed_out} timeout</span>}
+                {g.cancelled > 0 && <span title="Cancelled">{g.cancelled} cancel</span>}
+                {g.interrupted > 0 && <span title="Interrupted">{g.interrupted} int</span>}
+                {g.rejected > 0 && <span title="Rejected">{g.rejected} rej</span>}
               </div>
             </div>
           )
@@ -184,14 +184,14 @@ function Timeline({ timeline, windowDays, jobColorMap }) {
   }
 
   // Group by job for swimlanes
-  const jobs = []
+  const lanes = []
   const jobIndex = {}
   timeline.forEach(t => {
     if (!(t.job_id in jobIndex)) {
-      jobIndex[t.job_id] = jobs.length
-      jobs.push({ id: t.job_id, name: t.job_name, tasks: [] })
+      jobIndex[t.job_id] = lanes.length
+      lanes.push({ id: t.job_id, name: t.job_name, tasks: [] })
     }
-    jobs[jobIndex[t.job_id]].tasks.push(t)
+    lanes[jobIndex[t.job_id]].tasks.push(t)
   })
 
   return (
@@ -199,13 +199,13 @@ function Timeline({ timeline, windowDays, jobColorMap }) {
       <h3>Timeline</h3>
       <div className="timeline-container">
         <TimelineAxis windowStart={windowStart} now={now} />
-        {jobs.map(job => {
-          const color = jobColor(job.id, jobColorMap)
+        {lanes.map(g => {
+          const color = jobColor(g.id, jobColorMap)
           return (
-            <div key={job.id} className="timeline-lane">
-              <div className="timeline-lane-label">{job.name}</div>
+            <div key={g.id} className="timeline-lane">
+              <div className="timeline-lane-label">{g.name}</div>
               <div className="timeline-lane-track">
-                {job.tasks.map(t => {
+                {g.tasks.map(t => {
                   const start = new Date(t.started_at + 'Z').getTime()
                   const end = t.completed_at ? new Date(t.completed_at + 'Z').getTime() : now
                   const span = now - windowStart
@@ -284,18 +284,23 @@ function DispatchChains({ chains, jobColorMap }) {
 
   // Build dispatch pattern: which jobs dispatch which
   // trigger_detail for agent tasks is "source_job_id#source_task_id"
-  const patterns = {}  // "source_job -> target_job" -> count
+  const patterns = {}  // "source -> target" -> count
   const taskJobMap = {}  // task_id -> job_id (from the chains data)
-  chains.forEach(t => { taskJobMap[t.id] = t.job_id })
+  const jobNameMap = {}  // job_id -> job_name
+  chains.forEach(t => {
+    taskJobMap[t.id] = t.job_id
+    jobNameMap[t.job_id] = t.job_name
+  })
 
-  /** Parse agent trigger_detail ("job-slug#123") → { jobId, taskId } or null */
+  /** Parse agent trigger_detail ("jobId#taskId") → { jobId, taskId } or null */
   function parseAgentDetail(detail) {
     if (!detail) return null
     const idx = detail.lastIndexOf('#')
     if (idx < 1) return null
+    const jobId = parseInt(detail.slice(0, idx))
     const taskId = parseInt(detail.slice(idx + 1))
-    if (isNaN(taskId)) return null
-    return { jobId: detail.slice(0, idx), taskId }
+    if (isNaN(jobId) || isNaN(taskId)) return null
+    return { jobId, taskId }
   }
 
   // For chain depth, trace back through trigger_detail
@@ -306,7 +311,9 @@ function DispatchChains({ chains, jobColorMap }) {
     const parsed = parseAgentDetail(t.trigger_detail)
     // Source job: prefer the explicit job ID from trigger_detail, fall back to task map
     const sourceJob = parsed ? parsed.jobId : null
-    const key = `${sourceJob || '?'} -> ${t.job_id}`
+    const sourceName = (sourceJob != null && jobNameMap[sourceJob]) || sourceJob || '?'
+    const targetName = jobNameMap[t.job_id] || t.job_id
+    const key = `${sourceName} -> ${targetName}`
     patterns[key] = (patterns[key] || 0) + 1
 
     // Estimate depth by tracing the dispatch chain
@@ -386,18 +393,18 @@ function ToolUsage({ tools, jobColorMap }) {
     <section className="dashboard-section">
       <h3>Tool Usage</h3>
       <div className="tool-usage-grid">
-        {tools.map(job => {
-          const color = jobColor(job.job_id, jobColorMap)
-          const toolEntries = Object.entries(job.tools)
+        {tools.map(g => {
+          const color = jobColor(g.job_id, jobColorMap)
+          const toolEntries = Object.entries(g.tools)
             .sort((a, b) => b[1].count - a[1].count)
           const totalCalls = toolEntries.reduce((s, [, v]) => s + v.count, 0)
           const totalErrors = toolEntries.reduce((s, [, v]) => s + v.errors, 0)
 
           return (
-            <div key={job.job_id} className="tool-usage-card">
+            <div key={g.job_id} className="tool-usage-card">
               <div className="tool-usage-header">
                 <span className="health-job-dot" style={{ background: color }} />
-                <span className="tool-usage-job-name">{job.job_name}</span>
+                <span className="tool-usage-job-name">{g.job_name}</span>
                 <span className="tool-usage-summary">{totalCalls} calls{totalErrors > 0 && <span className="health-bad">, {totalErrors} errors</span>}</span>
               </div>
               <div className="tool-usage-list">

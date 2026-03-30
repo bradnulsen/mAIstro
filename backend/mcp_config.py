@@ -39,7 +39,8 @@ def build_mcp_config(
             "command": sys.executable,
             "args": [server_script],
             "env": {
-                "MAISTRO_JOB_ID": job["id"],
+                "MAISTRO_JOB_ID": str(job["id"]),
+                "MAISTRO_JOB_SLUG": job["slug"],
                 "MAISTRO_JOB_NAME": job["name"],
                 "MAISTRO_PROJECT_DIR": project_dir,
                 "MAISTRO_SESSION_ID": session_id,

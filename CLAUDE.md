@@ -32,9 +32,9 @@ Backend runs on http://localhost:8420, frontend on http://localhost:5173. Backen
 - **Realtime**: Server-Sent Events (SSE) for task streaming and chat
 
 ### Data Model
-- **Jobs** (`jobs` table): persistent configuration entities with EAV properties (`job_property_defs` + `job_properties`). Hold name, instructions, subscriptions, model, depends_on, schedule, etc.
-- **Tasks** (`tasks` table): atomic units of work. Each task has exactly one trigger, one context, and belongs to one job via `job_id` FK. Tasks have an authoritative `status` column with a validated state machine (see below). Tasks are never mutated after creation — retry and resume create new tasks and coalesce the original under the new one.
-- **Coalescing**: `coalesced_id` FK on tasks links subordinate tasks to a root task. Coalesce = set FK, decompose = clear FK. Depth-1 invariant maintained by `_flatten_coalesce`.
+- **Jobs** (`jobs` table): persistent configuration entities with `INTEGER PRIMARY KEY AUTOINCREMENT` ID and a `slug` (derived from name via `slugify()`). EAV properties in `job_property_defs` + `job_properties`. Hold name, summary, description, subscriptions, model, schedule, etc. Description is the north star — a declarative, first-principle definition of what good output looks like. Slug is used for git authorship (`<slug>@maistro.local`) and branch naming (`<slug>/description`).
+- **Tasks** (`tasks` table): atomic units of work. Each task has exactly one trigger, one context, and belongs to one job via `job_id` INTEGER FK. Tasks have an authoritative `status` column with a validated state machine (see below). Tasks are never mutated after creation — reply and resume create new tasks and coalesce the original under the new one.
+- **Coalescing**: `coalesced_id` FK on tasks links subordinate tasks to a root task. Coalesce = set FK, decompose = clear FK. Depth-1 invariant maintained by `_flatten_coalesce`. `coalesce_under()` handles re-parenting atomically (used by reply/resume).
 
 ### Task Status State Machine
 Tasks have an authoritative `status` column. Legal transitions:
@@ -50,7 +50,7 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 
 ### Data Flow
 1. User opens a target project directory via the UI — backend initializes `.maistro/maistro.db` inside it and installs a git post-commit hook
-2. Jobs are configured with `description` (short reference), `instructions` (detailed job-specific prompt), subscription glob patterns, `depends_on` (list of upstream job IDs), and a model
+2. Jobs are configured with `summary` (one-liner), `description` (full north star text), subscription glob patterns, and a model
 3. **Task queue**: all triggers (manual, watch, scheduled, dependency, agent) create an atomic `tasks` record. A background worker pulls from the queue and processes one task at a time
 4. The worker builds the system/user prompt, spawns the Claude CLI subprocess, streams NDJSON output, and stores messages durably in a chat session linked to the task
 5. The CLI agent commits its own changes via its tools — no auto-commit from the platform
@@ -77,16 +77,17 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 - `backend/job_routes.py` — Job CRUD, reorder, and subscription routes (APIRouter)
 - `backend/queue_routes.py` — Task lifecycle and queue control routes (APIRouter)
 - `backend/chat.py` — Chat/conversation routes for executive assistant interface (APIRouter, distinct from task dispatches)
-- `backend/database.py` — Project SQLite schema, EAV property system, migrations, all CRUD helpers (async)
+- `backend/database.py` — Project SQLite schema, EAV property system, all CRUD helpers (async)
 - `backend/appstate.py` — App-level SQLite DB for recent-projects list (sync, separate from project DB)
 - `backend/state.py` — Shared mutable state (`PROJECT_DIR`) and utilities (`utcnow`, `require_project`) to avoid circular imports
 - `backend/git.py` — Git subprocess abstraction (log, diff, commit, hook installer)
 - `backend/cli.py` — Claude CLI subprocess invocation: stdin piping, NDJSON parsing, event schema. On Windows, bypasses `.CMD` wrappers by extracting the Node.js script path and invoking directly
-- `backend/dispatch.py` — Prompt assembly (`build_task_system_prompt`/`build_user_prompt`), task lifecycle, watch trigger matching, job manifest
+- `backend/dispatch.py` — Prompt assembly (`build_dispatch_system_prompt`/`build_user_prompt`), watch trigger matching, job manifest
 - `backend/scheduler.py` — Cron-based background scheduler: checks job schedules every 30s, enqueues tasks when due
 - `backend/worker.py` — Background task worker: pulls from queue, runs tasks one at a time, manages lifecycle via `transition_task()`, handles cancellation/timeout watchdog and stale task sweep on startup
 - `backend/mcp_server.py` — Internal MCP stdio server: git tools, project context, inter-agent dispatch
 - `backend/mcp_config.py` — MCP config generator for Claude CLI invocations
+- `backend/mcp_probe.py` — External MCP server tool discovery via stdio handshake (used by tool inventory endpoint)
 - `frontend/src/App.jsx` — Shell with rail navigation, project opener, view router
 - `frontend/src/api.js` — API client with `fetchJSON` and `fetchSSE` helpers
 - `frontend/src/App.css` — Design token system (all visual constants as CSS custom properties)
@@ -95,26 +96,23 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 
 ## Conventions
 
-- Job IDs are slugified from names (see `database.slugify`)
-- Job commit authorship: `<JobName> <<job-id>@maistro.local>`
+- Job IDs are integers (autoincrement). Slugs are derived from names (`database.slugify`) and stored on the job record for git authorship and branch naming
+- Job commit authorship: `<GoalName> <<job-id>@maistro.local>`
 - SSE event types: `text`, `result`, `error`, `session_id`, `task`, `tool_use`
-- Task triggers: `manual`, `commit` (watch), `dependency` (upstream job completed), `schedule`, `resume`, `retry`
+- Task triggers: `manual`, `commit` (watch), `dependency` (upstream job completed), `schedule`, `resume`, `reply`
 - Watch behavior: jobs with non-empty subscriptions auto-trigger on matching commits (no separate toggle — subscriptions presence = watch active)
 - Task coalescing: each task is atomic (one trigger, one context). `coalesced_id` FK links subordinate tasks to a root. `coalesce_tasks=true` on a job auto-coalesces new tasks at enqueue time. Manual coalesce/decompose via drag-drop in the UI is the same FK operation.
-- Task status is authoritative via the `status` column. The frontend `util.js:getTaskStatus()` uses it with a fallback derivation from timestamps for pre-migration data. Running state for jobs is derived from tasks with `status='active'`, not stored as a job property
+- Task status is authoritative via the `status` column. The frontend `util.js:getTaskStatus()` uses it with a fallback derivation from timestamps. Running state for jobs is derived from tasks with `status='active'`, not stored as a job property
 - Subscriptions serve dual purpose: trigger matching (watch) and context injection (all tasks)
 - Task columns: `trigger` (type), `trigger_detail` (specifics), `context` (pre-formatted text) — real columns, not JSON
 - Queue can be auto-processing or paused — controlled via `/api/queue/settings` (auto_dispatch toggle)
 - Backend port: 8420, Frontend port: 5173
 
-### Database Schema & Migrations
-- Schema version tracked in `config` table (`schema_version` key), currently at v4
-- Migrations run automatically in `init_db()` — each version step is a function (`_migrate_cascade_fks`, etc.)
-- v0→v1: Added CASCADE FKs on `tasks.job_id` and `chat_sessions.job_id` (SQLite requires table recreation)
-- v1→v2: Added `status` column to tasks + backfilled from lifecycle timestamps
-- v2→v3: Dropped stale timestamp-based indices, added `idx_tasks_job_status`
-- v3→v4: Added `task_events` table (Phase 1 dual-write) + backfilled events from existing task timestamps
-- When adding schema changes, increment version and add a migration function
+### Database Schema
+- No migration system — `SCHEMA_SQL` uses `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` for idempotent init
+- `SEED_SQL` uses `INSERT OR IGNORE` for property defs and config defaults
+- All tables use `job` terminology: `jobs` (INTEGER PK + slug), `job_properties`, `job_property_defs`, `job_id` INTEGER FK columns
+- To add schema changes: update `SCHEMA_SQL` directly. Existing DBs will need manual migration or recreation.
 
 ### Project Switch Coordination
 - `database.py` implements a readers-draining protocol: `db_read_guard()` context manager tracks active readers, `close_db()` sets `_closing` flag and waits for all readers to drain (10s timeout)
@@ -129,15 +127,17 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 
 ## Implementation Status
 
-**Built and working**: Two-stage queue, all 5 trigger types + resume/retry, coalescing (auto + manual merge/split), approval gates, timeout enforcement, internal MCP server (12 tools), three-dimensional tool control, inter-agent dispatch with depth limiting, activity dashboard (health/timeline/chains/tool usage), outcome summaries, all UI views (Dispatch, Feed, Jobs, Files, MCP Servers, Dashboard, Settings, Chat).
+**Built and working**: Two-stage queue, all 5 trigger types + resume/reply, coalescing (auto + manual merge/split), approval gates, timeout enforcement, internal MCP server (12 tools), three-dimensional tool control, inter-agent dispatch with depth limiting, activity dashboard (health/timeline/chains/tool usage), outcome summaries, all UI views (Dispatch, Feed, Jobs, Files, MCP Servers, Dashboard, Settings, Chat).
 
 **Designed but not yet built** (see `STRATEGY.md` priorities):
 - **P1: Task Session Interrogation** — resume completed task sessions in read-only mode for follow-up questions. Infrastructure exists (CLI `--resume`, `allowed_internal_tools`). Needs: UI surface in chat tray, read-only tool stripping on dispatch.
 - **P2: Notifications** — in-app feed, desktop notifications, per-job rules, webhook integration.
 
-**Known technical debt** (see `REMEDIATION.md`):
-- `database.py` is a 1300+ line god module (R2) — split planned along domain boundaries
+**Known technical debt** (see `REMEDIATION.md` for full detail and sequencing):
+- `database.py` is a 1300+ line god module; split plan documented as R2
 - `worker.py` and `chat.py` duplicate CLI execution harness (R4)
+- Coalescing logic spread across 12+ touch points; depth-1 invariant maintained only by code discipline (R5)
 - `git.py` uses sync `subprocess.run`, blocks async event loop (R7)
+- Chat events silently discarded on batch write failure — completed tasks can have zero stored output (R11)
 - Thinking blocks from CLI dropped during streaming (R12)
-- Task execution metadata (`stop_reason`, `num_turns`, `cost_usd`) not captured (R13)
+- CLI `result` metadata (`stop_reason`, `num_turns`, `cost_usd`) silently dropped — max-turns exhaustion looks identical to success (R13); `max_turns` hardcoded at 50 in `cli.py`

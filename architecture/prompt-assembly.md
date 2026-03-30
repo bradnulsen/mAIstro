@@ -12,7 +12,7 @@ It establishes three behavioral contracts:
 
 1. **Execution mode**: headless, autonomous, no questions or clarification requests. The agent makes decisions based on available context.
 2. **Documentation principle**: files are first-principle representations of current state, not task lists. Reasoning belongs in commit messages.
-3. **Git workflow**: commit with descriptive messages, use `[JobName]` prefix, stage related changes together.
+3. **Git workflow**: commit with descriptive messages, use `[GoalName]` prefix, stage related changes together.
 
 The system prompt is delivered via stdin wrapped in `<system-instructions>` tags. It is omitted on resume sessions (the CLI retains the original).
 
@@ -48,7 +48,7 @@ When multiple triggers have been coalesced into a single task, the section heade
 ### 4. Job Registry (Manifest)
 A listing of all jobs in the project with their names, descriptions, and subscription patterns. This gives the agent awareness of its neighbors — useful for jobs that need to coordinate or understand the broader system.
 
-Built by `build_job_manifest()` which queries all jobs at dispatch time.
+Built by `build_goal_manifest()` which queries all jobs at dispatch time.
 
 ### 5. Subscribed Files
 If the job has subscription glob patterns, they're resolved against the working tree. Matching files are listed with paths and sizes. The agent reads their contents via its tools as needed — the list is a pointer, not inline content.

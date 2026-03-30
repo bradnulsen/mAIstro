@@ -30,7 +30,7 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `mcp_servers` | json | `[]` | External MCP servers to enable, selected from registered servers |
 | `sort_order` | integer | `0` | Explicit ordering in the job list |
 
-Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_job`) accepts a partial set of properties and writes only the provided keys as overrides.
+Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_goal`) accepts a partial set of properties and writes only the provided keys as overrides.
 
 ## Ordering
 

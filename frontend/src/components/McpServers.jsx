@@ -125,7 +125,7 @@ export default function McpServers() {
                     type="checkbox"
                     checked={!!s.enabled}
                     onChange={e => handleToggleMcp(s.name, e.target.checked)}
-                    title={s.enabled ? 'Enabled — available to goals' : 'Disabled — unavailable to any goal'}
+                    title={s.enabled ? 'Enabled — available to jobs' : 'Disabled — unavailable to any job'}
                   />
                   <div className="mcp-server-content">
                     <div className="mcp-server-name">

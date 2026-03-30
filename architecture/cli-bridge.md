@@ -14,7 +14,7 @@ Claude CLI is located via `shutil.which("claude")` at invocation time. The proce
 claude -p --output-format stream-json --model <model> --max-turns <max_turns> --verbose --dangerously-skip-permissions
 ```
 
-The `--max-turns` value comes from the goal's `max_turns` property. When the agent reaches this limit, the CLI stops the session and the NDJSON result event carries `stop_reason: "max_turns"`. The platform uses this to distinguish exhaustion from natural completion.
+The `--max-turns` value comes from the job's `max_turns` property. When the agent reaches this limit, the CLI stops the session and the NDJSON result event carries `stop_reason: "max_turns"`. The platform uses this to distinguish exhaustion from natural completion.
 
 Optional flags:
 - `--resume <session_id>` for resume tasks

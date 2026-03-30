@@ -14,23 +14,24 @@ import {
 
 const getStatus = getTaskStatus
 
-const TERMINAL_STATES = new Set(['completed', 'failed', 'error', 'cancelled', 'timed_out', 'interrupted', 'rejected'])
+const TERMINAL_STATES = new Set(['completed', 'exhausted', 'failed', 'error', 'cancelled', 'timed_out', 'interrupted', 'rejected'])
 
-/** Deterministic goal color from CSS tokens — matches Dashboard timeline palette */
-let _goalColors = null
-function goalColorForId(goalId) {
-  if (!_goalColors) {
+/** Deterministic job color from CSS tokens — matches Dashboard timeline palette */
+let _jobColors = null
+function jobColorForId(jobId) {
+  if (!_jobColors) {
     const root = document.documentElement
-    _goalColors = Array.from({ length: 10 }, (_, i) =>
-      getComputedStyle(root).getPropertyValue(`--goal-color-${i}`).trim()
+    _jobColors = Array.from({ length: 10 }, (_, i) =>
+      getComputedStyle(root).getPropertyValue(`--job-color-${i}`).trim()
     )
-    if (_goalColors.every(c => !c)) {
-      _goalColors = ['#4a90d9','#d94a4a','#4ad97a','#d9a84a','#9b59b6','#1abc9c','#e67e22','#3498db','#e74c3c','#2ecc71']
+    if (_jobColors.every(c => !c)) {
+      _jobColors = ['#4a90d9','#d94a4a','#4ad97a','#d9a84a','#9b59b6','#1abc9c','#e67e22','#3498db','#e74c3c','#2ecc71']
     }
   }
+  const s = String(jobId || '')
   let hash = 0
-  for (let i = 0; i < (goalId || '').length; i++) hash = ((hash << 5) - hash + goalId.charCodeAt(i)) | 0
-  return _goalColors[((hash % 10) + 10) % 10]
+  for (let i = 0; i < s.length; i++) hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0
+  return _jobColors[((hash % 10) + 10) % 10]
 }
 
 function isPreExecution(item) {
@@ -48,9 +49,18 @@ function sortPreExecution(items) {
   })
 }
 
+/** Format execution metadata (turns, cost) as a compact string */
+function execMeta(item) {
+  const parts = []
+  if (item.num_turns != null) parts.push(`${item.num_turns} turn${item.num_turns !== 1 ? 's' : ''}`)
+  if (item.cost_usd != null) parts.push(`$${item.cost_usd < 0.01 ? item.cost_usd.toFixed(4) : item.cost_usd.toFixed(2)}`)
+  return parts.length ? parts.join(' · ') : null
+}
+
 /** Human-readable inline reason for non-success terminal states */
 function errorSummary(item, status) {
   if (status === 'completed') return null
+  if (status === 'exhausted') return item.error || 'Hit turn limit'
   if (status === 'cancelled') return 'Cancelled by user'
   if (status === 'timed_out') return 'Exceeded timeout limit'
   if (status === 'interrupted') return 'Process interrupted'
@@ -100,8 +110,13 @@ export default function Queue() {
   useEffect(() => { refresh() }, [refresh])
 
   useEffect(() => {
-    const interval = setInterval(refresh, 5000)
-    return () => clearInterval(interval)
+    // Event-driven updates: subscribe to global queue-change SSE stream.
+    // EventSource auto-reconnects on disconnect.
+    const es = new EventSource('/api/queue/stream')
+    es.addEventListener('queue_changed', () => refresh())
+    // 30s fallback poll in case the SSE stalls
+    const fallback = setInterval(refresh, 30000)
+    return () => { es.close(); clearInterval(fallback) }
   }, [refresh])
 
   // Live streaming state
@@ -384,7 +399,7 @@ export default function Queue() {
               <div className="drawer-handle-bar" />
             </div>
             <div className="detail-drawer-header">
-              <h3>#{selected.id} — {selected.goal_name}</h3>
+              <h3>#{selected.id} — {selected.job_name}</h3>
               <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
 
@@ -500,7 +515,7 @@ export default function Queue() {
 
 /**
  * A single kanban column with specialized drag behavior:
- * - Upcoming (dragMode="merge"): drop onto same-goal task to coalesce
+ * - Upcoming (dragMode="merge"): drop onto same-job task to coalesce
  * - Active (dragMode="reorder"): drop between tasks to change priority
  * Both columns accept cross-column drops as transfers.
  */
@@ -517,7 +532,7 @@ function KanbanColumn({
 
   const computeDropZone = (e, rowEl, draggedItem, targetItem) => {
     if (dragMode === 'merge') {
-      const canMerge = targetItem && draggedItem && targetItem.goal_id === draggedItem.goal_id
+      const canMerge = targetItem && draggedItem && targetItem.job_id === draggedItem.job_id
       return canMerge ? 'merge' : null
     }
     const rect = rowEl.getBoundingClientRect()
@@ -603,13 +618,13 @@ function KanbanColumn({
                 className={`feed-item running ${selected?.id === item.id ? 'active' : ''}`}
                 onClick={() => onSelect(item)}
               >
-                <div className="feed-avatar" style={{ background: goalColorForId(item.goal_id) }}>
-                  {(item.goal_name || '?')[0].toUpperCase()}
+                <div className="feed-avatar" style={{ background: jobColorForId(item.job_id) }}>
+                  {(item.job_name || '?')[0].toUpperCase()}
                 </div>
                 <div className="feed-body">
                   <div className="feed-meta">
                     <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
-                    <span className="feed-author">{item.goal_name}</span>
+                    <span className="feed-author">{item.job_name}</span>
                     <span className="queue-status running">{STATUS_LABELS.running}</span>
                     <span>{formatDate(item.started_at, true)}</span>
                   </div>
@@ -645,8 +660,8 @@ function KanbanColumn({
               onDragLeave={() => { setDragOverIdx(null); setDropZone(null) }}
               onDragEnd={handleDragEnd}
             >
-              <div className="feed-avatar" style={{ background: goalColorForId(item.goal_id) }}>
-                {(item.goal_name || '?')[0].toUpperCase()}
+              <div className="feed-avatar" style={{ background: jobColorForId(item.job_id) }}>
+                {(item.job_name || '?')[0].toUpperCase()}
               </div>
               <div className="feed-body">
                 <div className="feed-meta">
@@ -654,7 +669,7 @@ function KanbanColumn({
                     {TRIGGER_ICONS[item.trigger] || ''}
                     {item.subordinate_count > 0 ? ` (${item.subordinate_count + 1})` : ''}
                   </span>
-                  <span className="feed-author">{item.goal_name}</span>
+                  <span className="feed-author">{item.job_name}</span>
                   {status === 'pending_approval' && (
                     <span className={`queue-status ${status}`}>
                       {STATUS_LABELS[status]}
@@ -701,13 +716,13 @@ function ResolvedColumn({ items, loading, selected, onSelect }) {
               className={`feed-item ${selected?.id === item.id ? 'active' : ''} ${status !== 'completed' ? status : ''}`}
               onClick={() => onSelect(item)}
             >
-              <div className="feed-avatar" style={{ background: goalColorForId(item.goal_id) }}>
-                {(item.goal_name || '?')[0].toUpperCase()}
+              <div className="feed-avatar" style={{ background: jobColorForId(item.job_id) }}>
+                {(item.job_name || '?')[0].toUpperCase()}
               </div>
               <div className="feed-body">
                 <div className="feed-meta">
                   <span className="feed-trigger">{TRIGGER_ICONS[item.trigger] || ''}</span>
-                  <span className="feed-author">{item.goal_name}</span>
+                  <span className="feed-author">{item.job_name}</span>
                   <span className={`queue-status ${status}`}>
                     {STATUS_LABELS[status] || status}
                   </span>
@@ -726,6 +741,9 @@ function ResolvedColumn({ items, loading, selected, onSelect }) {
                       <div className="feed-commits">
                         {item.start_commit.slice(0, 8)}..{item.result_commit.slice(0, 8)}
                       </div>
+                    )}
+                    {execMeta(item) && (
+                      <div className="feed-exec-meta">{execMeta(item)}</div>
                     )}
                   </>
                 )}
@@ -885,11 +903,18 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
           </div>
         )}
 
+        {execMeta(item) && (
+          <div className="detail-section">
+            <label>Execution</label>
+            <div className="detail-meta muted-text">{execMeta(item)}</div>
+          </div>
+        )}
+
         {item.error && status !== 'cancelled' && (
           <div className="detail-section">
-            <label>{status === 'timed_out' ? 'Timed Out' : 'Error'}</label>
-            <div className={`detail-meta ${status === 'timed_out' ? 'warning-text' : 'error-text'}`}>
-              {status === 'timed_out' ? 'Task exceeded timeout limit' : item.error}
+            <label>{status === 'timed_out' ? 'Timed Out' : status === 'exhausted' ? 'Exhausted' : 'Error'}</label>
+            <div className={`detail-meta ${status === 'timed_out' || status === 'exhausted' ? 'warning-text' : 'error-text'}`}>
+              {item.error}
             </div>
           </div>
         )}

@@ -9,6 +9,7 @@ import logging
 
 from backend import database as db, git, state
 from backend.dispatch import run_task, build_trigger_context
+from backend.mcp_probe import probe_server
 from backend.state import utcnow
 
 log = logging.getLogger("maistro.worker")
@@ -22,6 +23,10 @@ _cancel_event: asyncio.Event | None = None
 # ── Live event broadcast ───────────────────────────────────
 # Subscribers keyed by task_id → set of asyncio.Queue.
 _subscribers: dict[int, set[asyncio.Queue]] = {}
+
+# ── Global queue-change broadcast ──────────────────────────
+# Subscribers that want to know when the queue changes (any task).
+_queue_subscribers: set[asyncio.Queue] = set()
 
 
 def subscribe(task_id: int) -> asyncio.Queue:
@@ -49,6 +54,27 @@ def _broadcast(task_id: int, event: dict):
     for q in subs:
         try:
             q.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+
+
+def subscribe_queue() -> asyncio.Queue:
+    """Subscribe to global queue-change notifications. Returns a queue to read from."""
+    q = asyncio.Queue()
+    _queue_subscribers.add(q)
+    return q
+
+
+def unsubscribe_queue(q: asyncio.Queue):
+    """Remove a global queue subscriber."""
+    _queue_subscribers.discard(q)
+
+
+def notify_queue_changed():
+    """Notify all global queue subscribers that the queue state has changed."""
+    for q in _queue_subscribers:
+        try:
+            q.put_nowait({"type": "queue_changed"})
         except asyncio.QueueFull:
             pass
 
@@ -81,6 +107,7 @@ async def stop():
 def notify():
     """Wake the worker loop immediately (call after enqueue or settings change)."""
     _wake_event.set()
+    notify_queue_changed()
 
 
 def cancel(task_id: int) -> bool:
@@ -212,8 +239,22 @@ async def _process_task(task: dict):
     await db.transition_task(task_id, "active",
                              session_id=session_id,
                              start_commit=start_commit)
+    notify_queue_changed()
 
     log.info("[worker] Processing task #%d (job=%s)", task_id, job_id)
+
+    # ── Pre-dispatch health check: probe external MCP servers ──
+    mcp_error = await _check_external_mcp_servers(job)
+    if mcp_error:
+        log.warning("[worker] Task #%d failed MCP health check: %s", task_id, mcp_error)
+        await db.transition_task(task_id, "failed", error=mcp_error)
+        _broadcast(task_id, {"type": "error", "message": mcp_error})
+        _broadcast(task_id, {"type": "_done"})
+        _subscribers.pop(task_id, None)
+        notify_queue_changed()
+        _active_task_id = None
+        _cancel_event = None
+        return
 
     timeout_seconds = job["properties"].get("timeout", 900)
     _timed_out = False
@@ -231,7 +272,8 @@ async def _process_task(task: dict):
 
     full_response = []
     streaming_text = []
-    raw_event_buffer: list[tuple[str, str]] = []
+    # Execution metadata captured from CLI result event
+    _result_meta: dict = {}
 
     try:
         task_with_session = {**task, "session_id": session_id}
@@ -241,8 +283,12 @@ async def _process_task(task: dict):
                                     subordinates=subordinates):
             etype = event.get("type")
 
+            # Incremental persistence: write each raw NDJSON event immediately
             if etype == "_raw":
-                raw_event_buffer.append((event["event_type"], event["raw_json"]))
+                try:
+                    await db.add_chat_event(session_id, event["event_type"], event["raw_json"])
+                except Exception:
+                    log.debug("[worker] Task #%d failed to write chat event", task_id)
                 continue
 
             _broadcast(task_id, event)
@@ -251,21 +297,21 @@ async def _process_task(task: dict):
                 full_response.append(event.get("content", ""))
                 continue
 
-            if etype == "session_id":
+            if etype == "result_meta":
                 cli_sid = event.get("cli_session_id")
                 if cli_sid:
                     await db.update_chat_session(session_id, cli_session_id=cli_sid)
+                _result_meta = {
+                    "stop_reason": event.get("stop_reason"),
+                    "num_turns": event.get("num_turns"),
+                    "cost_usd": event.get("cost_usd"),
+                }
             elif etype == "text":
                 streaming_text.append(event.get("content", ""))
             elif etype == "error":
                 await db.add_chat_message(session_id, "system", event.get("message", "error"))
 
         log.info("[worker] Task #%d CLI finished — starting post-processing", task_id)
-
-        try:
-            await db.add_chat_events_batch(session_id, raw_event_buffer)
-        except Exception:
-            log.exception("[worker] Task #%d failed to write chat events", task_id)
 
         response_text = "".join(full_response) or "".join(streaming_text)
         if response_text:
@@ -277,9 +323,19 @@ async def _process_task(task: dict):
         _cancelled = local_cancel.is_set() and not _timed_out
         head = git.head_hash(state.PROJECT_DIR)
 
+        # Build execution metadata fields for task record
+        meta_fields = {}
+        if _result_meta.get("stop_reason"):
+            meta_fields["stop_reason"] = _result_meta["stop_reason"]
+        if _result_meta.get("num_turns") is not None:
+            meta_fields["num_turns"] = _result_meta["num_turns"]
+        if _result_meta.get("cost_usd") is not None:
+            meta_fields["cost_usd"] = _result_meta["cost_usd"]
+
         if _timed_out:
             await db.transition_task(task_id, "timed_out",
-                                     result_commit=head, error="timed out")
+                                     result_commit=head, error="timed out",
+                                     **meta_fields)
             fresh_subs = await db.get_subordinate_tasks(task_id)
             sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
             await db.transition_tasks_batch(sub_ids, "timed_out",
@@ -287,31 +343,44 @@ async def _process_task(task: dict):
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
         elif _cancelled:
             await db.transition_task(task_id, "cancelled",
-                                     result_commit=head, error="cancelled")
+                                     result_commit=head, error="cancelled",
+                                     **meta_fields)
             fresh_subs = await db.get_subordinate_tasks(task_id)
             sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
             await db.transition_tasks_batch(sub_ids, "cancelled",
                                             result_commit=head, error="cancelled")
             log.info("[worker] Task #%d cancelled (dependents skipped)", task_id)
+        elif meta_fields.get("stop_reason") == "max_turns":
+            # Agent hit turn limit — exhausted, not completed
+            max_turns = job["properties"].get("max_turns", 50)
+            turns_used = meta_fields.get("num_turns", "?")
+            await db.transition_task(task_id, "exhausted",
+                                     result_commit=head,
+                                     error=f"hit turn limit ({turns_used}/{max_turns})",
+                                     **meta_fields)
+            sub_ids = [s["id"] for s in subordinates]
+            await db.transition_tasks_batch(sub_ids, "exhausted",
+                                            result_commit=head,
+                                            error=f"hit turn limit ({turns_used}/{max_turns})")
+            log.info("[worker] Task #%d exhausted (%s/%s turns, commit=%s)",
+                     task_id, turns_used, max_turns, head[:8])
         else:
             await db.transition_task(task_id, "completed",
-                                     result_commit=head)
+                                     result_commit=head,
+                                     **meta_fields)
             sub_ids = [s["id"] for s in subordinates]
             await db.transition_tasks_batch(sub_ids, "completed",
                                             result_commit=head)
             log.info("[worker] Task #%d completed (commit=%s)", task_id, head[:8])
 
-            await _enqueue_dependents(job_id, task_id,
-                                      job_name=job["name"],
-                                      start_commit=start_commit,
-                                      result_commit=head)
+            await _enqueue_cascades(job_id, task_id,
+                                    job_name=job["name"],
+                                    start_commit=start_commit,
+                                    result_commit=head)
 
     except Exception as e:
         log.exception("[worker] Task #%d failed: %s", task_id, e)
-        try:
-            await db.add_chat_events_batch(session_id, raw_event_buffer)
-        except Exception:
-            pass
+        # Raw events already persisted incrementally — just write response
         try:
             response_text = "".join(full_response) or "".join(streaming_text)
             if response_text:
@@ -341,24 +410,52 @@ async def _process_task(task: dict):
             watchdog.cancel()
         _broadcast(task_id, {"type": "_done"})
         _subscribers.pop(task_id, None)
+        notify_queue_changed()
         _active_task_id = None
         _cancel_event = None
 
 
-async def _enqueue_dependents(completed_job_id: str, task_id: int,
-                              job_name: str | None = None,
-                              start_commit: str | None = None,
-                              result_commit: str | None = None):
-    """Enqueue tasks for jobs that declare a dependency on the completed job."""
-    dependent_jobs = await db.get_jobs_depending_on(completed_job_id)
-    if not dependent_jobs:
+async def _check_external_mcp_servers(job: dict) -> str | None:
+    """Probe external MCP servers assigned to this job. Returns error string or None."""
+    import json
+    job_mcp_names = set(job["properties"].get("mcp_servers") or [])
+    if not job_mcp_names:
+        return None
+
+    all_servers = await db.list_mcp_servers()
+    server_map = {s["name"]: s for s in all_servers}
+
+    for name in sorted(job_mcp_names):
+        server = server_map.get(name)
+        if not server:
+            return f"External MCP server '{name}' not found — it may have been deleted"
+        if not server.get("enabled", True):
+            return f"External MCP server '{name}' is disabled"
+
+        args = json.loads(server.get("args") or "[]")
+        env = json.loads(server.get("env") or "{}")
+        result = await probe_server(server["command"], args, env)
+        if result["status"] != "ok":
+            error_detail = result.get("error", "unknown error")
+            return f"External MCP server '{name}' health check failed: {error_detail}"
+
+    return None
+
+
+async def _enqueue_cascades(completed_job_id: int, task_id: int,
+                            job_name: str | None = None,
+                            start_commit: str | None = None,
+                            result_commit: str | None = None):
+    """Enqueue tasks for jobs that cascade from the completed job."""
+    cascade_jobs = await db.get_cascade_targets(completed_job_id)
+    if not cascade_jobs:
         return
 
     upstream_name = job_name or completed_job_id
 
-    for job in dependent_jobs:
+    for job in cascade_jobs:
         context = build_trigger_context(
-            "dependency",
+            "cascade",
             project_dir=state.PROJECT_DIR,
             upstream_name=upstream_name,
             upstream_task_id=task_id,
@@ -367,10 +464,10 @@ async def _enqueue_dependents(completed_job_id: str, task_id: int,
         )
 
         new_id = await db.enqueue_task(
-            job["id"], "dependency",
-            trigger_detail=completed_job_id,
+            job["id"], "cascade",
+            trigger_detail=str(completed_job_id),
             context=context,
         )
-        log.info("[worker] Dependency trigger: enqueued #%d for '%s' (upstream: '%s' #%d)",
+        log.info("[worker] Cascade: enqueued #%d for job %d (upstream: %d #%d)",
                  new_id, job["id"], completed_job_id, task_id)
         notify()

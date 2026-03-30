@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
 
 # Configure logging
@@ -215,7 +216,7 @@ async def close_project():
 # ── Feed Routes ─────────────────────────────────────────────
 
 @app.get("/api/feed/")
-async def get_feed(limit: int = 50, offset: int = 0, job_id: str | None = None, path: str | None = None):
+async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, path: str | None = None):
     require_project()
     entries = git.log(state.PROJECT_DIR, limit=limit, skip=offset, path=path, with_stats=True)
 
@@ -234,8 +235,11 @@ async def get_feed(limit: int = 50, offset: int = 0, job_id: str | None = None, 
         feed.append(item)
 
     if job_id:
+        # Look up slug for email matching (git author uses slug@maistro.local)
+        job = await db.get_job(job_id)
+        slug = job["slug"] if job else None
         feed = [f for f in feed if f.get("task", {}).get("job_id") == job_id
-                or f.get("email") == f"{job_id}@maistro.local"]
+                or (slug and f.get("email") == f"{slug}@maistro.local")]
 
     return feed
 
@@ -365,6 +369,25 @@ async def get_tool_inventory(probe: bool = False):
     return result
 
 
+def _validate_mcp_server_config(command: str, args: list | None = None, env: dict | None = None):
+    """Validate MCP server configuration eagerly at registration/update time."""
+    if not command or not command.strip():
+        raise HTTPException(422, "Command is required")
+    cmd = command.strip()
+    if not os.path.isabs(cmd) and not shutil.which(cmd):
+        raise HTTPException(422, f"Command not found: '{cmd}' is not on PATH and is not an absolute path")
+    if args is not None and not isinstance(args, list):
+        raise HTTPException(422, "Arguments must be a list")
+    if env is not None:
+        if not isinstance(env, dict):
+            raise HTTPException(422, "Environment variables must be a key-value object")
+        for k, v in env.items():
+            if not isinstance(k, str) or not k.strip():
+                raise HTTPException(422, "Environment variable keys must be non-empty strings")
+            if not isinstance(v, str):
+                raise HTTPException(422, f"Environment variable value for '{k}' must be a string")
+
+
 # ── MCP Server Routes ──────────────────────────────────────
 
 @app.get("/api/mcp/servers")
@@ -376,6 +399,7 @@ async def list_mcp_servers():
 @app.post("/api/mcp/servers")
 async def create_mcp_server(req: CreateMcpServerRequest):
     require_project()
+    _validate_mcp_server_config(req.command, req.args, req.env)
     await db.create_mcp_server(
         name=req.name,
         command=req.command,
@@ -391,6 +415,8 @@ async def update_mcp_server(name: str, req: UpdateMcpServerRequest):
     if req.enabled is not None:
         await db.update_mcp_server_enabled(name, req.enabled)
     if req.command is not None or req.args is not None or req.env is not None:
+        if req.command is not None:
+            _validate_mcp_server_config(req.command, req.args, req.env)
         await db.update_mcp_server_fields(name, req.command, req.args, req.env)
     return {"status": "updated"}
 
@@ -412,10 +438,18 @@ async def probe_mcp_server(name: str):
     )
 
 
+@app.get("/api/mcp/servers/{name}/jobs")
+async def get_mcp_server_jobs(name: str):
+    """Return jobs that reference this MCP server in their mcp_servers property."""
+    require_project()
+    jobs = await db.get_jobs_referencing_mcp_server(name)
+    return [{"id": j["id"], "name": j["name"]} for j in jobs]
+
+
 @app.delete("/api/mcp/servers/{name}")
 async def delete_mcp_server(name: str):
     require_project()
-    await db.delete_mcp_server(name)
+    await db.delete_mcp_server_cascade(name)
     return {"status": "deleted"}
 
 

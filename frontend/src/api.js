@@ -73,8 +73,8 @@ export const cancelTask = (id) =>
 export const resumeTask = (id) =>
   fetchJSON(`/api/tasks/${id}/resume`, { method: 'POST' })
 
-export const retryTask = (id, context) =>
-  fetchJSON(`/api/tasks/${id}/retry`, {
+export const replyTask = (id, context) =>
+  fetchJSON(`/api/tasks/${id}/reply`, {
     method: 'POST',
     body: JSON.stringify({ context }),
   })
@@ -88,6 +88,12 @@ export const getQueueSettings = () => fetchJSON('/api/queue/settings')
 
 export const setQueueSettings = (settings) =>
   fetchJSON('/api/queue/settings', { method: 'POST', body: JSON.stringify(settings) })
+
+export const queueAll = () =>
+  fetchJSON('/api/queue/queue-all', { method: 'POST' })
+
+export const shelveAll = () =>
+  fetchJSON('/api/queue/shelve-all', { method: 'POST' })
 
 export const processOne = (taskId) =>
   fetchJSON(`/api/queue/process/${taskId}`, { method: 'POST' })
@@ -185,6 +191,9 @@ export const deleteMcpServer = (name) =>
 
 export const probeMcpServer = (name) =>
   fetchJSON(`/api/mcp/servers/${encodeURIComponent(name)}/tools`)
+
+export const getMcpServerJobs = (name) =>
+  fetchJSON(`/api/mcp/servers/${encodeURIComponent(name)}/jobs`)
 
 // ── Files ──
 

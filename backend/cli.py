@@ -20,12 +20,42 @@ Event schema (yielded dicts):
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
+import sys
 import threading
 from typing import AsyncIterator
 
 log = logging.getLogger("maistro.cli")
+
+
+
+def _terminate_tree(proc: subprocess.Popen):
+    """Terminate a process and its children, then wait for exit.
+
+    On Windows, Popen.terminate() only kills the immediate process — child
+    processes (MCP servers, node workers) survive as orphans.  Use taskkill /T
+    to kill the entire tree.  Falls back to terminate+kill if taskkill isn't
+    available.
+    """
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True, timeout=10,
+            )
+            proc.wait(timeout=5)
+            return
+        except Exception:
+            pass
+    # Fallback: terminate, grace period, kill
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
 # Known Claude CLI native tools — used by the dispatch layer to compute the
 # complement of a job's allowed_tools (i.e. what to pass as --disallowedTools).
@@ -34,6 +64,49 @@ CLI_NATIVE_TOOLS = frozenset([
     "Agent", "TodoWrite", "NotebookEdit",
     "WebFetch", "WebSearch",
 ])
+
+
+def _resolve_claude_cmd() -> list[str] | None:
+    """Resolve the Claude CLI to a direct executable, bypassing .CMD wrappers.
+
+    On Windows, npm installs a .CMD batch wrapper that spawns cmd.exe as an
+    intermediary.  This breaks process lifecycle: terminate() kills cmd.exe
+    but orphans the real node.exe process (and its MCP server children),
+    leaving pipes open and the task stuck.  We parse the .CMD to extract the
+    underlying node + script path and invoke that directly.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        return None
+
+    if not claude_bin.lower().endswith(".cmd"):
+        return [claude_bin]
+
+    # Parse npm .CMD wrapper to find the script path
+    import re
+    try:
+        with open(claude_bin, "r") as f:
+            content = f.read()
+    except OSError:
+        return [claude_bin]
+
+    # npm wrappers end with: "%_prog%" "%dp0%\node_modules\...\cli.js" %*
+    # Extract the script path relative to the .CMD's directory
+    match = re.search(r'"%dp0%\\([^"]+\.js)"', content)
+    if not match:
+        return [claude_bin]
+
+    cmd_dir = os.path.dirname(claude_bin)
+    script_path = os.path.join(cmd_dir, match.group(1))
+    if not os.path.isfile(script_path):
+        return [claude_bin]
+
+    # Resolve node: prefer local node.exe next to .CMD, fall back to PATH
+    local_node = os.path.join(cmd_dir, "node.exe")
+    node = local_node if os.path.isfile(local_node) else (shutil.which("node") or "node")
+
+    log.info("[cli] Bypassing .CMD wrapper: %s %s", node, script_path)
+    return [node, script_path]
 
 
 async def invoke(
@@ -49,8 +122,8 @@ async def invoke(
     cancel_event: asyncio.Event | None = None,
 ) -> AsyncIterator[dict]:
     """Invoke Claude CLI as subprocess, yield events as dicts."""
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
+    claude_cmd = _resolve_claude_cmd()
+    if not claude_cmd:
         log.error("Claude CLI not found in PATH")
         yield {"type": "error", "message": "Claude CLI not found in PATH"}
         return
@@ -58,13 +131,12 @@ async def invoke(
     # Prompt and system prompt piped via stdin —
     # only bare flags and simple string args on the command line.
     cmd = [
-        claude_bin,
+        *claude_cmd,
         "-p",
         "--output-format", "stream-json",
         "--model", model,
         "--max-turns", str(max_turns),
         "--verbose",
-        "--dangerously-skip-permissions",
     ]
 
     if resume_session:
@@ -125,30 +197,50 @@ async def invoke(
     try:
         non_json_lines = []
         pipes_done = 0
+        _got_result = False
+        _process_dead_since = None  # monotonic time when we first saw process exit
 
         while pipes_done < 2:
             # Check for cancellation
             if cancel_event and cancel_event.is_set():
                 log.info("[cli] Cancellation requested — terminating process")
-                process.terminate()
-                # Grace period: wait up to 5s for clean exit, then force kill
-                try:
-                    await asyncio.wait_for(
-                        asyncio.get_running_loop().run_in_executor(None, process.wait),
-                        timeout=5.0
-                    )
-                    log.info("[cli] Process terminated gracefully (code=%d)", process.returncode)
-                except asyncio.TimeoutError:
-                    log.warning("[cli] Process did not exit after terminate — killing")
-                    process.kill()
-                    await asyncio.get_running_loop().run_in_executor(None, process.wait)
+                _terminate_tree(process)
                 yield {"type": "error", "message": "cancelled"}
                 return
 
-            try:
-                line = await asyncio.wait_for(queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
-                continue
+            # Detect process exit independently of pipe EOF.
+            # Child processes (MCP servers) can hold pipe handles open long
+            # after the CLI exits, preventing reader threads from seeing EOF.
+            if _process_dead_since is None and process.poll() is not None:
+                _process_dead_since = asyncio.get_event_loop().time()
+                log.info("[cli] Process exited (code=%d) — draining", process.returncode)
+
+            # Three drain strategies, from fastest to slowest:
+            #  1. Got result event → non-blocking drain, break immediately
+            #  2. Process dead → drain with deadline (5s grace period)
+            #  3. Normal → block with 1s timeout
+            if _got_result:
+                try:
+                    line = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            elif _process_dead_since is not None:
+                elapsed = asyncio.get_event_loop().time() - _process_dead_since
+                if elapsed > 5.0:
+                    log.warning("[cli] Drain deadline exceeded — breaking out")
+                    break
+                try:
+                    line = await asyncio.wait_for(queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+            else:
+                try:
+                    line = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    log.debug("[cli] Tick: poll=%s pipes_done=%d got_result=%s qsize=%d",
+                              process.poll(), pipes_done, _got_result, queue.qsize())
+                    continue
+
             if line is None:
                 pipes_done += 1
                 continue
@@ -165,18 +257,35 @@ async def invoke(
                 non_json_lines.append(line)
                 continue
 
-            # Always yield raw event for storage
             raw_type = data.get("type", "")
+            log.debug("[cli] Event: %s", raw_type)
             yield {"type": "_raw", "raw_json": line, "event_type": raw_type}
+
+            # The `result` event is the CLI's "I'm done" signal — always
+            # the last semantic event.  Mark it so we drain and exit.
+            if raw_type == "result":
+                _got_result = True
+                log.info("[cli] Received result event — draining")
 
             event = _translate_event(data)
             if event:
                 yield event
 
-        await asyncio.get_running_loop().run_in_executor(None, process.wait)
+        log.info("[cli] Loop exited: pipes_done=%d got_result=%s",
+                 pipes_done, _got_result)
+        # Clean up the process — give it a moment, then force-terminate.
+        if process.poll() is None:
+            try:
+                await asyncio.wait_for(
+                    asyncio.get_running_loop().run_in_executor(None, process.wait),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                log.warning("[cli] Process still alive after result — terminating")
+                _terminate_tree(process)
         log.info("[cli] Process exited: code=%d", process.returncode)
 
-        if process.returncode != 0:
+        if process.returncode not in (0, None) and not _got_result:
             error_detail = "\n".join(non_json_lines)
             log.error("[cli] exit=%d detail=%s", process.returncode, error_detail[:500])
             yield {
@@ -249,7 +358,9 @@ def _translate_event(data: dict) -> dict | None:
             return {"type": "assistant_complete", "content": "\n\n".join(text_parts)}
         return None
 
-    # Result (final summary)
+    # Result (final summary) — may carry session_id AND execution metadata.
+    # _translate_event returns a single dict, so we pack both into one event
+    # and let the worker handle the combined payload.
     if msg_type == "result":
         content = data.get("result", "")
         is_error = data.get("is_error", False)
@@ -261,9 +372,14 @@ def _translate_event(data: dict) -> dict | None:
                 content = subtype
             return {"type": "error", "message": content}
 
+        event = {"type": "result_meta"}
         if sid:
-            return {"type": "session_id", "cli_session_id": sid}
-        return None
+            event["cli_session_id"] = sid
+        # Execution metadata
+        event["stop_reason"] = data.get("stop_reason")
+        event["num_turns"] = data.get("num_turns")
+        event["cost_usd"] = data.get("total_cost_usd")
+        return event
 
     # System/init events — surface session_id early
     if msg_type in ("system", "init"):

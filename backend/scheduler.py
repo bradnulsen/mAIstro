@@ -36,7 +36,7 @@ async def stop():
     log.info("[scheduler] Stopped")
 
 
-def _config_key(job_id: str) -> str:
+def _config_key(job_id: int) -> str:
     return f"schedule_last_fire_{job_id}"
 
 
@@ -44,7 +44,7 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _set_last_fire(job_id: str, dt: datetime):
+async def _set_last_fire(job_id: int, dt: datetime):
     await db.set_config(_config_key(job_id), dt.isoformat())
 
 

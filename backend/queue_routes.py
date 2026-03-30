@@ -1,6 +1,6 @@
 """Task queue routes — atomic work item lifecycle and queue control.
 
-Handles task enqueue, streaming, output, cancel, resume, retry,
+Handles task enqueue, streaming, output, cancel, resume, reply,
 editing, merge/split, and queue settings.
 """
 
@@ -27,7 +27,7 @@ class DispatchRequest(BaseModel):
 class UpdateTaskRequest(BaseModel):
     context: str | None = None
 
-class RetryRequest(BaseModel):
+class ReplyRequest(BaseModel):
     context: str | None = None
 
 class ReorderTasksRequest(BaseModel):
@@ -49,9 +49,9 @@ class QueueSettingsRequest(BaseModel):
     auto_dispatch: bool = False
 
 class AgentDispatchRequest(BaseModel):
-    target_job_id: str
+    target_job_id: int
     message: str
-    source_job_id: str
+    source_job_id: int
     source_task_id: int
 
 
@@ -63,6 +63,30 @@ async def get_task_queue():
     return await db.get_task_queue()
 
 
+@router.get("/api/queue/stream")
+async def stream_queue_changes():
+    """SSE stream of global queue-change notifications.
+
+    Sends a 'queue_changed' event whenever any task transitions state.
+    Clients should re-fetch the task queue on each notification.
+    """
+    q = worker.subscribe_queue()
+
+    async def stream():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30)
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "{}"}
+                    continue
+                yield {"event": event["type"], "data": "{}"}
+        finally:
+            worker.unsubscribe_queue(q)
+
+    return EventSourceResponse(stream())
+
+
 @router.get("/api/tasks/{task_id}/stream")
 async def stream_task(task_id: int):
     """SSE stream of live events for a running task."""
@@ -71,7 +95,7 @@ async def stream_task(task_id: int):
     if not task:
         raise HTTPException(404, "Task not found")
 
-    if task.get("status") in ("completed", "failed", "cancelled", "interrupted", "timed_out", "rejected"):
+    if task.get("status") in ("completed", "exhausted", "failed", "cancelled", "interrupted", "timed_out", "rejected"):
         async def done_stream():
             yield {"event": "done", "data": json.dumps({"status": "completed"})}
         return EventSourceResponse(done_stream())
@@ -114,6 +138,7 @@ async def get_task_output(task_id: int):
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+
     session_id = task.get("session_id")
     if not session_id:
         return {"messages": [], "status": "pending", "task": task}
@@ -188,6 +213,7 @@ async def cancel_task(task_id: int):
     subs = await db.get_subordinate_tasks(task_id)
     sub_ids = [s["id"] for s in subs if s.get("status") not in db.TERMINAL_STATUSES]
     await db.transition_tasks_batch(sub_ids, "cancelled", error="cancelled")
+    worker.notify_queue_changed()
     return {"status": "cancelled", "was_running": was_running}
 
 
@@ -215,14 +241,14 @@ async def resume_task(task_id: int):
         context=build_trigger_context("resume", original_task_id=task_id),
     )
     await db.update_task(new_id, resume_session_id=cli_session_id)
-    await db.update_task(task_id, coalesced_id=new_id)
+    await db.coalesce_under(task_id, new_id)
     worker.notify()
     return {"task_id": new_id, "resuming_from": task_id}
 
 
-@router.post("/api/tasks/{task_id}/retry")
-async def retry_task(task_id: int, req: RetryRequest | None = None):
-    """Retry a completed task — creates a new task preserving original trigger info."""
+@router.post("/api/tasks/{task_id}/reply")
+async def reply_task(task_id: int, req: ReplyRequest | None = None):
+    """Reply to a resolved task — creates a follow-up task with user context."""
     require_project()
     task = await db.get_task(task_id)
     if not task:
@@ -233,10 +259,10 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
     user_notes = req.context if req and req.context else None
 
     new_id = await db.enqueue_task(
-        task["job_id"], "retry",
+        task["job_id"], "reply",
         trigger_detail=str(task_id),
         context=build_trigger_context(
-            "retry",
+            "reply",
             project_dir=state.PROJECT_DIR,
             original_task_id=task_id,
             start_commit=task.get("start_commit"),
@@ -244,9 +270,9 @@ async def retry_task(task_id: int, req: RetryRequest | None = None):
             user_context=user_notes,
         ),
     )
-    await db.update_task(task_id, coalesced_id=new_id)
+    await db.coalesce_under(task_id, new_id)
     worker.notify()
-    return {"task_id": new_id, "retrying": task_id}
+    return {"task_id": new_id, "replying_to": task_id}
 
 
 @router.post("/api/tasks/merge")
@@ -255,6 +281,7 @@ async def merge_tasks_route(req: MergeRequest):
     require_project()
     try:
         root_id = await db.merge_tasks(req.task_ids)
+        worker.notify_queue_changed()
         return {"root_id": root_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -274,6 +301,7 @@ async def uncoalesce_task_route(task_id: int):
     require_project()
     try:
         freed_id = await db.uncoalesce_task(task_id)
+        worker.notify_queue_changed()
         return {"task_id": freed_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -287,6 +315,8 @@ async def transfer_task_route(task_id: int, req: TransferRequest):
         await db.transfer_task(task_id, req.to_queued)
         if req.to_queued:
             worker.notify()
+        else:
+            worker.notify_queue_changed()
         return {"status": "ok", "to_queued": req.to_queued}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -298,6 +328,7 @@ async def split_task_route(task_id: int):
     require_project()
     try:
         split_ids = await db.split_task(task_id)
+        worker.notify_queue_changed()
         return {"split_ids": split_ids}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -339,7 +370,27 @@ async def reject_task_route(task_id: int):
     ok = await db.reject_task(task_id)
     if not ok:
         raise HTTPException(404, "Task not found or not pending approval")
+    worker.notify_queue_changed()
     return {"status": "rejected"}
+
+
+@router.post("/api/queue/queue-all")
+async def queue_all():
+    """Transfer all pending tasks to queued."""
+    require_project()
+    count = await db.transfer_all_tasks(to_queued=True)
+    if count > 0:
+        worker.notify()
+    return {"transferred": count}
+
+
+@router.post("/api/queue/shelve-all")
+async def shelve_all():
+    """Transfer all queued (non-active) tasks back to pending."""
+    require_project()
+    count = await db.transfer_all_tasks(to_queued=False)
+    worker.notify_queue_changed()
+    return {"transferred": count}
 
 
 @router.post("/api/queue/reorder")
@@ -425,10 +476,10 @@ async def agent_dispatch(req: AgentDispatchRequest):
     return {"task_id": task_id}
 
 
-# ── Enqueue (must be last — {job_id} is str and would match static paths) ──
+# ── Enqueue ────────────────────────────────────────────────
 
 @router.post("/api/tasks/{job_id}")
-async def enqueue_job(job_id: str, req: DispatchRequest | None = None):
+async def enqueue_job(job_id: int, req: DispatchRequest | None = None):
     """Enqueue a task for a job. The worker processes it."""
     require_project()
     job = await db.get_job(job_id)

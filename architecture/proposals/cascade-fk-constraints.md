@@ -19,7 +19,7 @@ tasks.job_id TEXT NOT NULL REFERENCES jobs(id)
 chat_sessions.job_id  TEXT REFERENCES jobs(id)
 ```
 
-When a job is deleted, `delete_job()` manually cleans up both tables before deleting the job row:
+When a job is deleted, `delete_goal()` manually cleans up both tables before deleting the job row:
 
 ```python
 await db.execute("DELETE FROM chat_sessions WHERE job_id = ?", (job_id,))
@@ -41,7 +41,7 @@ tasks.job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE
 chat_sessions.job_id  TEXT REFERENCES jobs(id) ON DELETE CASCADE
 ```
 
-With CASCADE, `DELETE FROM jobs WHERE id = ?` automatically removes dependent rows, and `delete_job()` can be simplified to a single statement.
+With CASCADE, `DELETE FROM jobs WHERE id = ?` automatically removes dependent rows, and `delete_goal()` can be simplified to a single statement.
 
 ## Migration note
 
@@ -55,7 +55,7 @@ This is a one-time migration run inside `init_db` (which already uses `executesc
 
 ## Impact
 
-- `delete_job()` in `database.py` becomes a single `DELETE FROM jobs`
+- `delete_goal()` in `database.py` becomes a single `DELETE FROM jobs`
 - No behavioral change for normal operation — job deletion is infrequent
 - Enforces referential integrity at the DB level rather than relying on application code ordering
 

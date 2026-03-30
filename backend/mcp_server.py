@@ -5,8 +5,9 @@ coordination to dispatched agents. Invoked as a subprocess by the Claude CLI
 via --mcp-config.
 
 Each task gets an instance configured via environment variables:
-    MAISTRO_JOB_ID                  job slug (e.g. "engineer")
-    MAISTRO_JOB_NAME                display name (e.g. "Engineer")
+    MAISTRO_JOB_ID                   job slug (e.g. "engineer")
+    MAISTRO_JOB_SLUG                 job slug for git authorship
+    MAISTRO_JOB_NAME                 display name (e.g. "Engineer")
     MAISTRO_PROJECT_DIR             absolute path to project directory
     MAISTRO_SESSION_ID              chat session ID for audit logging
     MAISTRO_BACKEND_PORT            backend HTTP port (default 8420)
@@ -27,7 +28,8 @@ from datetime import datetime, timezone
 
 # ── Context from environment ─────────────────────────────────
 
-JOB_ID = os.environ.get("MAISTRO_JOB_ID", "unknown")
+JOB_ID = os.environ.get("MAISTRO_JOB_ID", "0")
+JOB_SLUG = os.environ.get("MAISTRO_JOB_SLUG", "unknown")
 JOB_NAME = os.environ.get("MAISTRO_JOB_NAME", "Unknown")
 PROJECT_DIR = os.environ.get("MAISTRO_PROJECT_DIR", ".")
 SESSION_ID = os.environ.get("MAISTRO_SESSION_ID", "")
@@ -39,7 +41,8 @@ _allowed_raw = os.environ.get("MAISTRO_ALLOWED_INTERNAL_TOOLS", "[]")
 ALLOWED_INTERNAL_TOOLS = set(json.loads(_allowed_raw)) if _allowed_raw else set()
 
 _dispatch_raw = os.environ.get("MAISTRO_ALLOWED_DISPATCH_TARGETS", "[]")
-ALLOWED_DISPATCH_TARGETS = set(json.loads(_dispatch_raw)) if _dispatch_raw else set()
+ALLOWED_DISPATCH_TARGETS = set(int(x) for x in json.loads(_dispatch_raw)) if _dispatch_raw else set()
+
 
 
 # ── Git helpers ──────────────────────────────────────────────
@@ -106,7 +109,7 @@ def tool_git_commit(args: dict) -> str:
         return f"Error staging files: {stage.stderr.strip()}"
 
     # Commit with enforced authorship convention
-    author = f"{JOB_NAME} <{JOB_ID}@maistro.local>"
+    author = f"{JOB_NAME} <{JOB_SLUG}@maistro.local>"
     ok, out = _run_git("commit", "-m", message, f"--author={author}")
     if not ok:
         return f"Error: {out}"
@@ -120,9 +123,9 @@ def tool_git_branch_create(args: dict) -> str:
     if not name:
         return "Error: branch name is required"
 
-    # Enforce naming convention: <job-id>/<description>
-    if not name.startswith(f"{JOB_ID}/"):
-        name = f"{JOB_ID}/{name}"
+    # Enforce naming convention: <job-slug>/<description>
+    if not name.startswith(f"{JOB_SLUG}/"):
+        name = f"{JOB_SLUG}/{name}"
 
     ok, out = _run_git("branch", name, base)
     if not ok:
@@ -201,10 +204,10 @@ def tool_list_jobs(args: dict) -> str:
         lines = []
         for j in jobs:
             props = j.get("properties", {})
-            desc = props.get("description") or "(no description)"
+            summary = props.get("summary") or "(no summary)"
             subs = ", ".join(props.get("subscriptions") or []) or "(none)"
             running = " [RUNNING]" if props.get("running") else ""
-            lines.append(f"- **{j['name']}**{running}: {desc}")
+            lines.append(f"- **{j['name']}**{running}: {summary}")
             lines.append(f"  Subscriptions: {subs}")
         return "\n".join(lines) if lines else "(no jobs configured)"
     except Exception as e:
@@ -213,14 +216,17 @@ def tool_list_jobs(args: dict) -> str:
 
 def tool_dispatch_task(args: dict) -> str:
     """Enqueue a task for another job via agent dispatch."""
-    target_job_id = (args.get("target_job_id") or "").strip()
+    target_job_id = args.get("target_job_id")
+    if isinstance(target_job_id, str):
+        target_job_id = int(target_job_id) if target_job_id.isdigit() else 0
     message = (args.get("message") or "").strip()
 
     if not target_job_id:
         return "Error: target_job_id is required"
     if not message:
         return "Error: message is required"
-    if target_job_id == JOB_ID:
+    job_id_int = int(JOB_ID)
+    if target_job_id == job_id_int:
         return "Error: self-dispatch is prohibited"
     if not ALLOWED_DISPATCH_TARGETS:
         return "Error: this job has no allowed dispatch targets"
@@ -231,7 +237,7 @@ def tool_dispatch_task(args: dict) -> str:
         payload = json.dumps({
             "target_job_id": target_job_id,
             "message": message,
-            "source_job_id": JOB_ID,
+            "source_job_id": job_id_int,
             "source_task_id": int(TASK_ID) if TASK_ID else 0,
         }).encode("utf-8")
         req = urllib.request.Request(
@@ -267,7 +273,7 @@ def tool_get_queue_status(args: dict) -> str:
             s = t.get("status", "pending")
             if s == "active":
                 running.append(task_line)
-            elif s in ("completed", "failed", "cancelled", "interrupted", "timed_out", "rejected"):
+            elif s in ("completed", "exhausted", "failed", "cancelled", "interrupted", "timed_out", "rejected"):
                 status = "ok" if s == "completed" else "error"
                 recent_completed.append(f"{task_line} ({status})")
             elif s == "queued":
@@ -454,8 +460,8 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "target_job_id": {
-                    "type": "string",
-                    "description": "Job ID (slug) to dispatch",
+                    "type": "integer",
+                    "description": "Job ID (integer) to dispatch",
                 },
                 "message": {
                     "type": "string",
