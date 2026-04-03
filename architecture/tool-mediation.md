@@ -41,7 +41,7 @@ This is not a stylistic choice — it follows from headless execution. A headles
 
 Structured tools for git interaction with enforced conventions:
 
-- **`git_commit`** — commits with enforced authorship (`<GoalName> <<job-id>@maistro.local>`) and message format (`[GoalName] description`). Path restrictions can limit which files a job is allowed to commit.
+- **`git_commit`** — commits with enforced authorship (`<JobName> <<slug>@maistro.local>`) and message format (`[JobName] description`). Path restrictions can limit which files a job is allowed to commit.
 - **`git_diff`** — returns structured diff output for specified paths or the working tree
 - **`git_log`** — returns commit history with configurable depth and format
 - **`git_status`** — returns working tree status
@@ -52,7 +52,7 @@ These replace unmediated shell-based git access. The key difference is enforceme
 
 Structured tools for branch management:
 
-- **`git_branch_create`** — creates a new branch from a specified base. Enforces naming conventions (e.g. `<job-id>/<description>`) to prevent namespace collisions between jobs.
+- **`git_branch_create`** — creates a new branch from a specified base. Enforces naming conventions (e.g. `<slug>/<description>`) to prevent namespace collisions between jobs.
 - **`git_branch_switch`** — switches the working directory to a named branch. The platform tracks which branch a task operates on for audit purposes.
 - **`git_branch_merge`** — merges a source branch into the current branch. Merge conflicts surface as structured tool output rather than silent failures.
 

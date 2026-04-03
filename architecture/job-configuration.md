@@ -4,9 +4,11 @@ A job is a named, persistent configuration of autonomous work. The job configura
 
 ## Job Identity
 
-Each job has a human-facing `name` and a system-facing `id` derived via `slugify()` — lowercase, non-alphanumeric characters replaced with hyphens. The slug is the primary key in the database and the identifier used across all APIs, task records, and git authorship (`<job-id>@maistro.local`).
+Each job has three identity fields:
 
-Job identity is immutable after creation — the name can be updated, but the id (derived from the original name) does not change. This means renaming a job in the UI updates the display name only.
+- **`id`** — `INTEGER PRIMARY KEY AUTOINCREMENT`. The stable identifier used across all foreign keys (`tasks.job_id`, `job_properties.job_id`, `chat_sessions.job_id`), API routes, and internal references.
+- **`slug`** — derived from the original name via `slugify()` (lowercase, non-alphanumeric characters replaced with hyphens). `UNIQUE` column. Used for git authorship (`<slug>@maistro.local`) and branch naming (`<slug>/<description>`). Immutable after creation.
+- **`name`** — human-facing display name. Can be updated; renaming a job in the UI changes the display name only, not the slug or integer ID.
 
 ## Property System
 
@@ -30,7 +32,7 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `mcp_servers` | json | `[]` | External MCP servers to enable, selected from registered servers |
 | `sort_order` | integer | `0` | Explicit ordering in the job list |
 
-Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_goal`) accepts a partial set of properties and writes only the provided keys as overrides.
+Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_job`) accepts a partial set of properties and writes only the provided keys as overrides.
 
 ## Ordering
 

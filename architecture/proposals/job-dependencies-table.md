@@ -29,8 +29,8 @@ Extract job dependencies into a dedicated relation:
 
 ```sql
 CREATE TABLE goal_dependencies (
-    dependent_job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-    upstream_job_id  TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    dependent_job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    upstream_job_id  INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     PRIMARY KEY (dependent_job_id, upstream_job_id)
 );
 

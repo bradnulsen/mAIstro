@@ -15,8 +15,8 @@ reviewed-by: Architect
 
 ```sql
 -- current
-tasks.job_id TEXT NOT NULL REFERENCES jobs(id)
-chat_sessions.job_id  TEXT REFERENCES jobs(id)
+tasks.job_id INTEGER NOT NULL REFERENCES jobs(id)
+chat_sessions.job_id  INTEGER REFERENCES jobs(id)
 ```
 
 When a job is deleted, `delete_goal()` manually cleans up both tables before deleting the job row:
@@ -37,8 +37,8 @@ This works but has two risks:
 Add `ON DELETE CASCADE` to both FKs:
 
 ```sql
-tasks.job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE
-chat_sessions.job_id  TEXT REFERENCES jobs(id) ON DELETE CASCADE
+tasks.job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE
+chat_sessions.job_id  INTEGER REFERENCES jobs(id) ON DELETE CASCADE
 ```
 
 With CASCADE, `DELETE FROM jobs WHERE id = ?` automatically removes dependent rows, and `delete_goal()` can be simplified to a single statement.

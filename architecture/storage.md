@@ -66,11 +66,11 @@ This ensures no consumer sees a partially-switched state where `PROJECT_DIR` poi
 
 ### Schema
 
-Eight tables:
+Ten tables:
 
 | Table | Purpose |
 |-------|---------|
-| `jobs` | Job identity (id, name, created_at) |
+| `jobs` | Job identity (integer id, slug, name, created_at) |
 | `job_property_defs` | EAV registry — defines property keys, default values, and types |
 | `job_properties` | EAV overrides — per-job property values |
 | `tasks` | Task identity, execution metadata (stop_reason, num_turns, cost_usd), and materialized status |
@@ -87,7 +87,7 @@ Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call —
 
 Job properties use EAV rather than columns. `job_property_defs` defines the universe of property keys with a default value and a type (`string`, `json`, `integer`, `boolean`). `job_properties` holds per-job overrides.
 
-On read, `get_goal()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
+On read, `get_job()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
 
 This design means adding a new property requires only a seed SQL insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 

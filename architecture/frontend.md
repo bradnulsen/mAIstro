@@ -83,12 +83,12 @@ Aggregated operational visibility — a read-only surface that answers "how are 
 - **Tool Usage Patterns** — per-job tool frequency and error rates derived from `chat_events` where `event_type = 'mcp_tool_use'`. Joins through `chat_sessions` (session → task → job) to attribute tool calls to jobs. Surfaces persistent tool errors that indicate configuration or instruction problems. Secondary to health and timing — supports investigation after triage.
 
 **Data access pattern**: the dashboard introduces a new query surface over existing tables but requires no schema changes. The key queries are time-windowed aggregations:
-- `tasks` grouped by `job_id` (job) with terminal state classification (from `status` column), filtered by `completed_at` within the time window
-- `tasks` with `started_at` and `completed_at` for timeline positioning, filtered by time window
+- `tasks` grouped by `job_id` (job) with terminal state classification (from `status` column), filtered by time range
+- `task_events` pairs of `active` and terminal events for timeline positioning, with duration computed from event timestamps
 - `tasks` filtered by `trigger = 'agent'` with `trigger_detail` for dispatch chain reconstruction
 - `chat_events` joined through `chat_sessions` → `tasks` for per-job tool attribution, filtered by event timestamp
 
-These queries may benefit from an index on `tasks(completed_at)` for efficient time-window filtering — the current indexes (`idx_tasks_status_worker`, `idx_tasks_goal_status`) are optimized for queue operations, not historical aggregation. `idx_tasks_completed_at` covers the dashboard time-window predicate.
+The `idx_task_events_task` and `idx_task_events_type` indexes support the timeline's event-pair lookups. The worker index `idx_tasks_status_worker` on `(status, approval, coalesced_id)` and `idx_tasks_job_status` on `(job_id, status)` cover queue and health queries.
 
 ### Settings (`Settings.jsx`)
 Platform configuration: default model, default timeout. The auto-queueing toggle previously here has been elevated to the command bar for immediate access.
