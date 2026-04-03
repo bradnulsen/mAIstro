@@ -1083,7 +1083,9 @@ async def get_task_events_batch(task_ids: list[int], conn=None) -> dict[int, lis
     )
     result: dict[int, list[dict]] = {}
     for r in rows:
-        result.setdefault(r["task_id"], []).append(dict(r))
+        d = dict(r)
+        tid = d.pop("task_id")
+        result.setdefault(tid, []).append(d)
     return result
 
 

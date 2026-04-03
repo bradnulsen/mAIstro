@@ -2,5 +2,7 @@
 .maistro/
 app.db
 node_modules/
+__pycache__/
+*.pyc
 
 .claude/
