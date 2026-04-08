@@ -22,6 +22,7 @@
   --success: #4a4;
   --running: #e90;
   --warning: #e6a117;
+  --yellow: #d4a937;
   --code-bg: #1a1a1a;
   --code-text: #e0e0e0;
   /* --font: UI typeface; --font-mono: code/command output. Both monospace now;
@@ -1351,6 +1352,10 @@ label.muted-text {
 .project-opener h1 {
   font-size: var(--text-2xl);
   letter-spacing: var(--tracking-wide);
+}
+
+.title-highlight {
+  color: var(--yellow);
 }
 
 .project-opener .input-row {

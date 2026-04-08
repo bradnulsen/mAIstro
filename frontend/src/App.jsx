@@ -316,7 +316,7 @@ function ProjectOpener({ onOpen }) {
 
   return (
     <div className="project-opener">
-      <h1>⬡ mAistro</h1>
+      <h1>⬡ mA<span className="title-highlight">i</span>str<span className="title-highlight">o</span></h1>
       <p>Open a project directory to begin</p>
       <div className="input-row">
         <input
