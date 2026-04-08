@@ -143,6 +143,13 @@ async def get_task_output(task_id: int):
     if not session_id:
         return {"messages": [], "status": "pending", "task": task}
     messages = await db.get_chat_messages(session_id)
+    # Fallback: if chat_messages has no assistant content, reconstruct from
+    # the durable chat_events log.  chat_messages is a cache written once
+    # after the CLI exits; chat_events is the incrementally-persisted source.
+    if not any(m.get("role") == "assistant" for m in messages):
+        reconstructed = await db.reconstruct_output_from_events(session_id)
+        if reconstructed:
+            messages = messages + reconstructed
     status = task.get("status", "pending")
     # Map internal statuses to simpler API-level status for output endpoint
     if status == "active":

@@ -238,7 +238,12 @@ async def list_chat_sessions():
 @router.get("/sessions/{session_id}/messages")
 async def get_chat_messages(session_id: str):
     require_project()
-    return await db.get_chat_messages(session_id)
+    messages = await db.get_chat_messages(session_id)
+    if not any(m.get("role") == "assistant" for m in messages):
+        reconstructed = await db.reconstruct_output_from_events(session_id)
+        if reconstructed:
+            messages = messages + reconstructed
+    return messages
 
 
 @router.delete("/sessions/{session_id}")

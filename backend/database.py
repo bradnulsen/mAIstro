@@ -248,6 +248,17 @@ async def _run_migrations(db: aiosqlite.Connection):
             await db.execute(f"DROP TABLE {stale}")
             log.warning("[database] Dropped stale migration table: %s", stale)
 
+    # Add cli_session_id to chat_sessions if missing (needed for session resume)
+    cs_cols = {c["name"] for c in await db.execute_fetchall("PRAGMA table_info(chat_sessions)")}
+    if "cli_session_id" not in cs_cols:
+        log.info("[database] Migration: adding cli_session_id to chat_sessions")
+        await db.execute("ALTER TABLE chat_sessions ADD COLUMN cli_session_id TEXT")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_sessions_cli_session "
+            "ON chat_sessions (cli_session_id)"
+        )
+        await db.commit()
+
     # M1: Add slug column to jobs if missing (added after INTEGER PK migration)
     cols = await db.execute_fetchall("PRAGMA table_info(jobs)")
     col_names = {c["name"] for c in cols}
@@ -477,6 +488,9 @@ async def get_job(job_id: int, running_ids: set | None = None) -> dict | None:
     for p in job_props:
         props[p["key"]] = _cast_property(p["value"], def_types.get(p["key"], "string"))
 
+    slug_rows = await db.execute_fetchall("SELECT slug, id FROM jobs")
+    _normalize_int_list_props(props, {r["slug"]: r["id"] for r in slug_rows})
+
     # Derive running status from tasks table
     if running_ids is not None:
         props["running"] = job_id in running_ids
@@ -525,6 +539,7 @@ async def list_jobs() -> list[dict]:
     def_types = {d["key"]: d["type"] for d in defs}
 
     default_props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
+    slug_to_id = {row["slug"]: row["id"] for row in job_rows}
 
     jobs = []
     for row in job_rows:
@@ -532,6 +547,7 @@ async def list_jobs() -> list[dict]:
         props = default_props.copy()
         for key, value in props_by_job.get(job["id"], {}).items():
             props[key] = _cast_property(value, def_types.get(key, "string"))
+        _normalize_int_list_props(props, slug_to_id)
         props["running"] = job["id"] in running_ids
         props["pending_count"] = pending_counts.get(job["id"], 0)
         props["queued_count"] = queued_counts.get(job["id"], 0)
@@ -593,14 +609,30 @@ async def get_cascade_targets(completed_job_id: int) -> list[dict]:
         "SELECT job_id, value FROM job_properties WHERE key = 'cascades_from'"
     )
 
-    # Parse JSON and filter to exact membership
+    # Parse JSON, coerce to ints, and filter to exact membership
+    slug_rows = await conn.execute_fetchall("SELECT slug, id FROM jobs")
+    slug_to_id = {r["slug"]: r["id"] for r in slug_rows}
     candidate_ids = []
     for r in rows:
         try:
             upstreams = json.loads(r["value"])
         except (json.JSONDecodeError, TypeError):
             continue
-        if isinstance(upstreams, list) and completed_job_id in upstreams:
+        if not isinstance(upstreams, list):
+            continue
+        # Coerce any stale slug strings to integer IDs
+        resolved = []
+        for item in upstreams:
+            if isinstance(item, int):
+                resolved.append(item)
+            else:
+                try:
+                    resolved.append(int(item))
+                except (ValueError, TypeError):
+                    mapped = slug_to_id.get(str(item))
+                    if mapped is not None:
+                        resolved.append(mapped)
+        if completed_job_id in resolved:
             candidate_ids.append(r["job_id"])
 
     if not candidate_ids:
@@ -1607,6 +1639,41 @@ async def get_chat_messages(session_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def reconstruct_output_from_events(session_id: str) -> list[dict]:
+    """Reconstruct assistant messages from the raw chat_events log.
+
+    chat_events is the durable, incrementally-persisted store — every raw
+    NDJSON line is written as it arrives during streaming.  chat_messages
+    is a one-shot materialization written after the CLI exits, which can
+    be empty if the worker's post-processing is skipped or fails.
+
+    This function parses 'assistant' type events to extract text blocks,
+    providing a reliable fallback when chat_messages has no content.
+    """
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT raw_json FROM chat_events "
+        "WHERE session_id = ? AND event_type = 'assistant' ORDER BY id ASC",
+        (session_id,),
+    )
+    text_parts = []
+    for row in rows:
+        try:
+            data = json.loads(row["raw_json"])
+            blocks = (
+                data.get("message", {}).get("content", [])
+                or data.get("content", [])
+            )
+            for block in blocks:
+                if block.get("type") == "text" and block.get("text"):
+                    text_parts.append(block["text"])
+        except Exception:
+            continue
+    if not text_parts:
+        return []
+    return [{"role": "assistant", "content": "\n\n".join(text_parts)}]
+
+
 async def update_chat_session(session_id: str, **kwargs):
     db = await get_db()
     sets = ", ".join(f"{k} = ?" for k in kwargs)
@@ -1618,15 +1685,6 @@ async def update_chat_session(session_id: str, **kwargs):
 async def delete_chat_session(session_id: str):
     db = await get_db()
     await db.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-    await db.commit()
-
-
-async def add_chat_event(session_id: str, event_type: str, raw_json: str):
-    db = await get_db()
-    await db.execute(
-        "INSERT INTO chat_events (session_id, event_type, raw_json) VALUES (?, ?, ?)",
-        (session_id, event_type, raw_json)
-    )
     await db.commit()
 
 
@@ -1933,3 +1991,25 @@ def _cast_property(value: str, type_: str):
     if type_ == "boolean":
         return value.lower() in ("true", "1", "yes")
     return value
+
+
+_INT_LIST_PROPS = {"cascades_from", "allowed_dispatch_targets"}
+
+def _normalize_int_list_props(props: dict, slug_to_id: dict[str, int]) -> None:
+    """Coerce any slug strings in integer-list properties to int IDs in-place."""
+    for key in _INT_LIST_PROPS:
+        val = props.get(key)
+        if not isinstance(val, list):
+            continue
+        normalized = []
+        for item in val:
+            if isinstance(item, int):
+                normalized.append(item)
+            else:
+                try:
+                    normalized.append(int(item))
+                except (ValueError, TypeError):
+                    resolved = slug_to_id.get(str(item))
+                    if resolved is not None:
+                        normalized.append(resolved)
+        props[key] = normalized

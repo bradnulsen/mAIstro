@@ -127,17 +127,15 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 
 ## Implementation Status
 
-**Built and working**: Two-stage queue, all 5 trigger types + resume/reply, coalescing (auto + manual merge/split), approval gates, timeout enforcement, internal MCP server (12 tools), three-dimensional tool control, inter-agent dispatch with depth limiting, activity dashboard (health/timeline/chains/tool usage), outcome summaries, all UI views (Dispatch, Feed, Jobs, Files, MCP Servers, Dashboard, Settings, Chat).
+**Built and working**: Two-stage queue, all 5 trigger types + resume/reply, coalescing (auto + manual merge/split), approval gates, timeout enforcement, internal MCP server (12 tools), three-dimensional tool control, inter-agent dispatch with depth limiting, activity dashboard (health/timeline/chains/tool usage), outcome summaries, execution pipeline fidelity (thinking blocks streamed/persisted, execution metadata captured), external MCP robustness (registration validation, pre-dispatch health checks, cascade deletion), dispatch diff view, all UI views (Dispatch, Feed, Jobs, Files, MCP Servers, Dashboard, Settings, Chat).
 
 **Designed but not yet built** (see `STRATEGY.md` priorities):
-- **P1: Task Session Interrogation** — resume completed task sessions in read-only mode for follow-up questions. Infrastructure exists (CLI `--resume`, `allowed_internal_tools`). Needs: UI surface in chat tray, read-only tool stripping on dispatch.
-- **P2: Notifications** — in-app feed, desktop notifications, per-job rules, webhook integration.
+- **P1: External MCP Polish** — environment variable UI for MCP server config, server status in dispatch context, runtime MCP error attribution, config file validation before write.
+- **P2: Task Session Interrogation** — resume completed task sessions in read-only mode for follow-up questions. Infrastructure exists (CLI `--resume`, `allowed_internal_tools`). Needs: UI surface in chat tray, read-only tool stripping on dispatch.
+- **P3: Notifications** — in-app feed, desktop notifications, per-job rules, webhook integration.
 
 **Known technical debt** (see `REMEDIATION.md` for full detail and sequencing):
-- `database.py` is a 1300+ line god module; split plan documented as R2
-- `worker.py` and `chat.py` duplicate CLI execution harness (R4)
+- `database.py` is a 1900+ line god module; split plan documented as R2
 - Coalescing logic spread across 12+ touch points; depth-1 invariant maintained only by code discipline (R5)
 - `git.py` uses sync `subprocess.run`, blocks async event loop (R7)
-- Chat events silently discarded on batch write failure — completed tasks can have zero stored output (R11)
-- Thinking blocks from CLI dropped during streaming (R12)
-- CLI `result` metadata (`stop_reason`, `num_turns`, `cost_usd`) silently dropped — max-turns exhaustion looks identical to success (R13); `max_turns` hardcoded at 50 in `cli.py`
+- Route extraction from `main.py` is partial — project, feed, git, dashboard, config routes remain inline (R9)
