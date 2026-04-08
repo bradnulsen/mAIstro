@@ -136,6 +136,7 @@ function HealthSummary({ health, jobColorMap }) {
                 {g.cancelled > 0 && <span title="Cancelled">{g.cancelled} cancel</span>}
                 {g.interrupted > 0 && <span title="Interrupted">{g.interrupted} int</span>}
                 {g.rejected > 0 && <span title="Rejected">{g.rejected} rej</span>}
+                {g.exhausted > 0 && <span className="health-bad" title="Exhausted (max turns)">{g.exhausted} exhaust</span>}
               </div>
             </div>
           )

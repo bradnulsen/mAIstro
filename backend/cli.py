@@ -55,7 +55,10 @@ def _terminate_tree(proc: subprocess.Popen):
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log.warning("[cli] Process %d resisted kill — giving up", proc.pid)
 
 # Known Claude CLI native tools — used by the dispatch layer to compute the
 # complement of a job's allowed_tools (i.e. what to pass as --disallowedTools).
@@ -212,7 +215,7 @@ async def invoke(
             # Child processes (MCP servers) can hold pipe handles open long
             # after the CLI exits, preventing reader threads from seeing EOF.
             if _process_dead_since is None and process.poll() is not None:
-                _process_dead_since = asyncio.get_event_loop().time()
+                _process_dead_since = asyncio.get_running_loop().time()
                 log.info("[cli] Process exited (code=%d) — draining", process.returncode)
 
             # Three drain strategies, from fastest to slowest:
@@ -225,7 +228,7 @@ async def invoke(
                 except asyncio.QueueEmpty:
                     break
             elif _process_dead_since is not None:
-                elapsed = asyncio.get_event_loop().time() - _process_dead_since
+                elapsed = asyncio.get_running_loop().time() - _process_dead_since
                 if elapsed > 5.0:
                     log.warning("[cli] Drain deadline exceeded — breaking out")
                     break
@@ -267,8 +270,7 @@ async def invoke(
                 _got_result = True
                 log.info("[cli] Received result event — draining")
 
-            event = _translate_event(data)
-            if event:
+            for event in _translate_event(data):
                 yield event
 
         log.info("[cli] Loop exited: pipes_done=%d got_result=%s",
@@ -296,16 +298,29 @@ async def invoke(
 
     except Exception as e:
         log.exception("[cli] Exception during streaming: %s", e)
-        process.kill()
-        process.wait()
         yield {"type": "error", "message": str(e)}
 
+    finally:
+        # Ensure process is always reaped — covers GeneratorExit, CancelledError,
+        # and any BaseException subclass that bypasses the except clause above.
+        if process.poll() is None:
+            log.warning("[cli] Process still alive in finally — terminating tree")
+            _terminate_tree(process)
+        # Join reader threads to prevent call_soon_threadsafe on a closed loop.
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
 
-def _translate_event(data: dict) -> dict | None:
-    """Translate a single NDJSON event from Claude CLI into our event schema."""
+
+def _translate_event(data: dict) -> list[dict]:
+    """Translate a single NDJSON event from Claude CLI into our event schema.
+
+    Returns a list of events — an assistant turn can contain multiple content
+    blocks (thinking, text, tool_use) and we surface all of them.
+    """
     msg_type = data.get("type", "")
 
     # Streaming deltas (real-time text chunks, thinking, and tool use starts)
+    # These fire when --include-partial-messages is enabled.
     if msg_type == "stream_event":
         event = data.get("event", {})
         etype = event.get("type", "")
@@ -315,52 +330,66 @@ def _translate_event(data: dict) -> dict | None:
             if dtype == "text_delta":
                 text = delta.get("text", "")
                 if text:
-                    return {"type": "text", "content": text}
+                    return [{"type": "text", "content": text}]
             elif dtype == "thinking_delta":
                 thinking = delta.get("thinking", "")
                 if thinking:
-                    return {"type": "thinking", "content": thinking}
+                    return [{"type": "thinking", "content": thinking}]
         elif etype == "content_block_start":
             block = event.get("content_block", {})
             if block.get("type") == "tool_use":
-                return {"type": "tool_use", "tool": block.get("name", ""), "input": {}}
-            elif block.get("type") == "thinking":
-                return {"type": "thinking", "content": ""}
-        return None
+                return [{"type": "tool_use", "tool": block.get("name", ""), "input": {}}]
+        return []
 
     # Bare content_block_delta (some CLI versions)
     if msg_type == "content_block_delta":
         delta = data.get("delta", {})
         dtype = delta.get("type", "")
         if dtype == "text_delta":
-            return {"type": "text", "content": delta.get("text", "")}
+            return [{"type": "text", "content": delta.get("text", "")}]
         elif dtype == "thinking_delta":
-            return {"type": "thinking", "content": delta.get("thinking", "")}
-        return None
+            return [{"type": "thinking", "content": delta.get("thinking", "")}]
+        return []
 
-    # Full assistant turn — used for DB storage, not streaming
+    # Full assistant turn — extract ALL content blocks: thinking, text, tool_use.
+    # Text that precedes a tool_use is "preamble" — emitted for live display only
+    # (not for DB accumulation).  Only trailing text (after all tool_uses, or in a
+    # text-only turn) becomes assistant_complete for storage.
     if msg_type == "assistant":
         blocks = (
             data.get("message", {}).get("content", [])
             or data.get("content", [])
         )
+        has_tool_use = any(b.get("type") == "tool_use" for b in blocks)
+        events = []
         text_parts = []
         for block in blocks:
-            if block.get("type") == "text":
+            btype = block.get("type")
+            if btype == "thinking":
+                thinking = block.get("thinking", "")
+                if thinking:
+                    events.append({"type": "thinking", "content": thinking})
+            elif btype == "text":
                 text_parts.append(block["text"])
-            elif block.get("type") == "tool_use":
-                return {
+            elif btype == "tool_use":
+                # Flush accumulated text as "text" (live display only, not accumulated)
+                if text_parts:
+                    events.append({"type": "text", "content": "\n\n".join(text_parts)})
+                    text_parts = []
+                events.append({
                     "type": "tool_use",
                     "tool": block.get("name", ""),
                     "input": block.get("input", {}),
-                }
+                })
+        # Trailing text: assistant_complete if text-only turn, otherwise "text"
         if text_parts:
-            return {"type": "assistant_complete", "content": "\n\n".join(text_parts)}
-        return None
+            if has_tool_use:
+                events.append({"type": "text", "content": "\n\n".join(text_parts)})
+            else:
+                events.append({"type": "assistant_complete", "content": "\n\n".join(text_parts)})
+        return events
 
     # Result (final summary) — may carry session_id AND execution metadata.
-    # _translate_event returns a single dict, so we pack both into one event
-    # and let the worker handle the combined payload.
     if msg_type == "result":
         content = data.get("result", "")
         is_error = data.get("is_error", False)
@@ -370,23 +399,22 @@ def _translate_event(data: dict) -> dict | None:
             if not content:
                 subtype = data.get("subtype", "unknown error")
                 content = subtype
-            return {"type": "error", "message": content}
+            return [{"type": "error", "message": content}]
 
         event = {"type": "result_meta"}
         if sid:
             event["cli_session_id"] = sid
-        # Execution metadata
         event["stop_reason"] = data.get("stop_reason")
         event["num_turns"] = data.get("num_turns")
         event["cost_usd"] = data.get("total_cost_usd")
-        return event
+        return [event]
 
     # System/init events — surface session_id early
     if msg_type in ("system", "init"):
         sid = data.get("session_id", "")
         if sid:
-            return {"type": "session_id", "cli_session_id": sid}
-        return None
+            return [{"type": "session_id", "cli_session_id": sid}]
+        return []
 
     log.debug("[cli] Unhandled event type: %s — %s", msg_type, str(data)[:200])
-    return None
+    return []

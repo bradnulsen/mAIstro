@@ -121,13 +121,14 @@ export default function Queue() {
 
   // Live streaming state
   const [liveText, setLiveText] = useState('')
+  const [liveThinking, setLiveThinking] = useState('')
   const [liveTools, setLiveTools] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
 
   useEffect(() => { setActionError(''); setConfirmCancel(null); setReplyContext(null) }, [selected?.id])
 
   useEffect(() => {
-    if (!selected) { setOutput(null); setLiveText(''); setLiveTools([]); setIsStreaming(false); return }
+    if (!selected) { setOutput(null); setLiveText(''); setLiveThinking(''); setLiveTools([]); setIsStreaming(false); return }
     let cancelled = false
     let sseHandle = null
 
@@ -135,6 +136,7 @@ export default function Queue() {
     if (status === 'running') {
       setOutput(null)
       setLiveText('')
+      setLiveThinking('')
       setLiveTools([])
       setIsStreaming(true)
 
@@ -142,9 +144,13 @@ export default function Queue() {
         const { abort, done } = streamTask(selected.id, (event) => {
           if (cancelled) return
           const type = event.type
-          if (type === 'text') {
+          if (type === 'text' || type === 'assistant_complete') {
             setLiveText(prev => prev + (event.content || ''))
+          } else if (type === 'thinking') {
+            setLiveThinking(prev => prev + (event.content || ''))
           } else if (type === 'tool_use') {
+            // New tool turn — clear thinking (it was for the decision just made)
+            setLiveThinking('')
             setLiveTools(prev => {
               const tool = event.tool || '?'
               return prev.includes(tool) ? prev : [...prev, tool]
@@ -174,6 +180,7 @@ export default function Queue() {
       return () => { cancelled = true; if (sseHandle) sseHandle.abort() }
     } else {
       setLiveText('')
+      setLiveThinking('')
       setLiveTools([])
       setIsStreaming(false)
       const load = async () => {
@@ -316,10 +323,10 @@ export default function Queue() {
   }, [selected?.id])
 
   useEffect(() => {
-    if (!liveText || !drawerScrollRef.current) return
+    if ((!liveText && !liveThinking) || !drawerScrollRef.current) return
     const el = drawerScrollRef.current
     el.scrollTop = el.scrollHeight
-  }, [liveText])
+  }, [liveText, liveThinking])
 
   useEffect(() => {
     const handleKey = (e) => {
@@ -405,7 +412,7 @@ export default function Queue() {
 
             <div ref={drawerScrollRef} className="detail-drawer-scroll">
               <TaskDetail item={selected} output={output} onUpdate={refresh}
-                liveText={liveText} liveTools={liveTools} isStreaming={isStreaming}
+                liveText={liveText} liveThinking={liveThinking} liveTools={liveTools} isStreaming={isStreaming}
                 onUncoalesce={handleUncoalesce} />
             </div>
 
@@ -782,7 +789,7 @@ function ContextEditor({ value, onChange, onSubmit, autoFocus = false }) {
   )
 }
 
-function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, onUncoalesce }) {
+function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools, isStreaming, onUncoalesce }) {
   // Merge detail-level data (events, durations) from the output fetch when available
   const detail = output?.task || item
   const status = getStatus(item)
@@ -989,6 +996,12 @@ function TaskDetail({ item, output, onUpdate, liveText, liveTools, isStreaming, 
               <span className="pulse-dot">●</span> streaming
             </span>}
           </label>
+          {liveThinking && (
+            <div className="thinking-bubble">
+              <span className="thinking-label">reasoning</span>
+              <div className="thinking-content">{liveThinking}</div>
+            </div>
+          )}
           {liveTools.length > 0 && (
             <div className="live-tools">
               Tools: {liveTools.map((t, i) => (

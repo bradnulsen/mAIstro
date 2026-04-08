@@ -202,6 +202,7 @@ async def update_task_route(task_id: int, req: UpdateTaskRequest):
 
     if req.context is not None:
         await db.update_task(task_id, context=req.context)
+        worker.notify_queue_changed()
     return {"status": "ok"}
 
 
@@ -211,17 +212,23 @@ async def cancel_task(task_id: int):
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    was_running = worker.cancel(task_id)
-    # Cancel is valid from pending, queued, or active
     current = task.get("status")
     if current in db.TERMINAL_STATUSES:
         return {"status": "already_terminal", "was_running": False}
+    was_running = worker.cancel(task_id)
+    if was_running:
+        # Active task: the worker owns the transition — it will detect the
+        # cancel event, terminate the CLI, and transition to "cancelled" itself.
+        # Transitioning here too causes a race (double-transition → ValueError).
+        worker.notify_queue_changed()
+        return {"status": "cancelling", "was_running": True}
+    # Pending or queued: not being processed by the worker, transition directly.
     await db.transition_task(task_id, "cancelled", error="cancelled")
     subs = await db.get_subordinate_tasks(task_id)
     sub_ids = [s["id"] for s in subs if s.get("status") not in db.TERMINAL_STATUSES]
     await db.transition_tasks_batch(sub_ids, "cancelled", error="cancelled")
     worker.notify_queue_changed()
-    return {"status": "cancelled", "was_running": was_running}
+    return {"status": "cancelled", "was_running": False}
 
 
 @router.post("/api/tasks/{task_id}/resume")
@@ -405,6 +412,7 @@ async def reorder_tasks_route(req: ReorderTasksRequest):
     """Reorder pending tasks to control execution priority."""
     require_project()
     await db.reorder_tasks(req.task_ids)
+    worker.notify_queue_changed()
     return {"status": "ok"}
 
 

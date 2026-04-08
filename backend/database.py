@@ -1574,10 +1574,15 @@ async def reject_task(task_id: int) -> bool:
         return False
     for row in rows:
         tid = row["id"]
+        try:
+            await transition_task(tid, "rejected", error="rejected")
+        except ValueError:
+            log.warning("[database] reject_task: task #%d already terminal — skipping", tid)
+            continue
         await db.execute(
             "UPDATE tasks SET approval = 'rejected' WHERE id = ?", (tid,)
         )
-        await transition_task(tid, "rejected", error="rejected")
+        await db.commit()
     return True
 
 
@@ -1671,7 +1676,13 @@ async def reconstruct_output_from_events(session_id: str) -> list[dict]:
             continue
     if not text_parts:
         return []
-    return [{"role": "assistant", "content": "\n\n".join(text_parts)}]
+    return [{
+        "id": None,
+        "session_id": session_id,
+        "role": "assistant",
+        "content": "\n\n".join(text_parts),
+        "created_at": None,
+    }]
 
 
 async def update_chat_session(session_id: str, **kwargs):
@@ -1846,10 +1857,11 @@ async def dashboard_health(window_days: int) -> list[dict]:
             SUM(CASE WHEN t.status = 'timed_out' THEN 1 ELSE 0 END) AS timed_out,
             SUM(CASE WHEN t.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
             SUM(CASE WHEN t.status = 'interrupted' THEN 1 ELSE 0 END) AS interrupted,
-            SUM(CASE WHEN t.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+            SUM(CASE WHEN t.status = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN t.status = 'exhausted' THEN 1 ELSE 0 END) AS exhausted
         FROM tasks t
         JOIN jobs j ON j.id = t.job_id
-        WHERE t.status IN ('completed','failed','timed_out','cancelled','interrupted','rejected')
+        WHERE t.status IN ('completed','failed','timed_out','cancelled','interrupted','rejected','exhausted')
           AND t.completed_at >= datetime('now', ?)
         GROUP BY t.job_id, j.name
     """
@@ -1862,7 +1874,7 @@ async def dashboard_health(window_days: int) -> list[dict]:
             COUNT(*) AS total,
             SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed
         FROM tasks t
-        WHERE t.status IN ('completed','failed','timed_out','cancelled','interrupted','rejected')
+        WHERE t.status IN ('completed','failed','timed_out','cancelled','interrupted','rejected','exhausted')
           AND t.completed_at >= datetime('now', ?)
           AND t.completed_at < datetime('now', ?)
         GROUP BY t.job_id
@@ -1902,11 +1914,11 @@ async def dashboard_timeline(window_days: int) -> list[dict]:
            JOIN jobs j ON j.id = t.job_id
            JOIN task_events te_start ON te_start.task_id = t.id AND te_start.event IN ('activated', 'active')
            LEFT JOIN task_events te_end ON te_end.task_id = t.id
-             AND te_end.event IN ('completed', 'failed', 'cancelled', 'timed_out', 'interrupted')
+             AND te_end.event IN ('completed', 'failed', 'cancelled', 'timed_out', 'interrupted', 'exhausted')
              AND te_end.id = (
                SELECT MAX(e2.id) FROM task_events e2
                WHERE e2.task_id = t.id
-                 AND e2.event IN ('completed', 'failed', 'cancelled', 'timed_out', 'interrupted')
+                 AND e2.event IN ('completed', 'failed', 'cancelled', 'timed_out', 'interrupted', 'exhausted')
              )
            WHERE te_start.created_at >= datetime('now', ?)
            ORDER BY te_start.created_at""",
@@ -2012,4 +2024,7 @@ def _normalize_int_list_props(props: dict, slug_to_id: dict[str, int]) -> None:
                     resolved = slug_to_id.get(str(item))
                     if resolved is not None:
                         normalized.append(resolved)
+                    else:
+                        log.warning("[database] %s: unresolvable item %r — preserving as-is", key, item)
+                        normalized.append(item)
         props[key] = normalized

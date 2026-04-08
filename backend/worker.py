@@ -271,7 +271,6 @@ async def _process_task(task: dict):
     watchdog = asyncio.create_task(_timeout_watchdog()) if timeout_seconds > 0 else None
 
     full_response = []
-    streaming_text = []
     # Execution metadata captured from CLI result event
     _result_meta: dict = {}
 
@@ -306,14 +305,12 @@ async def _process_task(task: dict):
                     "num_turns": event.get("num_turns"),
                     "cost_usd": event.get("cost_usd"),
                 }
-            elif etype == "text":
-                streaming_text.append(event.get("content", ""))
             elif etype == "error":
                 await db.add_chat_message(session_id, "system", event.get("message", "error"))
 
         log.info("[worker] Task #%d CLI finished — starting post-processing", task_id)
 
-        response_text = "".join(full_response) or "".join(streaming_text)
+        response_text = "".join(full_response)
         if response_text:
             try:
                 await db.add_chat_message(session_id, "assistant", response_text)
@@ -382,7 +379,7 @@ async def _process_task(task: dict):
         log.exception("[worker] Task #%d failed: %s", task_id, e)
         # Raw events already persisted incrementally — just write response
         try:
-            response_text = "".join(full_response) or "".join(streaming_text)
+            response_text = "".join(full_response)
             if response_text:
                 await db.add_chat_message(session_id, "assistant", response_text)
             await db.add_chat_message(session_id, "system", f"Error: {e}")

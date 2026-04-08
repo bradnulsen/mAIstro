@@ -25,10 +25,12 @@ Backend runs on http://localhost:8420, frontend on http://localhost:5173. Backen
 
 **mAistro** — an intent-to-reality development engine where LLM-powered jobs coordinate through git. Jobs are persistent configuration entities; tasks are atomic units of work dispatched from jobs. See `DESIGN.md` for full requirements and `STRATEGY.md` for current priorities.
 
+**Naming: Goal vs Job.** `DESIGN.md` uses "Goal" (the user-facing concept); all code, database tables, API routes, and variable names use "Job." They are the same thing. When reading DESIGN.md, mentally substitute "job" for "goal." When writing code, always use "job."
+
 ### Stack
 - **Backend**: Python + FastAPI + SQLite (aiosqlite, WAL mode) + sse-starlette
 - **Frontend**: React 19 + Vite 6 (no TypeScript, no state library)
-- **LLM**: Claude CLI invoked as subprocess with `--output-format stream-json` (NDJSON streaming)
+- **LLM**: Claude CLI invoked as subprocess with `--output-format stream-json` (NDJSON streaming). On Windows, the CLI layer (`cli.py`) bypasses npm's `.CMD` wrappers by resolving the underlying Node.js script directly — this is required for correct process lifecycle (terminate/kill). Async subprocess (`asyncio.create_subprocess_exec`) is unavailable on Windows ProactorEventLoop, so `Popen` + thread readers are used instead.
 - **Realtime**: Server-Sent Events (SSE) for task streaming and chat
 
 ### Data Model
@@ -107,6 +109,8 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 - Task columns: `trigger` (type), `trigger_detail` (specifics), `context` (pre-formatted text) — real columns, not JSON
 - Queue can be auto-processing or paused — controlled via `/api/queue/settings` (auto_dispatch toggle)
 - Backend port: 8420, Frontend port: 5173
+- All API routes are prefixed `/api/`. REST conventions: `GET /api/jobs/`, `POST /api/jobs/`, `PATCH /api/jobs/:id`, `DELETE /api/jobs/:id`. Tasks at `/api/tasks/`. Chat at `/api/chat/`. Queue settings at `/api/queue/settings`.
+- Frontend uses no state management library — pure React `useState`/`useEffect` with polling and SSE subscriptions. `api.js` centralizes all backend calls via `fetchJSON` (request/response) and `fetchSSE` (streaming).
 
 ### Database Schema
 - No migration system — `SCHEMA_SQL` uses `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` for idempotent init
@@ -135,7 +139,7 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 - **P3: Notifications** — in-app feed, desktop notifications, per-job rules, webhook integration.
 
 **Known technical debt** (see `REMEDIATION.md` for full detail and sequencing):
-- `database.py` is a 1900+ line god module; split plan documented as R2
+- `database.py` is a 2000+ line god module; split plan documented as R2
 - Coalescing logic spread across 12+ touch points; depth-1 invariant maintained only by code discipline (R5)
 - `git.py` uses sync `subprocess.run`, blocks async event loop (R7)
 - Route extraction from `main.py` is partial — project, feed, git, dashboard, config routes remain inline (R9)

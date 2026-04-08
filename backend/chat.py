@@ -143,7 +143,6 @@ async def chat(req: ChatRequest):
 
     async def _run_cli():
         full_response = []
-        streaming_text = []
         new_cli_session_id = None
         try:
             async for event in cli.invoke(
@@ -167,9 +166,7 @@ async def chat(req: ChatRequest):
                     full_response.append(event.get("content", ""))
                     continue
 
-                if etype == "text":
-                    streaming_text.append(event.get("content", ""))
-                elif etype == "result_meta":
+                if etype == "result_meta":
                     new_cli_session_id = event.get("cli_session_id")
                     # Emit as session_id event for SSE stream compatibility
                     if new_cli_session_id:
@@ -181,7 +178,7 @@ async def chat(req: ChatRequest):
             log.exception("[chat] CLI error for session %s: %s", session_id, e)
             await event_queue.put({"type": "error", "message": str(e)})
         finally:
-            response_text = "".join(full_response) or "".join(streaming_text)
+            response_text = "".join(full_response)
             if response_text:
                 try:
                     await db.add_chat_message(session_id, "assistant", response_text)
