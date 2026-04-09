@@ -101,10 +101,10 @@ async def reorder_jobs(req: ReorderRequest):
 
 @router.get("/api/jobs/{job_id}/subscriptions")
 async def get_job_subscriptions(job_id: int):
-    require_project()
+    project_dir = require_project()
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
     props = job["properties"]
-    subs = git.resolve_glob_files(state.PROJECT_DIR, props.get("subscriptions") or [])
+    subs = git.resolve_glob_files(project_dir, props.get("subscriptions") or [])
     return {"subscriptions": subs}

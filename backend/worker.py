@@ -7,7 +7,7 @@ All feeders (manual, watch, timer) just create task records.
 import asyncio
 import logging
 
-from backend import database as db, events, git, state
+from backend import database as db, events, git, pubsub, state
 from backend.dispatch import run_task, build_trigger_context
 from backend.mcp_probe import probe_server
 from backend.state import utcnow
@@ -20,63 +20,6 @@ _lock: asyncio.Lock = asyncio.Lock()
 _active_task_id: int | None = None
 _cancel_event: asyncio.Event | None = None
 
-# ── Live event broadcast ───────────────────────────────────
-# Subscribers keyed by task_id → set of asyncio.Queue.
-_subscribers: dict[int, set[asyncio.Queue]] = {}
-
-# ── Global queue-change broadcast ──────────────────────────
-# Subscribers that want to know when the queue changes (any task).
-_queue_subscribers: set[asyncio.Queue] = set()
-
-
-def subscribe(task_id: int) -> asyncio.Queue:
-    """Subscribe to live events for a task. Returns a queue to read from."""
-    q = asyncio.Queue()
-    _subscribers.setdefault(task_id, set()).add(q)
-    log.debug("[worker] Subscriber added for task #%d (total=%d)", task_id, len(_subscribers[task_id]))
-    return q
-
-
-def unsubscribe(task_id: int, q: asyncio.Queue):
-    """Remove a subscriber queue."""
-    subs = _subscribers.get(task_id)
-    if subs:
-        subs.discard(q)
-        if not subs:
-            del _subscribers[task_id]
-
-
-def _broadcast(task_id: int, event: dict):
-    """Push an event to all subscribers of a task."""
-    subs = _subscribers.get(task_id)
-    if not subs:
-        return
-    for q in subs:
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            pass
-
-
-def subscribe_queue() -> asyncio.Queue:
-    """Subscribe to global queue-change notifications. Returns a queue to read from."""
-    q = asyncio.Queue()
-    _queue_subscribers.add(q)
-    return q
-
-
-def unsubscribe_queue(q: asyncio.Queue):
-    """Remove a global queue subscriber."""
-    _queue_subscribers.discard(q)
-
-
-def notify_queue_changed():
-    """Notify all global queue subscribers that the queue state has changed."""
-    for q in _queue_subscribers:
-        try:
-            q.put_nowait(events.queue_changed())
-        except asyncio.QueueFull:
-            pass
 
 
 def get_active_task_id() -> int | None:
@@ -107,7 +50,7 @@ async def stop():
 def notify():
     """Wake the worker loop immediately (call after enqueue or settings change)."""
     _wake_event.set()
-    notify_queue_changed()
+    pubsub.notify_queue_changed()
 
 
 def cancel(task_id: int) -> bool:
@@ -248,9 +191,9 @@ async def _process_task(task: dict):
     if mcp_error:
         log.warning("[worker] Task #%d failed MCP health check: %s", task_id, mcp_error)
         await db.transition_task(task_id, "failed", error=mcp_error)
-        _broadcast(task_id, events.error(mcp_error))
-        _broadcast(task_id, events.done())
-        _subscribers.pop(task_id, None)
+        pubsub.broadcast(task_id, events.error(mcp_error))
+        pubsub.broadcast(task_id, events.done())
+        pubsub.cleanup_task(task_id)
         notify_queue_changed()
         _active_task_id = None
         _cancel_event = None
@@ -291,7 +234,7 @@ async def _process_task(task: dict):
                                 task_id, event.get("event_type"))
                 continue
 
-            _broadcast(task_id, event)
+            pubsub.broadcast(task_id, event)
 
             if etype == "assistant_complete":
                 full_response.append(event.get("content", ""))
@@ -406,8 +349,8 @@ async def _process_task(task: dict):
             log.exception("[worker] Task #%d CRITICAL: could not transition to failed", task_id)
         if watchdog and not watchdog.done():
             watchdog.cancel()
-        _broadcast(task_id, events.done())
-        _subscribers.pop(task_id, None)
+        pubsub.broadcast(task_id, events.done())
+        pubsub.cleanup_task(task_id)
         notify_queue_changed()
         _active_task_id = None
         _cancel_event = None

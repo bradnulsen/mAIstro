@@ -223,8 +223,8 @@ async def close_project():
 
 @app.get("/api/feed/")
 async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, path: str | None = None):
-    require_project()
-    entries = git.log(state.PROJECT_DIR, limit=limit, skip=offset, path=path, with_stats=True)
+    project_dir = require_project()
+    entries = git.log(project_dir, limit=limit, skip=offset, path=path, with_stats=True)
 
     queue = await db.get_task_queue(limit=200)
     task_by_commit = {t["result_commit"]: t for t in queue if t.get("result_commit")}
@@ -252,13 +252,13 @@ async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, 
 
 @app.get("/api/feed/{commit_hash}")
 async def get_feed_item(commit_hash: str):
-    require_project()
-    details = git.show(state.PROJECT_DIR, commit_hash, stat=True)
+    project_dir = require_project()
+    details = git.show(project_dir, commit_hash, stat=True)
     if not details:
         raise HTTPException(404, "Commit not found")
     return {
         "details": details,
-        "diff": git.diff(state.PROJECT_DIR, commit_hash),
+        "diff": git.diff(project_dir, commit_hash),
     }
 
 
@@ -266,26 +266,26 @@ async def get_feed_item(commit_hash: str):
 
 @app.get("/api/git/log")
 async def git_log_route(limit: int = 50, path: str | None = None):
-    require_project()
-    return git.log(state.PROJECT_DIR, limit=limit, path=path)
+    project_dir = require_project()
+    return git.log(project_dir, limit=limit, path=path)
 
 
 @app.get("/api/git/diff/{commit_hash}")
 async def git_diff_route(commit_hash: str):
-    require_project()
-    return {"diff": git.diff(state.PROJECT_DIR, commit_hash)}
+    project_dir = require_project()
+    return {"diff": git.diff(project_dir, commit_hash)}
 
 
 @app.get("/api/git/status")
 async def git_status_route():
-    require_project()
-    return {"status": git.status(state.PROJECT_DIR)}
+    project_dir = require_project()
+    return {"status": git.status(project_dir)}
 
 
 @app.get("/api/git/file/{path:path}")
 async def read_git_file(path: str):
-    require_project()
-    content = git.read_file(state.PROJECT_DIR, path)
+    project_dir = require_project()
+    content = git.read_file(project_dir, path)
     if content is None:
         raise HTTPException(404, "File not found")
     return {"path": path, "content": content}
@@ -293,10 +293,10 @@ async def read_git_file(path: str):
 
 @app.put("/api/git/file/{path:path}")
 async def write_git_file(path: str, req: FileWriteRequest):
-    require_project()
-    git.write_file(state.PROJECT_DIR, path, req.content)
+    project_dir = require_project()
+    git.write_file(project_dir, path, req.content)
     message = req.message or f"Update {path}"
-    commit_hash = git.commit_file(state.PROJECT_DIR, path, message)
+    commit_hash = git.commit_file(project_dir, path, message)
     return {"path": path, "commit": commit_hash}
 
 
@@ -304,15 +304,16 @@ async def write_git_file(path: str, req: FileWriteRequest):
 
 @app.post("/api/hooks/post-commit")
 async def post_commit_hook(req: PostCommitRequest):
-    if not state.PROJECT_DIR:
+    project_dir = state.PROJECT_DIR
+    if not project_dir:
         return {"status": "no project"}
 
-    triggered = await check_watch_triggers(req.commit_hash, state.PROJECT_DIR)
+    triggered = await check_watch_triggers(req.commit_hash, project_dir)
     dispatched = []
 
     for job in triggered:
         context = build_trigger_context(
-            "commit", project_dir=state.PROJECT_DIR, commit_hash=req.commit_hash,
+            "commit", project_dir=project_dir, commit_hash=req.commit_hash,
         )
         await db.enqueue_task(
             job["id"], "commit", trigger_detail=req.commit_hash, context=context
@@ -467,8 +468,8 @@ async def delete_mcp_server(name: str):
 @app.get("/api/files/")
 async def list_files(pattern: str = "**/*"):
     """List project files matching a glob pattern."""
-    require_project()
-    files = git.resolve_glob_files(state.PROJECT_DIR, [pattern])
+    project_dir = require_project()
+    files = git.resolve_glob_files(project_dir, [pattern])
     return files
 
 

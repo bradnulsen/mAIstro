@@ -99,10 +99,11 @@ async def _build_chat_context() -> str:
         task_lines.append(f"- #{t['id']} {t.get('job_name', '?')} [{status}] {t.get('created_at', '')}")
     task_summary = "\n".join(task_lines) if task_lines else "(no recent tasks)"
 
-    git_summary = git.log_oneline(state.PROJECT_DIR) or "(no commits)"
+    project_dir = state.PROJECT_DIR or "(no project)"
+    git_summary = git.log_oneline(project_dir) if state.PROJECT_DIR else "(no commits)"
 
     result = CHAT_SYSTEM_PROMPT.format(
-        project_dir=state.PROJECT_DIR,
+        project_dir=project_dir,
         job_summary=job_summary,
         task_summary=task_summary,
         git_summary=git_summary,
@@ -120,7 +121,7 @@ _active_chats: dict[str, asyncio.Queue] = {}
 
 @router.post("/")
 async def chat(req: ChatRequest):
-    require_project()
+    project_dir = require_project()
 
     session_id = req.session_id
     cli_session_id = None
@@ -150,7 +151,7 @@ async def chat(req: ChatRequest):
             async for event in cli.invoke(
                 prompt=message,
                 system_prompt=system_prompt,
-                cwd=state.PROJECT_DIR,
+                cwd=project_dir,
                 model="opus",
                 resume_session=cli_session_id,
             ):

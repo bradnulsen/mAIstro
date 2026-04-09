@@ -12,7 +12,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from backend import events
+from backend import events, pubsub
 
 log = logging.getLogger("maistro.queue_routes")
 
@@ -75,7 +75,7 @@ async def stream_queue_changes():
     Sends a 'queue_changed' event whenever any task transitions state.
     Clients should re-fetch the task queue on each notification.
     """
-    q = worker.subscribe_queue()
+    q = pubsub.subscribe_queue()
     log.info("[sse] Queue stream connected")
 
     async def stream():
@@ -88,7 +88,7 @@ async def stream_queue_changes():
                     continue
                 yield {"event": event["type"], "data": "{}"}
         finally:
-            worker.unsubscribe_queue(q)
+            pubsub.unsubscribe_queue(q)
             log.info("[sse] Queue stream disconnected")
 
     return EventSourceResponse(stream())
@@ -107,7 +107,7 @@ async def stream_task(task_id: int):
             yield {"event": "done", "data": json.dumps({"status": "completed"})}
         return EventSourceResponse(done_stream())
 
-    q = worker.subscribe(task_id)
+    q = pubsub.subscribe(task_id)
     log.info("[sse] Task #%d stream connected", task_id)
 
     async def stream():
@@ -124,7 +124,7 @@ async def stream_task(task_id: int):
                     break
                 yield events.to_sse(event)
         finally:
-            worker.unsubscribe(task_id, q)
+            pubsub.unsubscribe(task_id, q)
             log.info("[sse] Task #%d stream disconnected", task_id)
 
     return EventSourceResponse(stream())
@@ -176,7 +176,7 @@ async def get_task_output(task_id: int):
 @router.get("/api/tasks/{task_id}/outcome")
 async def get_task_outcome(task_id: int):
     """Get the outcome summary for a completed task (derived from git)."""
-    require_project()
+    project_dir = require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -184,14 +184,14 @@ async def get_task_outcome(task_id: int):
     end = task.get("result_commit")
     if not start or not end or start == end:
         return {"summary": None}
-    summary = git.outcome_summary(state.PROJECT_DIR, start, end)
+    summary = git.outcome_summary(project_dir, start, end)
     return {"summary": summary}
 
 
 @router.get("/api/tasks/{task_id}/diff")
 async def get_task_diff(task_id: int):
     """Get the git diff for a completed task (start_commit..result_commit)."""
-    require_project()
+    project_dir = require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -201,7 +201,7 @@ async def get_task_diff(task_id: int):
         return {"files": [], "insertions": 0, "deletions": 0, "diff": ""}
     if start == end:
         return {"files": [], "insertions": 0, "deletions": 0, "diff": ""}
-    return git.diff_range(state.PROJECT_DIR, start, end)
+    return git.diff_range(project_dir, start, end)
 
 
 @router.patch("/api/tasks/{task_id}")
@@ -216,7 +216,7 @@ async def update_task_route(task_id: int, req: UpdateTaskRequest):
 
     if req.context is not None:
         await db.update_task(task_id, context=req.context)
-        worker.notify_queue_changed()
+        pubsub.notify_queue_changed()
     return {"status": "ok"}
 
 
@@ -234,14 +234,14 @@ async def cancel_task(task_id: int):
         # Active task: the worker owns the transition — it will detect the
         # cancel event, terminate the CLI, and transition to "cancelled" itself.
         # Transitioning here too causes a race (double-transition → ValueError).
-        worker.notify_queue_changed()
+        pubsub.notify_queue_changed()
         return {"status": "cancelling", "was_running": True}
     # Pending or queued: not being processed by the worker, transition directly.
     await db.transition_task(task_id, "cancelled", error="cancelled")
     subs = await db.get_subordinate_tasks(task_id)
     sub_ids = [s["id"] for s in subs if s.get("status") not in db.TERMINAL_STATUSES]
     await db.transition_tasks_batch(sub_ids, "cancelled", error="cancelled")
-    worker.notify_queue_changed()
+    pubsub.notify_queue_changed()
     return {"status": "cancelled", "was_running": False}
 
 
@@ -277,7 +277,7 @@ async def resume_task(task_id: int):
 @router.post("/api/tasks/{task_id}/reply")
 async def reply_task(task_id: int, req: ReplyRequest | None = None):
     """Reply to a resolved task — creates a follow-up task with user context."""
-    require_project()
+    project_dir = require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -291,7 +291,7 @@ async def reply_task(task_id: int, req: ReplyRequest | None = None):
         trigger_detail=str(task_id),
         context=build_trigger_context(
             "reply",
-            project_dir=state.PROJECT_DIR,
+            project_dir=project_dir,
             original_task_id=task_id,
             start_commit=task.get("start_commit"),
             result_commit=task.get("result_commit"),
@@ -309,7 +309,7 @@ async def merge_tasks_route(req: MergeRequest):
     require_project()
     try:
         root_id = await db.merge_tasks(req.task_ids)
-        worker.notify_queue_changed()
+        pubsub.notify_queue_changed()
         return {"root_id": root_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -329,7 +329,7 @@ async def uncoalesce_task_route(task_id: int):
     require_project()
     try:
         freed_id = await db.uncoalesce_task(task_id)
-        worker.notify_queue_changed()
+        pubsub.notify_queue_changed()
         return {"task_id": freed_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -344,7 +344,7 @@ async def transfer_task_route(task_id: int, req: TransferRequest):
         if req.to_queued:
             worker.notify()
         else:
-            worker.notify_queue_changed()
+            pubsub.notify_queue_changed()
         return {"status": "ok", "to_queued": req.to_queued}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -356,7 +356,7 @@ async def split_task_route(task_id: int):
     require_project()
     try:
         split_ids = await db.split_task(task_id)
-        worker.notify_queue_changed()
+        pubsub.notify_queue_changed()
         return {"split_ids": split_ids}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -398,7 +398,7 @@ async def reject_task_route(task_id: int):
     ok = await db.reject_task(task_id)
     if not ok:
         raise HTTPException(404, "Task not found or not pending approval")
-    worker.notify_queue_changed()
+    pubsub.notify_queue_changed()
     return {"status": "rejected"}
 
 
@@ -417,7 +417,7 @@ async def shelve_all():
     """Transfer all queued (non-active) tasks back to pending."""
     require_project()
     count = await db.transfer_all_tasks(to_queued=False)
-    worker.notify_queue_changed()
+    pubsub.notify_queue_changed()
     return {"transferred": count}
 
 
@@ -426,7 +426,7 @@ async def reorder_tasks_route(req: ReorderTasksRequest):
     """Reorder pending tasks to control execution priority."""
     require_project()
     await db.reorder_tasks(req.task_ids)
-    worker.notify_queue_changed()
+    pubsub.notify_queue_changed()
     return {"status": "ok"}
 
 
@@ -510,13 +510,13 @@ async def agent_dispatch(req: AgentDispatchRequest):
 @router.post("/api/tasks/{job_id}")
 async def enqueue_job(job_id: int, req: DispatchRequest | None = None):
     """Enqueue a task for a job. The worker processes it."""
-    require_project()
+    project_dir = require_project()
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
 
     user_context = req.context if req else None
-    head = git.head_hash(state.PROJECT_DIR)
+    head = git.head_hash(project_dir)
     context = build_trigger_context(
         "manual", commit_hash=head, user_context=user_context,
     )
