@@ -165,8 +165,8 @@ export default function Chat() {
             setThinking('')
           }
           setToolStatus(event.tool || 'working...')
-        } else if (event.session_id) {
-          newSessionId = event.session_id
+        } else if (event.type === 'session_id') {
+          newSessionId = event.session_id || event.cli_session_id
         }
       })
       abortRef.current = abort

@@ -13,6 +13,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from backend import events as ev
+
 from backend import cli, database as db, git
 from backend import state
 from backend.state import require_project
@@ -204,17 +206,7 @@ async def chat(req: ChatRequest):
                 continue
             if event is None:
                 break
-            etype = event["type"]
-            if etype == "text":
-                yield {"event": "text", "data": json.dumps({"content": event.get("content", "")})}
-            elif etype == "thinking":
-                yield {"event": "thinking", "data": json.dumps({"content": event.get("content", "")})}
-            elif etype == "session_id":
-                yield {"event": "session_id", "data": json.dumps({"cli_session_id": event.get("cli_session_id")})}
-            elif etype == "error":
-                yield {"event": "error", "data": json.dumps(event)}
-            else:
-                yield {"event": etype, "data": json.dumps(event)}
+            yield ev.to_sse(event)
 
     return EventSourceResponse(stream())
 

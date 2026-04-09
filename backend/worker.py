@@ -7,7 +7,7 @@ All feeders (manual, watch, timer) just create task records.
 import asyncio
 import logging
 
-from backend import database as db, git, state
+from backend import database as db, events, git, state
 from backend.dispatch import run_task, build_trigger_context
 from backend.mcp_probe import probe_server
 from backend.state import utcnow
@@ -74,7 +74,7 @@ def notify_queue_changed():
     """Notify all global queue subscribers that the queue state has changed."""
     for q in _queue_subscribers:
         try:
-            q.put_nowait({"type": "queue_changed"})
+            q.put_nowait(events.queue_changed())
         except asyncio.QueueFull:
             pass
 
@@ -248,8 +248,8 @@ async def _process_task(task: dict):
     if mcp_error:
         log.warning("[worker] Task #%d failed MCP health check: %s", task_id, mcp_error)
         await db.transition_task(task_id, "failed", error=mcp_error)
-        _broadcast(task_id, {"type": "error", "message": mcp_error})
-        _broadcast(task_id, {"type": "_done"})
+        _broadcast(task_id, events.error(mcp_error))
+        _broadcast(task_id, events.done())
         _subscribers.pop(task_id, None)
         notify_queue_changed()
         _active_task_id = None
@@ -405,7 +405,7 @@ async def _process_task(task: dict):
             log.exception("[worker] Task #%d CRITICAL: could not transition to failed", task_id)
         if watchdog and not watchdog.done():
             watchdog.cancel()
-        _broadcast(task_id, {"type": "_done"})
+        _broadcast(task_id, events.done())
         _subscribers.pop(task_id, None)
         notify_queue_changed()
         _active_task_id = None

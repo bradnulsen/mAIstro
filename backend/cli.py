@@ -7,14 +7,8 @@ quoting issues with multi-line strings. Reads both stdout and stderr
 Uses subprocess.Popen + thread readers because asyncio.create_subprocess_exec
 raises NotImplementedError on Windows ProactorEventLoop.
 
-Event schema (yielded dicts):
-    {"type": "_raw",              "raw_json": "...", "event_type": "..."}
-    {"type": "text",              "content": "..."}
-    {"type": "thinking",          "content": "..."}
-    {"type": "tool_use",          "tool": "...", "input": {...}}
-    {"type": "assistant_complete","content": "..."}
-    {"type": "session_id",        "cli_session_id": "..."}
-    {"type": "error",             "message": "..."}
+Event schema: see backend/events.py for the canonical definition of all
+event types, their shapes, and constructor functions.
 """
 
 import asyncio
@@ -26,6 +20,8 @@ import subprocess
 import sys
 import threading
 from typing import AsyncIterator
+
+from backend import events
 
 log = logging.getLogger("maistro.cli")
 
@@ -128,7 +124,7 @@ async def invoke(
     claude_cmd = _resolve_claude_cmd()
     if not claude_cmd:
         log.error("Claude CLI not found in PATH")
-        yield {"type": "error", "message": "Claude CLI not found in PATH"}
+        yield events.error("Claude CLI not found in PATH")
         return
 
     # Prompt and system prompt piped via stdin —
@@ -208,7 +204,7 @@ async def invoke(
             if cancel_event and cancel_event.is_set():
                 log.info("[cli] Cancellation requested — terminating process")
                 _terminate_tree(process)
-                yield {"type": "error", "message": "cancelled"}
+                yield events.error("cancelled")
                 return
 
             # Detect process exit independently of pipe EOF.
@@ -249,7 +245,7 @@ async def invoke(
                 continue
             if isinstance(line, str) and line.startswith("__ERROR__:"):
                 log.error("[cli] Reader error: %s", line)
-                yield {"type": "error", "message": line[10:]}
+                yield events.error(line[10:])
                 continue
 
             log.debug("[cli] output: %s", line[:200])
@@ -262,7 +258,7 @@ async def invoke(
 
             raw_type = data.get("type", "")
             log.debug("[cli] Event: %s", raw_type)
-            yield {"type": "_raw", "raw_json": line, "event_type": raw_type}
+            yield events.raw(line, raw_type)
 
             # The `result` event is the CLI's "I'm done" signal — always
             # the last semantic event.  Mark it so we drain and exit.
@@ -290,15 +286,14 @@ async def invoke(
         if process.returncode not in (0, None) and not _got_result:
             error_detail = "\n".join(non_json_lines)
             log.error("[cli] exit=%d detail=%s", process.returncode, error_detail[:500])
-            yield {
-                "type": "error",
-                "message": f"Process exited with code {process.returncode}"
-                + (f": {error_detail}" if error_detail else ""),
-            }
+            yield events.error(
+                f"Process exited with code {process.returncode}"
+                + (f": {error_detail}" if error_detail else "")
+            )
 
     except Exception as e:
         log.exception("[cli] Exception during streaming: %s", e)
-        yield {"type": "error", "message": str(e)}
+        yield events.error(str(e))
 
     finally:
         # Ensure process is always reaped — covers GeneratorExit, CancelledError,
@@ -328,17 +323,17 @@ def _translate_event(data: dict) -> list[dict]:
             delta = event.get("delta", {})
             dtype = delta.get("type", "")
             if dtype == "text_delta":
-                text = delta.get("text", "")
-                if text:
-                    return [{"type": "text", "content": text}]
+                t = delta.get("text", "")
+                if t:
+                    return [events.text(t)]
             elif dtype == "thinking_delta":
-                thinking = delta.get("thinking", "")
-                if thinking:
-                    return [{"type": "thinking", "content": thinking}]
+                t = delta.get("thinking", "")
+                if t:
+                    return [events.thinking(t)]
         elif etype == "content_block_start":
             block = event.get("content_block", {})
             if block.get("type") == "tool_use":
-                return [{"type": "tool_use", "tool": block.get("name", ""), "input": {}}]
+                return [events.tool_use(block.get("name", ""), {})]
         return []
 
     # Bare content_block_delta (some CLI versions)
@@ -346,9 +341,9 @@ def _translate_event(data: dict) -> list[dict]:
         delta = data.get("delta", {})
         dtype = delta.get("type", "")
         if dtype == "text_delta":
-            return [{"type": "text", "content": delta.get("text", "")}]
+            return [events.text(delta.get("text", ""))]
         elif dtype == "thinking_delta":
-            return [{"type": "thinking", "content": delta.get("thinking", "")}]
+            return [events.thinking(delta.get("thinking", ""))]
         return []
 
     # Full assistant turn — extract ALL content blocks: thinking, text, tool_use.
@@ -361,33 +356,28 @@ def _translate_event(data: dict) -> list[dict]:
             or data.get("content", [])
         )
         has_tool_use = any(b.get("type") == "tool_use" for b in blocks)
-        events = []
+        result = []
         text_parts = []
         for block in blocks:
             btype = block.get("type")
             if btype == "thinking":
-                thinking = block.get("thinking", "")
-                if thinking:
-                    events.append({"type": "thinking", "content": thinking})
+                t = block.get("thinking", "")
+                if t:
+                    result.append(events.thinking(t))
             elif btype == "text":
                 text_parts.append(block["text"])
             elif btype == "tool_use":
-                # Flush accumulated text as "text" (live display only, not accumulated)
                 if text_parts:
-                    events.append({"type": "text", "content": "\n\n".join(text_parts)})
+                    result.append(events.text("\n\n".join(text_parts)))
                     text_parts = []
-                events.append({
-                    "type": "tool_use",
-                    "tool": block.get("name", ""),
-                    "input": block.get("input", {}),
-                })
-        # Trailing text: assistant_complete if text-only turn, otherwise "text"
+                result.append(events.tool_use(block.get("name", ""), block.get("input", {})))
         if text_parts:
+            joined = "\n\n".join(text_parts)
             if has_tool_use:
-                events.append({"type": "text", "content": "\n\n".join(text_parts)})
+                result.append(events.text(joined))
             else:
-                events.append({"type": "assistant_complete", "content": "\n\n".join(text_parts)})
-        return events
+                result.append(events.assistant_complete(joined))
+        return result
 
     # Result (final summary) — may carry session_id AND execution metadata.
     if msg_type == "result":
@@ -397,23 +387,21 @@ def _translate_event(data: dict) -> list[dict]:
 
         if is_error:
             if not content:
-                subtype = data.get("subtype", "unknown error")
-                content = subtype
-            return [{"type": "error", "message": content}]
+                content = data.get("subtype", "unknown error")
+            return [events.error(content)]
 
-        event = {"type": "result_meta"}
-        if sid:
-            event["cli_session_id"] = sid
-        event["stop_reason"] = data.get("stop_reason")
-        event["num_turns"] = data.get("num_turns")
-        event["cost_usd"] = data.get("total_cost_usd")
-        return [event]
+        return [events.result_meta(
+            cli_session_id=sid or None,
+            stop_reason=data.get("stop_reason"),
+            num_turns=data.get("num_turns"),
+            cost_usd=data.get("total_cost_usd"),
+        )]
 
     # System/init events — surface session_id early
     if msg_type in ("system", "init"):
         sid = data.get("session_id", "")
         if sid:
-            return [{"type": "session_id", "cli_session_id": sid}]
+            return [events.session_id(sid)]
         return []
 
     log.debug("[cli] Unhandled event type: %s — %s", msg_type, str(data)[:200])

@@ -11,6 +11,8 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from backend import events
+
 from backend import database as db, git, worker
 from backend import state
 from backend.dispatch import build_trigger_context
@@ -111,20 +113,10 @@ async def stream_task(task_id: int):
                     yield {"event": "ping", "data": "{}"}
                     continue
 
-                etype = event.get("type", "")
-                if etype == "_done":
-                    yield {"event": "done", "data": json.dumps({"status": "completed"})}
+                if event.get("type") == "done":
+                    yield events.to_sse(event)
                     break
-                elif etype == "text":
-                    yield {"event": "text", "data": json.dumps({"content": event.get("content", "")})}
-                elif etype == "thinking":
-                    yield {"event": "thinking", "data": json.dumps({"content": event.get("content", "")})}
-                elif etype == "tool_use":
-                    yield {"event": "tool_use", "data": json.dumps({"tool": event.get("tool", ""), "input": event.get("input", {})})}
-                elif etype == "error":
-                    yield {"event": "error", "data": json.dumps(event)}
-                elif etype == "session_id":
-                    yield {"event": "session_id", "data": json.dumps(event)}
+                yield events.to_sse(event)
         finally:
             worker.unsubscribe(task_id, q)
 
