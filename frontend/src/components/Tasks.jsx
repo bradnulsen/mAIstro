@@ -3,6 +3,7 @@ import Markdown from 'react-markdown'
 import {
   createJob, updateJob, deleteJob, getJobSubscriptions,
   listMcpServers, getToolInventory, reorderJobs,
+  listTemplates, saveTemplate, updateTemplate,
 } from '../api'
 import HelpTip from './HelpTip'
 
@@ -25,10 +26,17 @@ export default function Tasks({ jobs, onRefresh }) {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [createError, setCreateError] = useState('')
+  const [selectedTemplate, setSelectedTemplate] = useState(null)
+  const [templates, setTemplates] = useState([])
   const [search, setSearch] = useState('')
   const searchRef = useRef(null)
   const [dragIdx, setDragIdx] = useState(null)
   const [dragOverIdx, setDragOverIdx] = useState(null)
+
+  const loadTemplates = useCallback(() => {
+    listTemplates().then(setTemplates).catch(() => setTemplates([]))
+  }, [])
+  useEffect(() => { loadTemplates() }, [loadTemplates])
 
   const filteredJobs = jobs.filter(j => {
     if (!search.trim()) return true
@@ -70,8 +78,10 @@ export default function Tasks({ jobs, onRefresh }) {
     if (!newName.trim()) return
     setCreateError('')
     try {
-      const job = await createJob(newName.trim())
+      const props = selectedTemplate ? selectedTemplate.properties : undefined
+      const job = await createJob(newName.trim(), props)
       setNewName('')
+      setSelectedTemplate(null)
       setCreating(false)
       await onRefresh()
       setSelected(job.id)
@@ -128,6 +138,21 @@ export default function Tasks({ jobs, onRefresh }) {
           <div className="task-list-footer">
             {creating ? (
               <div className="task-create-form">
+                {templates.length > 0 && (
+                  <select
+                    value={selectedTemplate ? selectedTemplate.id : ''}
+                    onChange={e => {
+                      const t = templates.find(t => t.id === Number(e.target.value))
+                      setSelectedTemplate(t || null)
+                      if (t && !newName.trim()) setNewName(t.name)
+                    }}
+                  >
+                    <option value="">Blank job</option>
+                    {templates.map(t => (
+                      <option key={t.id} value={t.id}>Template: {t.name}</option>
+                    ))}
+                  </select>
+                )}
                 <div className="task-create-form-row">
                   <input
                     type="text"
@@ -138,7 +163,7 @@ export default function Tasks({ jobs, onRefresh }) {
                     autoFocus
                   />
                   <button className="small primary" onClick={handleCreate}>+</button>
-                  <button className="small" onClick={() => { setCreating(false); setCreateError('') }}>✕</button>
+                  <button className="small" onClick={() => { setCreating(false); setCreateError(''); setSelectedTemplate(null) }}>✕</button>
                 </div>
                 {createError && <span className="error-text">{createError}</span>}
               </div>
@@ -152,7 +177,8 @@ export default function Tasks({ jobs, onRefresh }) {
 
         <div className="task-detail">
           {detailVisible && activeJob ? (
-            <JobDetail key={activeJob.id} job={activeJob} allJobs={jobs} onRefresh={onRefresh} onDelete={() => setSelected(null)} />
+            <JobDetail key={activeJob.id} job={activeJob} allJobs={jobs} onRefresh={onRefresh} onDelete={() => setSelected(null)}
+              templates={templates} onTemplatesChanged={loadTemplates} />
           ) : (
             <div className="empty-state">Select or create a job</div>
           )}
@@ -162,7 +188,12 @@ export default function Tasks({ jobs, onRefresh }) {
   )
 }
 
-function JobDetail({ job, allJobs, onRefresh, onDelete }) {
+const PORTABLE_PROPS = new Set([
+  'summary', 'description', 'model', 'allowed_tools', 'allowed_internal_tools',
+  'timeout', 'max_turns', 'coalesce_tasks', 'require_approval', 'schedule',
+])
+
+function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTemplatesChanged }) {
   const [editing, setEditing] = useState({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
@@ -623,6 +654,9 @@ function JobDetail({ job, allJobs, onRefresh, onDelete }) {
         </div>
       )}
 
+      {/* Template save */}
+      <TemplateSave job={job} templates={templates} onTemplatesChanged={onTemplatesChanged} />
+
       {/* Danger zone */}
       <div className="task-section danger">
         <h3>Danger Zone</h3>
@@ -636,6 +670,48 @@ function JobDetail({ job, allJobs, onRefresh, onDelete }) {
           <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Job</button>
         )}
         {deleteError && <div className="error-text">{deleteError}</div>}
+      </div>
+    </div>
+  )
+}
+
+function TemplateSave({ job, templates, onTemplatesChanged }) {
+  const [targetId, setTargetId] = useState('')  // '' = save as new
+  const [msg, setMsg] = useState('')
+
+  const handleSave = async () => {
+    const portable = {}
+    const props = job.properties || {}
+    for (const k of PORTABLE_PROPS) {
+      if (props[k] !== undefined) portable[k] = props[k]
+    }
+    try {
+      if (targetId) {
+        await updateTemplate(Number(targetId), job.name, portable)
+        setMsg('Template updated')
+      } else {
+        await saveTemplate(job.name, portable)
+        setMsg('Template saved')
+      }
+      if (onTemplatesChanged) onTemplatesChanged()
+    } catch (e) {
+      setMsg(`Error: ${e.message}`)
+    }
+    setTimeout(() => setMsg(''), 2000)
+  }
+
+  return (
+    <div className="task-section">
+      <h3>Template</h3>
+      <div className="action-row">
+        <select value={targetId} onChange={e => setTargetId(e.target.value)}>
+          <option value="">Save as new template</option>
+          {templates.map(t => (
+            <option key={t.id} value={t.id}>Overwrite: {t.name}</option>
+          ))}
+        </select>
+        <button className="small" onClick={handleSave}>Save</button>
+        {msg && <span className={msg.startsWith('Error') ? 'error-text' : 'success-text'}>{msg}</span>}
       </div>
     </div>
   )

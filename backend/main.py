@@ -473,6 +473,42 @@ async def list_files(pattern: str = "**/*"):
     return files
 
 
+# ── Job Template Routes ─────────────────────────────────────
+
+class SaveTemplateRequest(BaseModel):
+    name: str
+    properties: dict
+
+
+@app.get("/api/templates")
+async def list_templates():
+    """List all saved job templates (app-level, not project-specific)."""
+    return appstate.list_templates()
+
+
+@app.post("/api/templates")
+async def save_template(req: SaveTemplateRequest):
+    """Save a job definition as a reusable template."""
+    tid = appstate.save_template(req.name, req.properties)
+    log.info("[templates] Saved template '%s' (id=%d)", req.name, tid)
+    return {"id": tid, "status": "created"}
+
+
+@app.patch("/api/templates/{template_id}")
+async def update_template(template_id: int, req: SaveTemplateRequest):
+    """Overwrite an existing template."""
+    appstate.update_template(template_id, req.name, req.properties)
+    log.info("[templates] Updated template '%s' (id=%d)", req.name, template_id)
+    return {"status": "updated"}
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: int):
+    """Delete a job template."""
+    appstate.delete_template(template_id)
+    return {"status": "deleted"}
+
+
 # ── Dashboard Routes ────────────────────────────────────────
 
 @app.get("/api/dashboard")

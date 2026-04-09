@@ -154,6 +154,19 @@ export const deleteChatSession = (sessionId) =>
 export const getChatSessionStatus = (sessionId) =>
   fetchJSON(`/api/chat/sessions/${sessionId}/status`)
 
+// ── Job Templates ──
+
+export const listTemplates = () => fetchJSON('/api/templates')
+
+export const saveTemplate = (name, properties) =>
+  fetchJSON('/api/templates', { method: 'POST', body: JSON.stringify({ name, properties }) })
+
+export const updateTemplate = (id, name, properties) =>
+  fetchJSON(`/api/templates/${id}`, { method: 'PATCH', body: JSON.stringify({ name, properties }) })
+
+export const deleteTemplate = (id) =>
+  fetchJSON(`/api/templates/${id}`, { method: 'DELETE' })
+
 // ── Dashboard ──
 
 export const getDashboard = (window = 7) =>
