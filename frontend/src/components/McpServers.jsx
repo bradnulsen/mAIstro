@@ -4,6 +4,20 @@ import HelpTip from './HelpTip'
 
 const TIP_MCP = 'External tool servers that extend agent capabilities. Registered servers are available to dispatched agents alongside the platform\'s built-in tools. Command and args specify how to launch the server process.'
 
+/** Parse "KEY=VALUE\n..." into {KEY: VALUE} or null on bad format */
+function parseEnvString(str) {
+  if (!str || !str.trim()) return {}
+  const env = {}
+  for (const line of str.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const eq = trimmed.indexOf('=')
+    if (eq <= 0) return null
+    env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
+  }
+  return env
+}
+
 export default function McpServers() {
   const [mcpServers, setMcpServers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -13,9 +27,10 @@ export default function McpServers() {
   const [mcpName, setMcpName] = useState('')
   const [mcpCommand, setMcpCommand] = useState('')
   const [mcpArgs, setMcpArgs] = useState('')
+  const [mcpEnv, setMcpEnv] = useState('')
   const [mcpError, setMcpError] = useState('')
 
-  // Edit state: { name, command, args }
+  // Edit state: { name, command, args, env }
   const [editing, setEditing] = useState(null)
 
   // MCP server probes: { [name]: { status, tools, error, loading } }
@@ -44,12 +59,23 @@ export default function McpServers() {
       setMcpError('Name and command are required')
       return
     }
+    const env = parseEnvString(mcpEnv)
+    if (env === null) {
+      setMcpError('Invalid env format — use KEY=VALUE, one per line')
+      return
+    }
     setMcpError('')
     const args = mcpArgs.trim() ? mcpArgs.trim().split(/\s+/) : []
-    await createMcpServer(mcpName.trim(), mcpCommand.trim(), args, {})
+    try {
+      await createMcpServer(mcpName.trim(), mcpCommand.trim(), args, env)
+    } catch (e) {
+      setMcpError(e.message?.includes('UNIQUE') ? `Server "${mcpName.trim()}" already exists` : e.message)
+      return
+    }
     setMcpName('')
     setMcpCommand('')
     setMcpArgs('')
+    setMcpEnv('')
     const servers = await listMcpServers()
     setMcpServers(servers)
     flash('Server added')
@@ -72,13 +98,20 @@ export default function McpServers() {
 
   const startEdit = (s) => {
     const args = s.args ? (() => { try { return JSON.parse(s.args).join('\n') } catch { return s.args } })() : ''
-    setEditing({ name: s.name, command: s.command, args })
+    const env = s.env ? (() => { try { return Object.entries(JSON.parse(s.env)).map(([k, v]) => `${k}=${v}`).join('\n') } catch { return '' } })() : ''
+    setEditing({ name: s.name, command: s.command, args, env })
   }
 
   const handleSaveEdit = async () => {
     if (!editing) return
+    const env = parseEnvString(editing.env)
+    if (env === null) {
+      setMcpError('Invalid env format — use KEY=VALUE, one per line')
+      return
+    }
+    setMcpError('')
     const args = editing.args.trim() ? editing.args.trim().split(/\s+/) : []
-    await updateMcpServer(editing.name, { command: editing.command, args })
+    await updateMcpServer(editing.name, { command: editing.command, args, env })
     setEditing(null)
     const servers = await listMcpServers()
     setMcpServers(servers)
@@ -137,6 +170,7 @@ export default function McpServers() {
                         />
                       )}
                     </div>
+                    {!isEditing && (() => { try { const e = JSON.parse(s.env || '{}'); const n = Object.keys(e).length; return n > 0 ? <div className="mcp-server-env-count">{n} env var{n > 1 ? 's' : ''}</div> : null } catch { return null } })()}
                     {isEditing ? (
                       <div className="mcp-edit-form">
                         <div className="mcp-edit-row">
@@ -152,9 +186,20 @@ export default function McpServers() {
                             rows={2}
                           />
                         </div>
+                        <div className="mcp-edit-row">
+                          <label>Environment</label>
+                          <textarea
+                            value={editing.env}
+                            onChange={e => setEditing({ ...editing, env: e.target.value })}
+                            placeholder={'API_KEY=sk-...\nDATABASE_URL=...'}
+                            rows={2}
+                            className="env-textarea"
+                          />
+                        </div>
+                        {mcpError && <div className="error-text">{mcpError}</div>}
                         <div className="mcp-edit-actions">
                           <button className="small" onClick={handleSaveEdit}>Save</button>
-                          <button className="small" onClick={() => setEditing(null)}>Cancel</button>
+                          <button className="small" onClick={() => { setEditing(null); setMcpError('') }}>Cancel</button>
                         </div>
                       </div>
                     ) : (
@@ -199,6 +244,16 @@ export default function McpServers() {
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddMcp() } }}
                 placeholder={`-m my_server\n--port 3000\n--verbose`}
                 rows={2}
+              />
+            </div>
+            <div className="mcp-add-form-args">
+              <label>Environment Variables</label>
+              <textarea
+                value={mcpEnv}
+                onChange={e => setMcpEnv(e.target.value)}
+                placeholder={'API_KEY=sk-...\nDATABASE_URL=...'}
+                rows={2}
+                className="env-textarea"
               />
             </div>
             {mcpError && <div className="error-text">{mcpError}</div>}

@@ -6,9 +6,12 @@ Connects dispatched agents to:
 """
 
 import json
+import logging
 import os
 import sys
 import tempfile
+
+log = logging.getLogger("maistro.mcp_config")
 
 
 def build_mcp_config(
@@ -55,11 +58,22 @@ def build_mcp_config(
     for server in external_servers:
         name = server["name"]
         if name in job_mcp_names and server.get("enabled", True):
+            try:
+                args = json.loads(server.get("args") or "[]")
+                env = json.loads(server.get("env") or "{}")
+            except (json.JSONDecodeError, TypeError) as e:
+                raise ValueError(
+                    f"MCP server '{name}' has malformed config: {e}"
+                ) from e
+            if not isinstance(args, list):
+                raise ValueError(f"MCP server '{name}': args must be a list, got {type(args).__name__}")
+            if not isinstance(env, dict):
+                raise ValueError(f"MCP server '{name}': env must be an object, got {type(env).__name__}")
             servers[name] = {
                 "type": "stdio",
                 "command": server["command"],
-                "args": json.loads(server.get("args") or "[]"),
-                "env": json.loads(server.get("env") or "{}"),
+                "args": args,
+                "env": env,
             }
 
     return {"mcpServers": servers}

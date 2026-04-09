@@ -917,6 +917,19 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
           </div>
         )}
 
+        {output?.mcp_servers?.length > 0 && (
+          <div className="detail-section">
+            <label>MCP Servers</label>
+            <div className="detail-meta muted-text">
+              {output.mcp_servers.map((s, i) => (
+                <span key={i} className={`tool-badge${s.enabled ? '' : ' disabled'}`} title={s.enabled ? 'Enabled' : 'Disabled'}>
+                  {s.name}{!s.enabled ? ' (off)' : ''}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {item.error && status !== 'cancelled' && (
           <div className="detail-section">
             <label>{status === 'timed_out' ? 'Timed Out' : status === 'exhausted' ? 'Exhausted' : 'Error'}</label>

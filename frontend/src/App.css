@@ -2318,6 +2318,15 @@ label.muted-text {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.mcp-server-env-count {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.env-textarea {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+}
 
 .mcp-edit-form {
   margin-top: var(--space-2);

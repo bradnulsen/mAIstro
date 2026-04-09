@@ -156,7 +156,22 @@ async def get_task_output(task_id: int):
         status = "running"
     elif status in ("failed", "cancelled", "interrupted", "timed_out", "rejected"):
         status = "completed"
-    return {"messages": messages, "status": status, "task": task}
+    # Include external MCP servers that were (or would be) included in dispatch
+    mcp_server_names = []
+    try:
+        job = await db.get_job(task["job_id"])
+        if job:
+            job_mcp = job["properties"].get("mcp_servers") or []
+            if job_mcp:
+                all_servers = await db.list_mcp_servers()
+                server_map = {s["name"]: s for s in all_servers}
+                mcp_server_names = [
+                    {"name": n, "enabled": server_map[n].get("enabled", False)}
+                    for n in job_mcp if n in server_map
+                ]
+    except Exception:
+        pass
+    return {"messages": messages, "status": status, "task": task, "mcp_servers": mcp_server_names}
 
 
 @router.get("/api/tasks/{task_id}/outcome")
