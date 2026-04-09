@@ -6,12 +6,15 @@ editing, merge/split, and queue settings.
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from backend import events
+
+log = logging.getLogger("maistro.queue_routes")
 
 from backend import database as db, git, worker
 from backend import state
@@ -73,6 +76,7 @@ async def stream_queue_changes():
     Clients should re-fetch the task queue on each notification.
     """
     q = worker.subscribe_queue()
+    log.info("[sse] Queue stream connected")
 
     async def stream():
         try:
@@ -85,6 +89,7 @@ async def stream_queue_changes():
                 yield {"event": event["type"], "data": "{}"}
         finally:
             worker.unsubscribe_queue(q)
+            log.info("[sse] Queue stream disconnected")
 
     return EventSourceResponse(stream())
 
@@ -103,6 +108,7 @@ async def stream_task(task_id: int):
         return EventSourceResponse(done_stream())
 
     q = worker.subscribe(task_id)
+    log.info("[sse] Task #%d stream connected", task_id)
 
     async def stream():
         try:
@@ -119,6 +125,7 @@ async def stream_task(task_id: int):
                 yield events.to_sse(event)
         finally:
             worker.unsubscribe(task_id, q)
+            log.info("[sse] Task #%d stream disconnected", task_id)
 
     return EventSourceResponse(stream())
 
@@ -161,8 +168,8 @@ async def get_task_output(task_id: int):
                     {"name": n, "enabled": server_map[n].get("enabled", False)}
                     for n in job_mcp if n in server_map
                 ]
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("[queue] Task #%d failed to resolve MCP server context: %s", task_id, e)
     return {"messages": messages, "status": status, "task": task, "mcp_servers": mcp_server_names}
 
 
@@ -514,5 +521,6 @@ async def enqueue_job(job_id: int, req: DispatchRequest | None = None):
         "manual", commit_hash=head, user_context=user_context,
     )
     task_id = await db.enqueue_task(job_id, "manual", trigger_detail=head, context=context)
+    log.info("[dispatch] Manual enqueue: job #%d → task #%d", job_id, task_id)
     worker.notify()
     return {"task_id": task_id}

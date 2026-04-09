@@ -161,7 +161,8 @@ async def chat(req: ChatRequest):
                     try:
                         await db.add_chat_event(session_id, event["event_type"], event["raw_json"])
                     except Exception:
-                        pass
+                        log.warning("[chat] Failed to write chat event for session %s (type=%s)",
+                                    session_id, event.get("event_type"))
                     continue
 
                 if etype == "assistant_complete":

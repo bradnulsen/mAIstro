@@ -287,7 +287,8 @@ async def _process_task(task: dict):
                 try:
                     await db.add_chat_event(session_id, event["event_type"], event["raw_json"])
                 except Exception:
-                    log.debug("[worker] Task #%d failed to write chat event", task_id)
+                    log.warning("[worker] Task #%d failed to write chat event (type=%s)",
+                                task_id, event.get("event_type"))
                 continue
 
             _broadcast(task_id, event)
@@ -383,15 +384,15 @@ async def _process_task(task: dict):
             if response_text:
                 await db.add_chat_message(session_id, "assistant", response_text)
             await db.add_chat_message(session_id, "system", f"Error: {e}")
-        except Exception:
-            pass
+        except Exception as write_err:
+            log.warning("[worker] Task #%d failed to write error response: %s", task_id, write_err)
         await db.transition_task(task_id, "failed", error=str(e))
         try:
             fresh_subs = await db.get_subordinate_tasks(task_id)
             sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
             await db.transition_tasks_batch(sub_ids, "failed", error=str(e))
-        except Exception:
-            pass
+        except Exception as cascade_err:
+            log.warning("[worker] Task #%d failed to cascade failure to subordinates: %s", task_id, cascade_err)
     finally:
         # Last-resort: if status is still 'active' (both try and except
         # crashed), force it to failed so tasks can never get stuck.

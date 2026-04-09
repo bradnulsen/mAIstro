@@ -10,12 +10,16 @@ import os
 import shutil
 from contextlib import asynccontextmanager
 
-# Configure logging
+# Configure logging — default INFO, set MAISTRO_DEBUG=1 for DEBUG
+_log_level = logging.DEBUG if os.environ.get("MAISTRO_DEBUG") else logging.INFO
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=_log_level,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     datefmt="%H:%M:%S",
 )
+# Quiet noisy third-party loggers even in debug mode
+for _noisy in ("asyncio", "aiosqlite", "watchfiles", "httpcore", "httpx", "hpack"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 log = logging.getLogger("maistro")
 
 from fastapi import FastAPI, HTTPException
@@ -120,6 +124,7 @@ async def open_project(req: OpenProjectRequest):
         active = worker.get_active_task_id()
         if active is not None:
             raise HTTPException(409, f"Cannot switch projects while task #{active} is running. Cancel it first or wait for completion.")
+        log.info("[project] Switching from %s to %s", state.PROJECT_DIR, path)
 
     # Coordinated project switch: flag prevents new work, close_db drains readers
     if switching:
@@ -136,6 +141,7 @@ async def open_project(req: OpenProjectRequest):
     appstate.touch_project(path)
     worker.notify()
 
+    log.info("[project] Opened %s", path)
     return {"status": "ok", "path": path}
 
 
@@ -314,6 +320,7 @@ async def post_commit_hook(req: PostCommitRequest):
         dispatched.append(job["id"])
 
     if dispatched:
+        log.info("[hook] Commit %s triggered %d job(s): %s", req.commit_hash[:8], len(dispatched), dispatched)
         worker.notify()
 
     return {"status": "ok", "triggered": dispatched}
@@ -406,6 +413,7 @@ async def create_mcp_server(req: CreateMcpServerRequest):
         args=req.args,
         env=req.env,
     )
+    log.info("[mcp] Registered server '%s' (command=%s)", req.name, req.command)
     return {"status": "created"}
 
 
@@ -450,6 +458,7 @@ async def get_mcp_server_jobs(name: str):
 async def delete_mcp_server(name: str):
     require_project()
     await db.delete_mcp_server_cascade(name)
+    log.info("[mcp] Deleted server '%s' (cascade)", name)
     return {"status": "deleted"}
 
 

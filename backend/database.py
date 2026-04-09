@@ -488,9 +488,6 @@ async def get_job(job_id: int, running_ids: set | None = None) -> dict | None:
     for p in job_props:
         props[p["key"]] = _cast_property(p["value"], def_types.get(p["key"], "string"))
 
-    slug_rows = await db.execute_fetchall("SELECT slug, id FROM jobs")
-    _normalize_int_list_props(props, {r["slug"]: r["id"] for r in slug_rows})
-
     # Derive running status from tasks table
     if running_ids is not None:
         props["running"] = job_id in running_ids
@@ -539,7 +536,6 @@ async def list_jobs() -> list[dict]:
     def_types = {d["key"]: d["type"] for d in defs}
 
     default_props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
-    slug_to_id = {row["slug"]: row["id"] for row in job_rows}
 
     jobs = []
     for row in job_rows:
@@ -547,7 +543,6 @@ async def list_jobs() -> list[dict]:
         props = default_props.copy()
         for key, value in props_by_job.get(job["id"], {}).items():
             props[key] = _cast_property(value, def_types.get(key, "string"))
-        _normalize_int_list_props(props, slug_to_id)
         props["running"] = job["id"] in running_ids
         props["pending_count"] = pending_counts.get(job["id"], 0)
         props["queued_count"] = queued_counts.get(job["id"], 0)
@@ -609,9 +604,7 @@ async def get_cascade_targets(completed_job_id: int) -> list[dict]:
         "SELECT job_id, value FROM job_properties WHERE key = 'cascades_from'"
     )
 
-    # Parse JSON, coerce to ints, and filter to exact membership
-    slug_rows = await conn.execute_fetchall("SELECT slug, id FROM jobs")
-    slug_to_id = {r["slug"]: r["id"] for r in slug_rows}
+    # Parse JSON and filter to jobs that list completed_job_id as upstream
     candidate_ids = []
     for r in rows:
         try:
@@ -620,18 +613,13 @@ async def get_cascade_targets(completed_job_id: int) -> list[dict]:
             continue
         if not isinstance(upstreams, list):
             continue
-        # Coerce any stale slug strings to integer IDs
+        # Coerce to ints for comparison
         resolved = []
         for item in upstreams:
-            if isinstance(item, int):
-                resolved.append(item)
-            else:
-                try:
-                    resolved.append(int(item))
-                except (ValueError, TypeError):
-                    mapped = slug_to_id.get(str(item))
-                    if mapped is not None:
-                        resolved.append(mapped)
+            try:
+                resolved.append(int(item))
+            except (ValueError, TypeError):
+                continue
         if completed_job_id in resolved:
             candidate_ids.append(r["job_id"])
 
@@ -1672,7 +1660,8 @@ async def reconstruct_output_from_events(session_id: str) -> list[dict]:
             for block in blocks:
                 if block.get("type") == "text" and block.get("text"):
                     text_parts.append(block["text"])
-        except Exception:
+        except Exception as e:
+            log.warning("[database] Failed to parse chat event for session %s: %s", session_id, e)
             continue
     if not text_parts:
         return []
@@ -2005,26 +1994,3 @@ def _cast_property(value: str, type_: str):
     return value
 
 
-_INT_LIST_PROPS = {"cascades_from", "allowed_dispatch_targets"}
-
-def _normalize_int_list_props(props: dict, slug_to_id: dict[str, int]) -> None:
-    """Coerce any slug strings in integer-list properties to int IDs in-place."""
-    for key in _INT_LIST_PROPS:
-        val = props.get(key)
-        if not isinstance(val, list):
-            continue
-        normalized = []
-        for item in val:
-            if isinstance(item, int):
-                normalized.append(item)
-            else:
-                try:
-                    normalized.append(int(item))
-                except (ValueError, TypeError):
-                    resolved = slug_to_id.get(str(item))
-                    if resolved is not None:
-                        normalized.append(resolved)
-                    else:
-                        log.warning("[database] %s: unresolvable item %r — preserving as-is", key, item)
-                        normalized.append(item)
-        props[key] = normalized
