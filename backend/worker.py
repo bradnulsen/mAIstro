@@ -182,7 +182,7 @@ async def _process_task(task: dict):
     await db.transition_task(task_id, "active",
                              session_id=session_id,
                              start_commit=start_commit)
-    notify_queue_changed()
+    pubsub.notify_queue_changed()
 
     log.info("[worker] Processing task #%d (job=%s)", task_id, job_id)
 
@@ -194,7 +194,7 @@ async def _process_task(task: dict):
         pubsub.broadcast(task_id, events.error(mcp_error))
         pubsub.broadcast(task_id, events.done())
         pubsub.cleanup_task(task_id)
-        notify_queue_changed()
+        pubsub.notify_queue_changed()
         _active_task_id = None
         _cancel_event = None
         return
@@ -351,7 +351,7 @@ async def _process_task(task: dict):
             watchdog.cancel()
         pubsub.broadcast(task_id, events.done())
         pubsub.cleanup_task(task_id)
-        notify_queue_changed()
+        pubsub.notify_queue_changed()
         _active_task_id = None
         _cancel_event = None
 
