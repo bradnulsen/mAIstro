@@ -512,7 +512,8 @@ async def list_jobs() -> list[dict]:
     # Task state counts per job for command bar indicators
     state_rows = await conn.execute_fetchall(
         "SELECT job_id, status, COUNT(*) as cnt FROM tasks "
-        "WHERE status IN ('pending', 'queued', 'active') GROUP BY job_id, status"
+        "WHERE status IN ('pending', 'queued', 'active') AND coalesced_id IS NULL "
+        "GROUP BY job_id, status"
     )
     running_ids = set()
     pending_counts: dict[int, int] = {}

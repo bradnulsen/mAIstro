@@ -240,16 +240,28 @@ body {
   background: var(--surface);
   cursor: pointer;
   font-size: var(--text-sm);
-  transition: border-color 0.15s;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 .command-bar-indicator:hover {
-  border-color: var(--job-c);
   background: var(--hover-bg);
   color: var(--text);
 }
+
+/* Queued: yellow border */
+.command-bar-indicator.queued {
+  border-color: var(--auto-color);
+}
+
+/* Active/running: yellow border + breathing glow */
 .command-bar-indicator.active {
-  border-color: var(--job-c);
-  box-shadow: 0 0 0 1px var(--job-c);
+  border-color: var(--auto-color);
+  box-shadow: 0 0 0 1px var(--auto-color-dim);
+  animation: indicator-breathe 2s ease-in-out infinite;
+}
+
+@keyframes indicator-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px var(--auto-color-dim), 0 0 4px rgba(0,0,0,0.04); }
+  50% { box-shadow: 0 0 0 1.5px var(--auto-color), 0 0 10px rgba(0,0,0,0.08); }
 }
 
 .command-bar-name {
@@ -259,6 +271,21 @@ body {
   white-space: nowrap;
 }
 
+/* Subtitle count label */
+.command-bar-count {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  letter-spacing: var(--tracking-tight);
+  white-space: nowrap;
+}
+.command-bar-count.active {
+  color: var(--auto-color);
+  font-weight: 600;
+}
+.command-bar-count.queued {
+  color: var(--auto-color);
+}
+
 .command-bar-dot {
   width: var(--size-dot);
   height: var(--size-dot);
@@ -266,10 +293,10 @@ body {
   flex-shrink: 0;
 }
 .command-bar-dot.idle { background: var(--text-muted); }
-.command-bar-dot.pending { background: var(--warning, #d9a84a); }
-.command-bar-dot.queued { background: var(--accent); }
+.command-bar-dot.pending { background: var(--border); }
+.command-bar-dot.queued { background: var(--auto-color); }
 .command-bar-dot.active {
-  background: var(--running);
+  background: var(--auto-color);
   animation: dot-pulse 1.4s ease-in-out infinite;
 }
 
@@ -324,6 +351,58 @@ body {
 }
 .command-bar-toggle input { cursor: pointer; }
 .command-bar-toggle:has(input:checked) { color: var(--text); }
+
+/* ═══════════════════════════════════════════════════════
+   AUTO-DISPATCH — command bar shimmer + toggle badge
+   ═══════════════════════════════════════════════════════ */
+
+:root {
+  --auto-color: #d4a937;
+  --auto-color-dim: rgba(212, 169, 55, 0.25);
+  --auto-color-faint: rgba(212, 169, 55, 0.08);
+  --auto-idle: #4a9a5a;
+  --auto-idle-dim: rgba(74, 154, 90, 0.25);
+  --auto-idle-faint: rgba(74, 154, 90, 0.08);
+}
+
+/* Idle auto: slow green shimmer wash across command bar */
+.app-shell[data-auto-dispatch] .command-bar {
+  background: linear-gradient(90deg, var(--rail-bg), var(--auto-idle-faint) 40%, var(--auto-idle-faint) 60%, var(--rail-bg));
+  border-bottom-color: var(--auto-idle-dim);
+  background-size: 200% 100%;
+  animation: commandbar-idle 8s ease-in-out infinite;
+}
+/* Running: tighter gradient, faster shimmer */
+.app-shell[data-auto-dispatch][data-any-running] .command-bar {
+  background: linear-gradient(90deg, var(--rail-bg), var(--auto-color-faint) 30%, rgba(212, 169, 55, 0.14) 50%, var(--auto-color-faint) 70%, var(--rail-bg));
+  background-size: 200% 100%;
+  animation: commandbar-active 3s ease-in-out infinite;
+}
+
+@keyframes commandbar-idle {
+  0% { background-position: 100% 0; }
+  50% { background-position: 0% 0; }
+  100% { background-position: 100% 0; }
+}
+@keyframes commandbar-active {
+  0% { background-position: 100% 0; }
+  50% { background-position: 0% 0; }
+  100% { background-position: 100% 0; }
+}
+
+/* Auto toggle badge — green idle, yellow when running */
+.app-shell[data-auto-dispatch] .command-bar-toggle:has(input:checked) {
+  background: var(--auto-idle);
+  color: #fff;
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  transition: background 0.4s;
+}
+.app-shell[data-auto-dispatch][data-any-running] .command-bar-toggle:has(input:checked) {
+  background: var(--auto-color);
+  color: #1a1a1a;
+}
 
 /* Keep status-dot for backward compat (used in task list items) */
 .status-dot {

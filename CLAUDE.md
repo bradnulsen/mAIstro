@@ -66,7 +66,7 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 
 ### Key Design Decisions
 - **Git as source of truth**: all project content lives in git. The SQLite DB holds only operational state — job configs, task queue, chat sessions.
-- **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db`; app DB at `<repo>/.maistro/app.db` holds recent-projects list.
+- **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db`; app DB at `<repo>/.maistro/app.db` holds recent-projects list and cross-project job templates.
 - **Atomic tasks**: each task row has exactly one trigger and one context — never mutated after creation. Retry and resume create new tasks; the original is coalesced under the new one via FK.
 - **Job properties as key-value overrides**: properties can be `string`, `json`, `integer`, or `boolean` with defaults.
 - **Task creates chat sessions**: each task links to a chat session for durable output storage and audit trail.
@@ -80,13 +80,15 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 - `backend/queue_routes.py` — Task lifecycle and queue control routes (APIRouter)
 - `backend/chat.py` — Chat/conversation routes for executive assistant interface (APIRouter, distinct from task dispatches)
 - `backend/database.py` — Project SQLite schema, EAV property system, all CRUD helpers (async)
-- `backend/appstate.py` — App-level SQLite DB for recent-projects list (sync, separate from project DB)
+- `backend/appstate.py` — App-level SQLite DB for recent-projects list and cross-project job templates (sync, separate from project DB)
 - `backend/state.py` — Shared mutable state (`PROJECT_DIR`) and utilities (`utcnow`, `require_project`) to avoid circular imports
 - `backend/git.py` — Git subprocess abstraction (log, diff, commit, hook installer)
 - `backend/cli.py` — Claude CLI subprocess invocation: stdin piping, NDJSON parsing, event schema. On Windows, bypasses `.CMD` wrappers by extracting the Node.js script path and invoking directly
 - `backend/dispatch.py` — Prompt assembly (`build_dispatch_system_prompt`/`build_user_prompt`), watch trigger matching, job manifest
 - `backend/scheduler.py` — Cron-based background scheduler: checks job schedules every 30s, enqueues tasks when due
 - `backend/worker.py` — Background task worker: pulls from queue, runs tasks one at a time, manages lifecycle via `transition_task()`, handles cancellation/timeout watchdog and stale task sweep on startup
+- `backend/events.py` — CLI event schema: single source of truth for event types and SSE wire serialization (`to_sse()`)
+- `backend/pubsub.py` — Task-level and queue-level event pub/sub for SSE streaming (per-task subscriber queues + global queue-change notifications)
 - `backend/mcp_server.py` — Internal MCP stdio server: git tools, project context, inter-agent dispatch
 - `backend/mcp_config.py` — MCP config generator for Claude CLI invocations
 - `backend/mcp_probe.py` — External MCP server tool discovery via stdio handshake (used by tool inventory endpoint)
@@ -100,7 +102,7 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 
 - Job IDs are integers (autoincrement). Slugs are derived from names (`database.slugify`) and stored on the job record for git authorship and branch naming
 - Job commit authorship: `<GoalName> <<job-id>@maistro.local>`
-- SSE event types: `text`, `result`, `error`, `session_id`, `task`, `tool_use`
+- SSE event types (defined in `events.py`): `text`, `thinking`, `tool_use`, `assistant_complete`, `result_meta`, `result`, `session_id`, `error`, `done`, `queue_changed`, `task`
 - Task triggers: `manual`, `commit` (watch), `dependency` (upstream job completed), `schedule`, `resume`, `reply`
 - Watch behavior: jobs with non-empty subscriptions auto-trigger on matching commits (no separate toggle — subscriptions presence = watch active)
 - Task coalescing: each task is atomic (one trigger, one context). `coalesced_id` FK links subordinate tasks to a root. `coalesce_tasks=true` on a job auto-coalesces new tasks at enqueue time. Manual coalesce/decompose via drag-drop in the UI is the same FK operation.
@@ -131,7 +133,7 @@ Tasks progress through: **pending** (staging area, user curates) → **queued** 
 
 ## Implementation Status
 
-**Built and working**: Two-stage queue, all 5 trigger types + resume/reply, coalescing (auto + manual merge/split), approval gates, timeout enforcement, internal MCP server (12 tools), three-dimensional tool control, inter-agent dispatch with depth limiting, activity dashboard (health/timeline/chains/tool usage), outcome summaries, execution pipeline fidelity (thinking blocks streamed/persisted, execution metadata captured), external MCP robustness (registration validation, pre-dispatch health checks, cascade deletion), dispatch diff view, all UI views (Dispatch, Feed, Jobs, Files, MCP Servers, Dashboard, Settings, Chat).
+**Built and working**: Two-stage queue, all 5 trigger types + resume/reply, coalescing (auto + manual merge/split), approval gates, timeout enforcement, internal MCP server (12 tools), three-dimensional tool control, inter-agent dispatch with depth limiting, activity dashboard (health/timeline/chains/tool usage), outcome summaries, execution pipeline fidelity (thinking blocks streamed/persisted, execution metadata captured), external MCP robustness (registration validation, pre-dispatch health checks, cascade deletion), dispatch diff view, job templates (cross-project reusable job definitions), centralized event schema + pub/sub, all UI views (Dispatch, Feed, Jobs, Files, MCP Servers, Dashboard, Settings, Chat).
 
 **Designed but not yet built** (see `STRATEGY.md` priorities):
 - **P1: External MCP Polish** — environment variable UI for MCP server config, server status in dispatch context, runtime MCP error attribution, config file validation before write.

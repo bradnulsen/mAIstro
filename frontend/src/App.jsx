@@ -18,7 +18,13 @@ export default function App() {
   const [jobs, setJobs] = useState([])
   const [chatOpen, setChatOpen] = useState(false)
   const [chatWidth, setChatWidth] = useState(380)
+  const [autoQueue, setAutoQueue] = useState(false)
   const chatTrayRef = useRef(null)
+
+  // Load auto-queue setting at app level
+  useEffect(() => {
+    if (project) getQueueSettings().then(s => setAutoQueue(s.auto_dispatch)).catch(() => {})
+  }, [project])
 
   useEffect(() => {
     getProject()
@@ -75,7 +81,7 @@ export default function App() {
   if (!project) return <ProjectOpener onOpen={setProject} />
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-auto-dispatch={autoQueue || undefined} data-any-running={jobs.some(j => j.properties?.running) || undefined}>
       <nav className="rail">
         <div className="rail-logo" onClick={() => { setProject(null); setJobs([]) }} title="Switch project">⬡</div>
         <button
@@ -117,7 +123,7 @@ export default function App() {
       </nav>
 
       <div className="main-area">
-        <CommandBar jobs={jobs} onNavigate={setView} refreshJobs={refreshJobs} />
+        <CommandBar jobs={jobs} onNavigate={setView} refreshJobs={refreshJobs} autoQueue={autoQueue} setAutoQueue={setAutoQueue} />
 
         {view === VIEWS.feed && <Feed />}
         {view === VIEWS.tasks && <Tasks jobs={jobs} onRefresh={refreshJobs} />}
@@ -144,17 +150,11 @@ export default function App() {
   )
 }
 
-function CommandBar({ jobs, onNavigate, refreshJobs }) {
-  const [autoQueue, setAutoQueue] = useState(false)
+function CommandBar({ jobs, onNavigate, refreshJobs, autoQueue, setAutoQueue }) {
   const [popout, setPopout] = useState(null) // job id
   const [context, setContext] = useState('')
   const [dispatching, setDispatching] = useState(false)
   const popoutRef = useRef(null)
-
-  // Load auto-queue setting
-  useEffect(() => {
-    getQueueSettings().then(s => setAutoQueue(s.auto_dispatch)).catch(() => {})
-  }, [])
 
   // Close popout on outside click
   useEffect(() => {
@@ -205,20 +205,24 @@ function CommandBar({ jobs, onNavigate, refreshJobs }) {
   return (
     <div className="command-bar">
       <div className="command-bar-jobs">
-        {jobs.map((j, i) => {
+        {jobs.map(j => {
           const p = j.properties || {}
-          const colorIdx = i % 10
           const state = p.running ? 'active' : (p.queued_count > 0 ? 'queued' : (p.pending_count > 0 ? 'pending' : 'idle'))
+          const counts = []
+          if (p.running) counts.push('running')
+          if (p.queued_count > 0) counts.push(`${p.queued_count} queued`)
+          if (p.pending_count > 0) counts.push(`${p.pending_count} pending`)
+          const subtitle = counts.length > 0 ? counts.join(', ') : ''
           return (
             <div key={j.id} className="command-bar-indicator-wrap" ref={popout === j.id ? popoutRef : undefined}>
               <button
                 className={`command-bar-indicator ${state}`}
-                style={{ '--job-c': `var(--job-color-${colorIdx})` }}
                 onClick={() => { setPopout(popout === j.id ? null : j.id); setContext('') }}
-                title={`${j.name} — ${state}`}
+                title={`${j.name} — ${state}${subtitle ? ` (${subtitle})` : ''}`}
               >
                 <span className={`command-bar-dot ${state}`} />
                 <span className="command-bar-name">{j.name}</span>
+                {subtitle && <span className={`command-bar-count ${state}`}>{subtitle}</span>}
               </button>
               {popout === j.id && (
                 <div className="command-bar-popout">
