@@ -386,9 +386,23 @@ def _translate_event(data: dict) -> list[dict]:
         sid = data.get("session_id", "")
 
         if is_error:
+            subtype = data.get("subtype", "")
             if not content:
-                content = data.get("subtype", "unknown error")
-            return [events.error(content)]
+                content = subtype or "unknown error"
+            # Derive stop_reason from subtype so the worker can route max-turns
+            # exhaustion to the `exhausted` terminal state instead of silently
+            # treating it as `completed`. Other error subtypes pass through for
+            # diagnostics.
+            stop_reason = "max_turns" if subtype == "error_max_turns" else (subtype or "error")
+            return [
+                events.error(content),
+                events.result_meta(
+                    cli_session_id=sid or None,
+                    stop_reason=stop_reason,
+                    num_turns=data.get("num_turns"),
+                    cost_usd=data.get("total_cost_usd"),
+                ),
+            ]
 
         return [events.result_meta(
             cli_session_id=sid or None,
