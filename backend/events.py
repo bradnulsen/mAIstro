@@ -2,7 +2,7 @@
 
 Events are plain dicts with a "type" key. Constructor functions enforce
 consistent shapes. This module is imported by cli.py (producer),
-worker.py (consumer/broadcaster), chat.py (consumer/SSE), and
+worker.py (consumer/broadcaster), governor.py (consumer), and
 queue_routes.py (SSE serialization).
 
 Event types:

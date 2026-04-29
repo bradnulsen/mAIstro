@@ -1,6 +1,6 @@
 """Shared mutable state and utilities for the mAistro backend.
 
-Extracted so that worker.py, scheduler.py, dispatch.py, and chat.py can share
+Extracted so that worker.py, scheduler.py, and dispatch.py can share
 common state and helpers without circular imports.
 """
 
