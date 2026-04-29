@@ -56,14 +56,6 @@ async def get_chat_session(session_id: str) -> dict | None:
     return dict(rows[0]) if rows else None
 
 
-async def get_chat_sessions() -> list[dict]:
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        "SELECT * FROM chat_sessions WHERE task_id IS NULL ORDER BY created_at DESC"
-    )
-    return [dict(r) for r in rows]
-
-
 async def get_chat_messages(session_id: str) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
@@ -120,12 +112,6 @@ async def update_chat_session(session_id: str, **kwargs):
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [session_id]
     await db.execute(f"UPDATE chat_sessions SET {sets} WHERE id = ?", vals)
-    await db.commit()
-
-
-async def delete_chat_session(session_id: str):
-    db = await get_db()
-    await db.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
     await db.commit()
 
 

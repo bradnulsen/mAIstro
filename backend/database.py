@@ -83,11 +83,9 @@ from backend.db_chat import (
     add_chat_events_batch,
     add_chat_message,
     create_chat_session,
-    delete_chat_session,
     find_session_by_cli_session,
     get_chat_messages,
     get_chat_session,
-    get_chat_sessions,
     reconstruct_output_from_events,
     update_chat_session,
 )
