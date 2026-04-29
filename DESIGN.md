@@ -37,7 +37,7 @@ A job is a template. A task is an instance. One job produces many tasks over tim
 
 - Properties follow an entity-attribute-value pattern: a registry of property definitions (with types and defaults) and per-job overrides.
 - Property types: `string`, `json`, `integer`, `boolean`. The platform casts stored strings to the declared type on read.
-- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `max_turns`, `require_approval`, `coalesce_dispatches`, `allowed_tools`, `allowed_internal_tools`, `allowed_dispatch_targets`, `mcp_servers`, `sort_order`, `color`.
+- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `max_turns`, `require_approval`, `coalesce_tasks`, `allowed_tools`, `allowed_internal_tools`, `allowed_dispatch_targets`, `mcp_servers`, `sort_order`, `color`.
 
 ### Dispatch
 
@@ -102,7 +102,7 @@ Coalescing prevents redundant pre-execution tasks. Two mechanisms exist: **autom
 - When a new trigger would create a task but a compatible pre-execution task (pending or queued) already exists, the trigger is appended to the existing task's trigger list instead of creating a new record. Coalescing checks both columns — a new trigger coalesces into whichever matching task exists, regardless of whether it is pending or queued.
 - `commit`, `dependency`, and `agent` triggers coalesce with other pre-execution tasks of the same trigger type for the same job.
 - `schedule` triggers coalesce globally (any pre-execution task for the same job absorbs the new trigger).
-- The `coalesce_dispatches` job property enables global coalescing for all trigger types — the job will never have more than one pre-execution task.
+- The `coalesce_tasks` job property enables global coalescing for all trigger types — the job will never have more than one pre-execution task.
 - `manual` and `retry` never coalesce — each represents distinct explicit intent.
 - `resume` and `reply` do not participate in automatic coalescing (they always create a new task), but they establish an inverted coalesce relationship with the original task — the original becomes subordinate to the new task.
 
@@ -132,7 +132,7 @@ The user can merge and split tasks in the pending column directly from the Dispa
 - Split reverses a previous merge or automatic coalescing. The user can inspect the accumulated triggers on a task and decide they should run separately.
 - New tasks created by split inherit the job's current approval gate setting. If `require_approval` is enabled, split-off tasks enter pending-approval state.
 
-**Why same-job only**: a task's identity is bound to exactly one job. The task record carries a `task_id` (the job slug), and prompt assembly, subscriptions, tool configuration, and commit authorship all derive from that single job. Merging tasks across jobs would require either a compound identity (one task, two jobs — breaks prompt assembly, tool surfaces, authorship) or a synthetic super-job (implicit, unmanageable). Neither is coherent. The constraint preserves the foundational invariant: one task, one job, one execution context.
+**Why same-job only**: a task's identity is bound to exactly one job. Prompt assembly, subscriptions, tool configuration, and commit authorship all derive from that single job. Merging tasks across jobs would require either a compound identity (one task, two jobs — breaks prompt assembly, tool surfaces, authorship) or a synthetic super-job (implicit, unmanageable). Neither is coherent. The constraint preserves the foundational invariant: one task, one job, one execution context.
 
 ### Subscriptions
 
@@ -427,7 +427,7 @@ Required tooltip surfaces:
 - **Allowed Dispatch Targets** — select which jobs this agent can programmatically dispatch via the `dispatch_task` tool. When none are selected, the agent cannot dispatch other jobs. This prevents unconstrained cross-agent triggering.
 - **MCP Servers (per-job)** — select which registered external MCP servers this job's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Each server in the selection list shows its current health status (healthy, unreachable, disabled) — the user sees problems before dispatching, not after. Register servers in the MCP Servers view first, then enable them here per-job.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce tasks that wait for manual approval before executing. Manual dispatches bypass this gate.
-- **Coalesce Dispatches** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
+- **Coalesce Tasks** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
 - **Dependencies** — the job auto-dispatches when *any* selected upstream job completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled tasks do not trigger dependents.
 - **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.
 - **Max Turns** — maximum number of agent turns before the session is stopped. A turn is one cycle of reasoning and output. Most tasks complete in well under the limit. When reached, the task is marked as exhausted (not completed) — the agent was cut off, not done. Exhausted tasks do not trigger downstream dependencies. Increase the limit if a job consistently needs more interaction, or tighten the instructions if the agent is doing unnecessary work.
