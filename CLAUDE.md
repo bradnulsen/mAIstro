@@ -7,151 +7,170 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Backend (from repo root)
 pip install -r requirements.txt
-python run.py
+python run.py                 # uvicorn with hot-reload on backend/
 
 # Frontend (separate terminal)
 cd frontend
 npm install
-npm run dev
-
-# Frontend production build
-cd frontend
-npm run build   # outputs to frontend/dist/
+npm run dev                   # dev server on :5173, proxies /api and /health to :8420
+npm run build                 # production bundle to frontend/dist/
 ```
 
-Backend runs on http://localhost:8420, frontend on http://localhost:5173. Backend requires manual restart after code changes. No test suite, linter, or formatter is configured.
+Backend on http://localhost:8420, frontend on http://localhost:5173. No test suite, linter, or formatter is configured. Hot-reload covers `backend/`; everything else needs a manual restart. Set `MAISTRO_DEBUG=1` for verbose backend logging.
+
+## Documentation Layout
+
+The repo's design documentation is layered. When you need depth, read these in order:
+
+- **`DESIGN.md`** — product requirements, the "why."
+- **`STRATEGY.md`** — current priorities and what's in flight.
+- **`REMEDIATION.md`** — known structural debt and remediation plans.
+- **`architecture/`** — authoritative deep-dives by subsystem (storage, task-lifecycle, streaming-and-sessions, dispatch-engine, prompt-assembly, tool-mediation, trigger-system, governor, project-lifecycle, frontend, git-integration, cli-bridge, job-configuration). When a subsystem is non-trivial, the architecture doc is the source of truth and is more current than this file.
 
 ## Architecture
 
-**mAistro** — an intent-to-reality development engine where LLM-powered jobs coordinate through git. Jobs are persistent configuration entities; tasks are atomic units of work dispatched from jobs. See `DESIGN.md` for full requirements and `STRATEGY.md` for current priorities.
+**mAistro** is an intent-to-reality development engine where LLM-powered jobs coordinate through git. Jobs are persistent configuration entities; tasks are atomic units of work dispatched from jobs.
 
-**Naming.** All documents, code, database tables, API routes, and variable names use "Job." `DESIGN.md` previously used "Goal" as a user-facing synonym — this has been unified. Always use "job."
+**Naming.** Always use "Job." Earlier docs used "Goal" as a synonym — that's been unified across documents, code, DB tables, API routes, and variables.
 
 ### Stack
-- **Backend**: Python + FastAPI + SQLite (aiosqlite, WAL mode) + sse-starlette
-- **Frontend**: React 19 + Vite 6 (no TypeScript, no state library)
-- **LLM**: Claude CLI invoked as subprocess with `--output-format stream-json` (NDJSON streaming). On Windows, the CLI layer (`cli.py`) bypasses npm's `.CMD` wrappers by resolving the underlying Node.js script directly — this is required for correct process lifecycle (terminate/kill). Async subprocess (`asyncio.create_subprocess_exec`) is unavailable on Windows ProactorEventLoop, so `Popen` + thread readers are used instead.
-- **Realtime**: Server-Sent Events (SSE) for task streaming and chat
+- **Backend**: Python + FastAPI + SQLite (aiosqlite, WAL mode) + sse-starlette.
+- **Frontend**: React 19 + Vite 6, no TypeScript, no state library — pure `useState`/`useEffect` with polling and SSE subscriptions.
+- **LLM**: Claude CLI invoked as subprocess with `--output-format stream-json` (NDJSON streaming). On Windows, `cli.py` bypasses npm's `.CMD` wrappers by resolving the underlying Node.js script directly — required for correct process lifecycle (terminate/kill). Async subprocess (`asyncio.create_subprocess_exec`) is unavailable on Windows ProactorEventLoop, so `Popen` + thread readers are used instead.
+- **Realtime**: SSE for task streaming and queue updates.
 
 ### Data Model
-- **Jobs** (`jobs` table): persistent configuration entities with `INTEGER PRIMARY KEY AUTOINCREMENT` ID and a `slug` (derived from name via `slugify()`). EAV properties in `job_property_defs` + `job_properties`. Hold name, summary, description, subscriptions, model, schedule, etc. Description is the north star — a declarative, first-principle definition of what good output looks like. Slug is used for git authorship (`<slug>@maistro.local`) and branch naming (`<slug>/description`).
-- **Tasks** (`tasks` table): atomic units of work. Each task has exactly one trigger, one context, and belongs to one job via `job_id` INTEGER FK. Tasks have an authoritative `status` column with a validated state machine (see below). Tasks are never mutated after creation — reply and resume create new tasks and coalesce the original under the new one.
-- **Coalescing**: `coalesced_id` FK on tasks links subordinate tasks to a root task. Coalesce = set FK, decompose = clear FK. Depth-1 invariant enforced by SQLite triggers (`tasks_depth1_insert`, `tasks_depth1_update_target`, `tasks_depth1_update_self`) — a coalesced_id must point at a root, and a task with subordinates cannot itself become a subordinate without flattening first. `coalesce_under()` and `merge_tasks()` handle this by flattening *before* re-parenting so depth-1 holds at every intermediate state. `cascade_completion()` is the single helper used by every worker completion path to terminal-cascade the subordinates of a root.
-- **Coalescing lock**: every coalesce-mutating op (`split_task`, `uncoalesce_task`, `merge_tasks`) requires all participants to be `pending`; `transfer_task` requires `pending`/`queued` and roots only. As a result, a terminal coalesced subtree is structurally immutable — outcome data on the root is permanent. Reply/resume "unlock" a terminal subtree by introducing a new non-terminal root above it.
-- **Reading task data with coalescing awareness**: outcome columns (`session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`) are populated only on the task that actually ran. Two semantic profiles for queries:
-  - **"Per-task as the agent saw it"** → read from the `tasks_resolved` view or call `db.get_task_resolved()`. Outcome columns COALESCE through to the root for subordinates; intrinsic columns (id, trigger, context) pass through. Use this for output/diff/outcome endpoints, the Governor's recent-tasks view, and anywhere a user might click on a subordinate.
-  - **"Per-execution / per-cost"** → read from `tasks WHERE coalesced_id IS NULL`. One row per actual run, no double-counting. Use this for aggregates (`dashboard_health`, cost totals, success-rate metrics).
 
-### Task Status State Machine
-Tasks have an authoritative `status` column. Legal transitions:
-- `pending` → `queued`, `cancelled`, `rejected`
-- `queued` → `pending`, `active`, `cancelled`
-- `active` → `completed`, `exhausted`, `failed`, `cancelled`, `timed_out`, `interrupted`
-- All of `completed`, `exhausted`, `failed`, `cancelled`, `timed_out`, `interrupted`, `rejected` are terminal
+- **Jobs** (`jobs` table): `INTEGER PRIMARY KEY AUTOINCREMENT` ID + `slug` (derived via `slugify()`). Configuration via EAV (`job_property_defs` + `job_properties`) — properties are `string`, `json`, `integer`, or `boolean` with defaults. Notable properties: `max_turns` (default 50), `timeout`, `coalesce_tasks`, `require_approval`, `schedule` (cron), `allowed_tools`, `allowed_internal_tools`, `mcp_servers`, `subscriptions`, `allowed_dispatch_targets`. Description is the north star — declarative, first-principle definition of good output. Slug drives git authorship (`<slug>@maistro.local`) and branch naming.
+- **Tasks** (`tasks` table): atomic. Each row has exactly one trigger, one context, one `job_id` FK. Tasks are never mutated after creation — retry, reply, and resume create new tasks and coalesce the original under the new one.
+- **Coalescing**: `coalesced_id` FK links subordinates to a root. Depth-1 is enforced by SQLite triggers (`tasks_depth1_insert`, `tasks_depth1_update_target`, `tasks_depth1_update_self`). `coalesce_under()` and `merge_tasks()` flatten before re-parenting so depth-1 holds at every intermediate state. `cascade_completion()` is the single helper used by every worker completion path to terminal-cascade subordinates of a root.
+- **Coalescing lock**: every coalesce-mutating op (`split_task`, `uncoalesce_task`, `merge_tasks`) requires all participants to be `pending`; `transfer_task` requires `pending`/`queued` and roots only. Therefore a terminal coalesced subtree is structurally immutable — outcome data on the root is permanent. Reply/resume "unlock" a terminal subtree by introducing a new non-terminal root above it.
+- **Reading task data with coalescing awareness**: outcome columns (`session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`) live only on the task that actually ran. Two semantic profiles for queries:
+  - **"Per-task as the agent saw it"** → read from the `tasks_resolved` view or call `get_task_resolved()`. Outcome columns COALESCE through to the root for subordinates; intrinsic columns (id, trigger, context) pass through. Use this for output/diff/outcome endpoints, the Governor's recent-tasks view, and anywhere a user might click on a subordinate.
+  - **"Per-execution / per-cost"** → `tasks WHERE coalesced_id IS NULL`. One row per actual run, no double-counting. Use for aggregates (`dashboard_health`, cost totals, success-rate metrics).
 
-`exhausted` means the agent hit its turn limit (`max_turns` property, default 50) without finishing — distinct from `completed` (natural end), `failed` (error), and `timed_out` (wall-clock timeout). Each task also records `stop_reason`, `num_turns`, and `cost_usd` metadata columns.
+### Task Lifecycle (Event-Sourced)
 
-Event sourcing: `task_events` table records every lifecycle transition (dispatched, queued, activated, completed, etc.) with timestamps and optional detail. Used for timeline reconstruction and dashboard analytics.
+Task lifecycle is **event-sourced** in `task_events`. Each row is an immutable fact: "task X entered state Y at time Z with optional detail." The `status` column on `tasks` is a *materialized cache* of the latest lifecycle event for query performance — if it ever disagrees with the event log, the event log wins. See [architecture/task-lifecycle.md](architecture/task-lifecycle.md) for the full rationale and event schema.
 
-All status changes go through `transition_task()` / `transition_tasks_batch()` in `database.py`, which validate the transition and set timestamps (`queued_at`, `started_at`, `completed_at`) automatically. When a root task transitions, subordinates (via `coalesced_id`) cascade in batch.
+Legal transitions:
+
+```
+pending  → queued / cancelled / rejected
+queued   → pending / active / cancelled       (queued→pending is the only backward transition; emits 'restored')
+active   → completed / exhausted / failed / cancelled / timed_out / interrupted
+```
+
+Terminal: `completed`, `exhausted`, `failed`, `cancelled`, `timed_out`, `interrupted`, `rejected`. `exhausted` (turn-limit) is distinct from `completed` (natural end), `failed` (error), and `timed_out` (wall-clock).
+
+All status changes go through `transition_task()` / `transition_tasks_batch()` (in `backend/db_tasks.py`, re-exported via `backend/database.py`). They validate the transition, write the event row, and update the materialized status column in the same transaction. When a root transitions terminal, subordinates cascade in batch via `cascade_completion()`.
+
+Duration is computed from event pairs (`activated` → terminal), not from column arithmetic — this preserves correctness across retry cycles. `compute_durations_from_events` is the helper.
 
 ### Two-Stage Queue
-Tasks progress through: **pending** (staging area, user curates) → **queued** (execution runway, worker pulls) → **active** → **completed/failed**. Auto-queueing setting controls whether new tasks land in pending or skip directly to queued.
+**pending** (staging area, user curates) → **queued** (execution runway, worker pulls) → **active** → **completed** (or other terminal). Auto-queueing setting controls whether new tasks land in pending or skip directly to queued.
 
 ### Data Flow
-1. User opens a target project directory via the UI — backend initializes `.maistro/maistro.db` inside it and installs a git post-commit hook
-2. Jobs are configured with `summary` (one-liner), `description` (full north star text), subscription glob patterns, and a model
-3. **Task queue**: all triggers (manual, watch, scheduled, dependency, agent) create an atomic `tasks` record. A background worker pulls from the queue and processes one task at a time
-4. The worker builds the system/user prompt, spawns the Claude CLI subprocess, streams NDJSON output, and stores messages durably in a chat session linked to the task
-5. The CLI agent commits its own changes via its tools — no auto-commit from the platform
-6. Post-commit hook notifies backend — jobs with subscriptions matching changed files get auto-enqueued (coalescing links new tasks to pending root tasks via FK)
+1. User opens a target project directory via the UI — backend initializes `<project>/.maistro/maistro.db` and installs a git post-commit hook.
+2. Jobs are configured with summary, description, subscriptions, model, and properties.
+3. Triggers (manual, watch, scheduled, dependency, agent, resume, reply) create atomic `tasks` rows. The background worker pulls one task at a time.
+4. Worker assembles the system/user prompt, spawns the Claude CLI subprocess, streams NDJSON output, and persists messages and raw events incrementally.
+5. The CLI agent commits its own changes via its tools — no auto-commit from the platform.
+6. Post-commit hook notifies backend — jobs whose subscriptions match the changed files get auto-enqueued; coalescing links the new task to a pending root via the `coalesced_id` FK.
 
 ### MCP Server & Tool Governance
-- `backend/mcp_server.py` — internal stdio MCP server providing agents with git operations (status, log, diff, commit, branch create/switch/merge), project context (list_files, read_file, list_jobs, get_queue_status), and inter-agent dispatch (dispatch_task)
-- `backend/mcp_config.py` — generates `--mcp-config` JSON for Claude CLI, combining internal + external MCP servers per job config
-- Three-dimensional tool control: `allowed_tools` (CLI native), `allowed_internal_tools` (internal MCP via env var `MAISTRO_ALLOWED_INTERNAL_TOOLS`), `mcp_servers` (external MCP) — compose independently per job
-- All tool calls are audit-logged to the backend
+
+- `backend/mcp_server.py` — internal stdio MCP server: git operations (status, log, diff, commit, branch ops), project context (list_files, read_file, list_jobs, get_queue_status), inter-agent dispatch (`dispatch_task`).
+- `backend/governor_mcp.py` — Governor's separate stdio MCP server (read tools always; write tools only in execution mode).
+- `backend/mcp_config.py` — assembles `--mcp-config` JSON per dispatch, combining internal + external MCP servers.
+- **Three-dimensional tool control**: `allowed_tools` (CLI native) × `allowed_internal_tools` (internal MCP, passed via `MAISTRO_ALLOWED_INTERNAL_TOOLS` env var) × `mcp_servers` (external MCP). All compose independently per job. All tool calls are audit-logged.
+
+### Governor
+
+Autonomous meta-analysis agent. Triggered every 10 successful task completions (or manually via `POST /api/governor/trigger`). Reads jobs, recent tasks (through `tasks_resolved`), health metrics, and emits structured findings (suggestions / observations) for the operator to approve, decline, or execute. Approved suggestions can be applied via a write-enabled `execution` run. Replaced the standalone chat surface that earlier versions exposed. See [architecture/governor.md](architecture/governor.md).
 
 ### Key Design Decisions
-- **Git as source of truth**: all project content lives in git. The SQLite DB holds only operational state — job configs, task queue, chat sessions.
-- **Two SQLite databases**: project DB at `<project>/.maistro/maistro.db`; app DB at `<repo>/.maistro/app.db` holds recent-projects list and cross-project job templates.
-- **Atomic tasks**: each task row has exactly one trigger and one context — never mutated after creation. Retry and resume create new tasks; the original is coalesced under the new one via FK.
-- **Job properties as key-value overrides**: properties can be `string`, `json`, `integer`, or `boolean` with defaults. Notable properties include `max_turns` (integer, default 50), `timeout` (seconds), `coalesce_tasks`, `require_approval`, `schedule` (cron), `allowed_tools`, `allowed_internal_tools`, `mcp_servers`, `subscriptions`, `allowed_dispatch_targets`.
-- **Task creates chat sessions**: each task links to a chat session for durable output storage and audit trail.
-- **Vite proxies `/api` and `/health` to backend**: frontend makes API calls to same origin; Vite dev server proxies to port 8420.
 
-## Key Files
+- **Git is the source of truth for project content.** SQLite holds only operational state — job configs, task records, event log, chat sessions/messages, raw event audit, MCP servers, KV config, Governor data.
+- **Two SQLite databases.** Project DB at `<project>/.maistro/maistro.db`; app DB at `<repo>/.maistro/app.db` for recent-projects list and cross-project job templates.
+- **Atomic tasks.** Never mutated; retry/reply/resume create new tasks and coalesce the prior one.
+- **Vite proxies `/api` and `/health` to backend.** Frontend always calls same-origin URLs.
 
-- `run.py` — Uvicorn launcher (hot-reload on `backend/`)
-- `migrate_db.py` — One-shot legacy DB migration script (not part of the running backend)
-- `backend/main.py` — FastAPI app, lifespan, CORS initialization; aggregates routers and defines project/feed/git/hook/MCP/config routes
-- `backend/job_routes.py` — Job CRUD, reorder, and subscription routes (APIRouter)
-- `backend/queue_routes.py` — Task lifecycle and queue control routes (APIRouter)
-- `backend/governor.py` — Governor agent: autonomous meta-analysis, CLI invocation, finding parsing, suggestion execution
-- `backend/governor_routes.py` — Governor REST routes: findings CRUD, manual trigger, status, run history (APIRouter)
-- `backend/governor_mcp.py` — Governor MCP stdio server: read tools (jobs, tasks, git, health, findings) + write tools (job config, queue settings) in execution mode
-- `backend/database.py` — Project SQLite schema, EAV property system, all CRUD helpers (async)
-- `backend/appstate.py` — App-level SQLite DB for recent-projects list and cross-project job templates (sync, separate from project DB)
-- `backend/state.py` — Shared mutable state (`PROJECT_DIR`) and utilities (`utcnow`, `require_project`) to avoid circular imports
-- `backend/git.py` — Git subprocess abstraction (log, diff, commit, hook installer)
-- `backend/cli.py` — Claude CLI subprocess invocation: stdin piping, NDJSON parsing, event schema. On Windows, bypasses `.CMD` wrappers by extracting the Node.js script path and invoking directly
-- `backend/dispatch.py` — Prompt assembly (`build_dispatch_system_prompt`/`build_user_prompt`), watch trigger matching, job manifest
-- `backend/scheduler.py` — Cron-based background scheduler: checks job schedules every 30s, enqueues tasks when due
-- `backend/worker.py` — Background task worker: pulls from queue, runs tasks one at a time, manages lifecycle via `transition_task()`, handles cancellation/timeout watchdog and stale task sweep on startup
-- `backend/events.py` — CLI event schema: single source of truth for event types and SSE wire serialization (`to_sse()`)
-- `backend/pubsub.py` — Task-level and queue-level event pub/sub for SSE streaming (per-task subscriber queues + global queue-change notifications)
-- `backend/mcp_server.py` — Internal MCP stdio server: git tools, project context, inter-agent dispatch
-- `backend/mcp_config.py` — MCP config generator for Claude CLI invocations
-- `backend/mcp_probe.py` — External MCP server tool discovery via stdio handshake (used by tool inventory endpoint)
-- `frontend/src/App.jsx` — Shell with rail navigation, project opener, view router
-- `frontend/src/api.js` — API client with `fetchJSON` and `fetchSSE` helpers
-- `frontend/src/App.css` — Design token system (all visual constants as CSS custom properties)
-- `frontend/src/util.js` — Shared utilities: `getTaskStatus` (status derivation with fallback), `formatDate`, `formatDuration`, trigger/status label maps
-- `frontend/src/components/` — `Queue.jsx` (unified three-column Dispatch: Upcoming/Active/Resolved kanban with bottom detail drawer), `Feed.jsx` (git activity), `Tasks.jsx` (job config + dispatch), `Settings.jsx` (config, queue, model, MCP servers), `Governor.jsx` (Governor findings feed, approve/decline, manual trigger, run history), `Dashboard.jsx`, `Files.jsx` (file browser with syntax highlighting), `McpServers.jsx` (external MCP server management), `HelpTip.jsx` (contextual help tooltips)
+## Backend Module Layout
+
+The backend is organized so each module owns one concern. The two big past splits — database (R2) and routes (R9) — are done; `backend/database.py` and `backend/main.py` are now thin shims.
+
+### `backend/database.py` is a re-export shim
+
+Real implementation lives in:
+
+| Module | Owns |
+|---|---|
+| `db_core` | Connection lifecycle, `SCHEMA_SQL` / `SEED_SQL`, `init_db`, project-switch readers-draining (`db_read_guard`, `close_db`) |
+| `db_migrations` | Isolated legacy-DB migration runner (run on startup; **do not add new entries** — edit `SCHEMA_SQL` and recreate the dev DB) |
+| `db_jobs` | Job CRUD, EAV property registry, `slugify`, cascade lookup |
+| `db_tasks` | Task CRUD, state machine, event log, coalescing (`transition_task`, `coalesce_under`, `cascade_completion`, `merge_tasks`, `split_task`, `transfer_task`) |
+| `db_chat` | Chat sessions, messages, raw event audit log |
+| `db_config` | Key-value config + external MCP server registration and cascade delete |
+| `db_dashboard` | Read-only operational analytics queries |
+| `db_governor` | Governor counters, runs, findings |
+
+New code should import the domain module directly. The re-export shim exists so existing `from backend import database as db; db.foo()` call sites keep working without churn.
+
+### `backend/main.py` is a thin shell
+
+Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All routes live in `*_routes.py` modules: `job_routes`, `queue_routes`, `governor_routes`, `project_routes`, `feed_routes`, `git_routes`, `mcp_routes`, `dashboard_routes`, `config_routes`.
+
+### Other backend modules
+
+- `state.py` — shared mutable state (`PROJECT_DIR`, `_switching` flag) and `require_project()` to break circular imports.
+- `worker.py` — background worker: pulls from queue, runs one task at a time, manages lifecycle via `transition_task()`, handles cancellation/timeout watchdog and stale-task sweep on startup.
+- `scheduler.py` — cron-based scheduler: checks job schedules every 30s, enqueues when due.
+- `dispatch.py` — prompt assembly (`build_dispatch_system_prompt`, `build_user_prompt`), watch trigger matching (`_any_file_matches`, `_glob_to_regex`), job manifest.
+- `cli.py` — Claude CLI subprocess invocation, NDJSON parsing.
+- `git.py` — git subprocess abstraction (still sync `subprocess.run`; see Known Debt).
+- `events.py` — single source of truth for SSE event types and wire serialization (`to_sse()`).
+- `pubsub.py` — task-level + global queue-level subscriber registries for SSE.
+- `governor.py` — orchestration (trigger handling, prompt assembly, finding parsing, suggestion execution).
+- `mcp_probe.py` — external MCP server tool discovery via stdio handshake.
+
+### Frontend layout
+
+- `App.jsx` — shell with rail navigation, project opener, view router.
+- `api.js` — `fetchJSON` (request/response) + `fetchSSE` (streaming) — the only place backend URLs are constructed.
+- `App.css` — design token system: all visual constants as CSS custom properties on `:root` (colors, type scale `--text-3xs`–`--text-2xl`, spacing `--space-1`–`--space-9`, radius, z-index, layout dims, 10 job identity colors `--job-color-0`–`--job-color-9`). **Use existing tokens rather than hardcoded values.**
+- `util.js` — `getTaskStatus` (status with timestamp fallback), `formatDate`, `formatDuration`, label maps.
+- `components/` — Queue (Dispatch kanban), Feed, Tasks (job config), Settings, Governor, Dashboard, Files, McpServers, HelpTip.
 
 ## Conventions
 
-- Job IDs are integers (autoincrement). Slugs are derived from names (`database.slugify`) and stored on the job record for git authorship and branch naming
-- Job commit authorship: `<GoalName> <<job-id>@maistro.local>`
-- SSE event types (defined in `events.py`): `text`, `thinking`, `tool_use`, `assistant_complete`, `result_meta`, `result`, `session_id`, `error`, `done`, `queue_changed`, `task`
-- Task triggers: `manual`, `commit` (watch), `dependency` (upstream job completed), `schedule`, `resume`, `reply`
-- Watch behavior: jobs with non-empty subscriptions auto-trigger on matching commits (no separate toggle — subscriptions presence = watch active)
-- Task coalescing: each task is atomic (one trigger, one context). `coalesced_id` FK links subordinate tasks to a root. `coalesce_tasks=true` on a job auto-coalesces new tasks at enqueue time (global, all triggers). `schedule` triggers always coalesce globally regardless of this setting. Manual coalesce/decompose via drag-drop in the UI is the same FK operation. Reply/resume use inverted coalescing: new task becomes the root, original becomes subordinate.
-- Task status is authoritative via the `status` column. The frontend `util.js:getTaskStatus()` uses it with a fallback derivation from timestamps. Running state for jobs is derived from tasks with `status='active'`, not stored as a job property
-- Subscriptions serve dual purpose: trigger matching (watch) and context injection (all tasks)
-- Task columns: `trigger` (type), `trigger_detail` (specifics), `context` (pre-formatted text) — real columns, not JSON
-- Queue can be auto-processing or paused — controlled via `/api/queue/settings` (auto_dispatch toggle)
-- Backend port: 8420, Frontend port: 5173
-- All API routes are prefixed `/api/`. REST conventions: `GET /api/jobs/`, `POST /api/jobs/`, `PATCH /api/jobs/:id`, `DELETE /api/jobs/:id`. Tasks at `/api/tasks/` (chat output is fetched via `/api/tasks/{task_id}/output` — there is no separate `/api/chat/` namespace, though `chat_sessions`/`chat_messages` tables still back task output). Queue settings at `/api/queue/settings`. Governor at `/api/governor/`.
-- Frontend uses no state management library — pure React `useState`/`useEffect` with polling and SSE subscriptions. `api.js` centralizes all backend calls via `fetchJSON` (request/response) and `fetchSSE` (streaming).
+- **Job IDs are integers.** Slugs are derived (`slugify`) and stored on the job for git authorship + branch naming. Commit authorship: `<JobName> <<job-id>@maistro.local>`.
+- **Triggers**: `manual`, `commit` (watch), `dependency`, `schedule`, `agent`, `resume`, `reply`.
+- **Watch behavior**: jobs with non-empty `subscriptions` auto-trigger on matching commits. There's no separate watch toggle — subscription presence is the toggle. Subscriptions are also injected as context on every task.
+- **Coalescing**: `coalesce_tasks=true` on a job auto-coalesces new tasks at enqueue time (global, all triggers). `schedule` triggers always coalesce globally regardless of this setting. Manual coalesce/decompose via UI drag-drop is the same FK operation. Reply/resume use *inverted* coalescing: the new task becomes root, the original becomes subordinate.
+- **Task columns**: `trigger` (type), `trigger_detail` (specifics), `context` (pre-formatted text) — real columns, not JSON.
+- **Queue**: auto-processing or paused via `/api/queue/settings` (`auto_dispatch` toggle).
+- **Ports**: backend 8420, frontend 5173.
+- **API routes**: all prefixed `/api/`. REST conventions: `GET/POST /api/jobs/`, `PATCH/DELETE /api/jobs/:id`. Tasks at `/api/tasks/` (output via `/api/tasks/{task_id}/output` — there is no `/api/chat/` namespace, though `chat_sessions`/`chat_messages` tables still back task output). Queue settings at `/api/queue/settings`. Governor at `/api/governor/`.
+- **SSE events** (defined in `events.py`): `text`, `thinking`, `tool_use`, `assistant_complete`, `result_meta`, `result`, `session_id`, `error`, `done`, `task`, `queue_changed`.
 
 ### Database Schema
-- No migration system — `SCHEMA_SQL` uses `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` for idempotent init
-- `SEED_SQL` uses `INSERT OR IGNORE` for property defs and config defaults
-- All tables use `job` terminology: `jobs` (INTEGER PK + slug), `job_properties`, `job_property_defs`, `job_id` INTEGER FK columns
-- To add schema changes: update `SCHEMA_SQL` directly. Existing DBs will need manual migration or recreation.
+
+- **No general-purpose migration system.** `SCHEMA_SQL` uses `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` for idempotent init. `SEED_SQL` uses `INSERT OR IGNORE`. To change schema: edit `SCHEMA_SQL` in `db_core` and recreate the dev DB.
+- **`backend/db_migrations.py`** runs on startup but only handles legacy table renames / PK conversions from the goals→jobs and slug→INTEGER transitions. Do not add new entries.
+- **`migrate_db.py`** at the repo root is a one-shot script for converting older project DBs offline — not part of the running backend.
 
 ### Project Switch Coordination
-- `database.py` implements a readers-draining protocol: `db_read_guard()` context manager tracks active readers, `close_db()` sets `_closing` flag and waits for all readers to drain (10s timeout)
-- `state._switching` flag prevents new `db_read_guard()` entries during switch
-- Worker and scheduler check `state.PROJECT_DIR` inside `db_read_guard()` — `RuntimeError("closing...")` is caught if project switches mid-operation
-- HTTP layer checks `worker.get_active_task_id()` before allowing project switch (409 if task active)
 
-### Frontend CSS
-- All visual constants live in `App.css` as CSS custom properties on `:root` — colors (`--bg`, `--surface`, `--accent`, `--danger`, etc.), type scale (`--text-3xs` through `--text-2xl`), spacing (`--space-1` through `--space-9`), radius, z-index, layout dimensions
-- 10 job identity colors (`--job-color-0` through `--job-color-9`) used across all surfaces
-- Use existing tokens rather than hardcoded values when adding or modifying styles
+- `db_core` implements a readers-draining protocol: `db_read_guard()` tracks active readers, `close_db()` sets a `_closing` flag and waits up to 10s for readers to drain before closing.
+- `state._switching` flag prevents new `db_read_guard()` entries during a switch.
+- Worker and scheduler check `state.PROJECT_DIR` inside `db_read_guard()` and catch `RuntimeError("closing...")` if a switch lands mid-operation.
+- HTTP layer rejects project switch with 409 if `worker.get_active_task_id()` is set.
 
-## Implementation Status
+## Known Debt (see `REMEDIATION.md`)
 
-**Built and working**: Two-stage queue, all 5 trigger types + resume/reply, coalescing (auto + manual merge/split), approval gates, timeout enforcement, internal MCP server (12 tools), three-dimensional tool control, inter-agent dispatch with depth limiting, activity dashboard (health/timeline/chains/tool usage), outcome summaries, execution pipeline fidelity (thinking blocks streamed/persisted, execution metadata captured), external MCP robustness (registration validation, pre-dispatch health checks, cascade deletion), dispatch diff view, job templates (cross-project reusable job definitions), centralized event schema + pub/sub, Governor (autonomous meta-analysis agent with findings feed, approve/decline suggestions, dedicated MCP tools), all UI views (Dispatch, Feed, Jobs, Files, MCP Servers, Dashboard, Governor, Settings).
+The big structural splits (R2 database, R9 routes, R5 write-side coalescing) are done. Remaining:
 
-**Designed but not yet built** (see `STRATEGY.md` priorities):
-- **P1: External MCP Polish** — environment variable UI for MCP server config, server status in dispatch context, runtime MCP error attribution, config file validation before write.
-- **P3: Task Session Interrogation** — resume completed task sessions in read-only mode for follow-up questions. Infrastructure exists (CLI `--resume`, `allowed_internal_tools`). Needs: UI surface, read-only tool stripping on dispatch.
-
-**Known technical debt** (see `REMEDIATION.md` for full detail and sequencing):
-- `database.py` is a ~2000 line god module; split plan documented as R2
-- Coalescing logic spread across 12+ touch points; depth-1 invariant maintained only by code discipline (R5)
-- `git.py` uses sync `subprocess.run`, blocks async event loop (R7)
-- Route extraction from `main.py` is partial — project, feed, git, dashboard, config routes remain inline (R9)
+- **R7: Async git operations.** `git.py` still uses sync `subprocess.run`, blocking the event loop on every git call from worker, scheduler, dispatch, and feed routes. Wrap in `asyncio.to_thread`, make callers `await`.
+- **R8: Move glob matching.** `_any_file_matches` and `_glob_to_regex` are trigger-matching functions misfiled in `dispatch.py`. Move to `git.py` or a dedicated `matching.py`.
+- **R5 read-side residual.** Task-card rendering in `Queue.jsx` / `Tasks.jsx` shows null metrics for subordinates because it reads `task.num_turns` etc. directly. Cosmetic, not correctness — switch to `get_task_resolved` or fall back to root values via a frontend helper as those surfaces are touched.

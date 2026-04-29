@@ -6,72 +6,73 @@ Two SQLite databases serve distinct scopes: one per-project for operational stat
 
 **Location**: `<project>/.maistro/maistro.db` (gitignored)
 **Access**: Async via `aiosqlite` — single persistent connection, reused across the process lifetime
-**Module**: `backend/database.py`
+**Module surface**: `backend/database.py` is a thin re-export shim. Implementation lives in seven domain modules.
 
-The project database holds all operational state for a single project: job definitions, task records, chat sessions, chat messages, raw CLI events, MCP server configs, and key-value configuration.
+The project database holds all operational state for a single project: job definitions, task records, the task lifecycle event log, chat sessions, chat messages, raw CLI events, MCP server configs, key-value configuration, and Governor runs and findings.
+
+### Module Decomposition
+
+The implementation is split across domain modules so each file owns one concern. `database.py` re-exports the public surface so legacy `from backend import database as db` call sites keep working without churn — new code imports the domain module directly.
+
+| Module | Owns |
+|--------|------|
+| `db_core` | Connection lifecycle, `SCHEMA_SQL`/`SEED_SQL`, `init_db`, project-switch readers-draining protocol |
+| `db_migrations` | Isolated legacy-DB migrations only (do not add new entries — edit `SCHEMA_SQL` and recreate the dev DB) |
+| `db_jobs` | Job CRUD, EAV property registry, slugify, cascade target lookup |
+| `db_tasks` | Task CRUD, state machine, event log, coalescing (write-side R5) |
+| `db_chat` | Chat sessions, messages, raw event audit log |
+| `db_config` | Key-value config + external MCP server registration and cascade delete |
+| `db_dashboard` | Read-only operational analytics queries |
+| `db_governor` | Governor counters, runs, findings |
+
+The boundary discipline: a module owns the queries that touch its tables and the helpers that compose them. Cross-module reads import explicitly; there are no implicit globals beyond the connection itself.
 
 ### Connection Management
 
-A module-level singleton (`_conn`) is lazily initialized on first access and reused until explicitly closed. `init_db()` closes any prior connection before opening a new one — this is how project switching works without leaking connections.
+A module-level singleton (`_conn`) in `db_core` is lazily initialized on first access and reused until explicitly closed. `init_db()` closes any prior connection before opening a new one — this is how project switching works without leaking connections.
 
 Pragmas applied on every connection:
 - `journal_mode=WAL` — concurrent reads during writes, critical because the worker writes task records while routes read them
+- `synchronous=NORMAL` — durability/throughput tradeoff appropriate for operational state
 - `foreign_keys=ON` — enforces referential integrity (cascading deletes depend on this)
+- `temp_store=MEMORY`, `mmap_size=64MB`, `cache_size=8MB` — keep hot working set in memory
 
 ### Project-Switch Coordination
 
-The connection singleton is shared by four concurrent consumers: the worker loop, the scheduler loop, HTTP request handlers, and the chat CLI runner. Closing the connection during a project switch must coordinate with all of them to prevent use-after-close errors.
-
-#### The Problem
-
-`close_db()` nulls the singleton and closes the underlying connection immediately. If any consumer is mid-query — has called `get_db()` and is between `execute()` and `commit()` — the connection becomes invalid under it. The race is possible because:
-
-1. **Worker**: guarded by an active-task check at the HTTP layer, but the check and the close are not atomic. The worker reads `PROJECT_DIR` at the top of its loop, then makes DB calls — if `close_db()` runs between those two points, the worker hits a closed connection.
-2. **Scheduler**: has no guard at all. It reads `DB_PATH` and `PROJECT_DIR` at loop top, then iterates all jobs and makes multiple DB calls (list_jobs, get_config, enqueue_task). A project switch mid-iteration closes the connection under it.
-3. **HTTP handlers**: any in-flight request that has already passed `require_project()` can be mid-query when another request triggers project switch.
-4. **Chat CLI runner**: long-running streaming sessions that make DB calls throughout their lifetime.
+The connection singleton is shared by three concurrent consumers: the worker loop, the scheduler loop, and HTTP request handlers (including SSE streams). Closing the connection during a project switch must coordinate with all of them to prevent use-after-close errors.
 
 #### Coordination Model
 
-An `asyncio.Lock` (`_db_lock`) in `database.py` guards the connection lifecycle. All consumers acquire this lock as a shared reader; `close_db()` acquires it exclusively before closing.
+A reader-counting guard in `db_core` (`db_read_guard()`) wraps any DB operation that must complete atomically against project switch. While any guard is held, `close_db()` blocks. `close_db()` sets a `_closing` flag to prevent new guards, waits up to 10 seconds for in-flight readers to drain, then closes.
 
-Since Python's `asyncio.Lock` has no reader/writer mode, the implementation uses a counting semaphore pattern:
+- **`db_read_guard()`** — async context manager that increments an active-reader count on entry, decrements on exit. Raises `RuntimeError` if entered after `_closing` is set.
+- **`close_db()`** — sets `_closing`, awaits the readers-drained event, closes the connection, and clears caches (job property defs).
 
-- **`db_read_guard()`** — async context manager that increments an active-reader count on entry, decrements on exit. While the count is nonzero, `close_db()` blocks.
-- **`close_db()`** — sets a "closing" flag that prevents new readers from entering, then waits until the active-reader count reaches zero before closing the connection.
-
-The granularity of protection is per-operation, not per-request. Each `get_db()` call site wraps its query-to-commit span in `db_read_guard()`. This keeps the critical section narrow — a long-running task execution holds the guard only around individual DB operations, not for the entire task lifetime.
-
-#### Consumer-Specific Guards
-
-| Consumer | Current guard | Required guard |
-|----------|--------------|----------------|
-| Worker | Active-task HTTP check blocks project switch while a task runs | Sufficient — task execution is the long pole; individual DB calls within the loop iteration are fast |
-| Scheduler | None | `db_read_guard()` around the entire per-tick job scan, or around each DB call within the tick |
-| HTTP handlers | `require_project()` checks project is loaded | `db_read_guard()` around DB-touching operations, or project switch waits for in-flight requests to drain |
-| Chat runner | None | `db_read_guard()` around each DB call within the streaming session |
-
-The worker's active-task check is the coarse-grained guard that prevents the most dangerous case (project switch during task execution). The `db_read_guard()` covers the remaining gaps — scheduler ticks and HTTP handler races.
+The granularity is per-operation, not per-request. A long-running task execution does not hold the guard for its full duration — only individual DB calls within it.
 
 #### Ordering Constraint
 
-Project switch must follow this sequence:
-1. Set a "switching" flag that causes new `require_project()` calls to fail (prevents new work from starting)
-2. Wait for active readers to drain (the `db_read_guard()` mechanism)
+Project switch follows this sequence:
+1. Set `state._switching` to fail new `require_project()` calls (prevents new work from starting)
+2. Wait for active readers to drain via the `db_read_guard()` mechanism
 3. Close the old connection
 4. Open the new connection and set `PROJECT_DIR`
-5. Clear the "switching" flag
+5. Clear the switching flag
 
 This ensures no consumer sees a partially-switched state where `PROJECT_DIR` points to the new project but the connection still belongs to the old one (or is closed).
 
+The HTTP layer additionally checks `worker.get_active_task_id()` before allowing a project switch — if a task is running, the switch returns 409. This coarse-grained guard is the only thing protecting the working directory itself from changing under an executing CLI subprocess.
+
 ### Schema
 
-Ten tables:
+The schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent. There is no general-purpose migration system. `SEED_SQL` populates `job_property_defs` with core property definitions and sets default config values. `db_migrations.run_migrations()` exists only for legacy table renames (goals→jobs, slug PK→INTEGER PK) and is not where new schema changes belong.
+
+Twelve tables plus one view:
 
 | Table | Purpose |
 |-------|---------|
-| `jobs` | Job identity (integer id, slug, name, created_at) |
-| `job_property_defs` | EAV registry — defines property keys, default values, and types |
+| `jobs` | Job identity (`INTEGER PRIMARY KEY AUTOINCREMENT`, `slug` UNIQUE, name, created_at) |
+| `job_property_defs` | EAV registry — property keys, defaults, and types |
 | `job_properties` | EAV overrides — per-job property values |
 | `tasks` | Task identity, execution metadata (stop_reason, num_turns, cost_usd), and materialized status |
 | `task_events` | Immutable lifecycle event log — source of truth for when transitions happened |
@@ -80,16 +81,17 @@ Ten tables:
 | `chat_events` | Raw NDJSON audit trail per session |
 | `mcp_servers` | External tool server registrations (name, command, args, env, enabled) |
 | `config` | Key-value configuration store |
-
-Schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent. A lightweight migration system (`_migrate`) runs after schema creation, gated on a `schema_version` integer in the `config` table. Each migration checks the current version and advances it atomically. This handles changes that `CREATE TABLE IF NOT EXISTS` cannot express (e.g., adding FK constraints to existing tables via table recreation). The seed SQL populates `job_property_defs` with core property definitions and sets default config values.
+| `governor_runs` | Each Governor invocation: trigger, task count, findings count, started/completed_at, error |
+| `governor_findings` | Suggestions and observations produced by Governor runs (status, body, execution result) |
+| `tasks_resolved` (view) | Coalescing-aware projection of `tasks` — see [Task Record](#task-record) |
 
 ### Entity-Attribute-Value Property System
 
 Job properties use EAV rather than columns. `job_property_defs` defines the universe of property keys with a default value and a type (`string`, `json`, `integer`, `boolean`). `job_properties` holds per-job overrides.
 
-On read, `get_job()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans.
+On read, `get_job()` loads all defs, applies defaults, then overlays job-specific values. The `_cast_property()` helper coerces stored strings to the declared type — `json.loads` for JSON, `int()` for integers, lowercase string comparison for booleans. Property defs are cached at module level in `db_jobs` and reset by `close_db()` on project switch.
 
-This design means adding a new property requires only a seed SQL insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
+This design means adding a new property requires only a `SEED_SQL` insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
 ### Task Record
 
@@ -98,7 +100,37 @@ The task record carries identity (immutable after creation), execution metadata 
 - **`status`** — materialized from the latest lifecycle event in `task_events`. All hot-path queries (worker, queue rendering, coalescing) filter on this column. Updated atomically with each event insert. See [Task Lifecycle](task-lifecycle.md).
 - **`coalesced_id`** — nullable foreign key referencing another `tasks` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a task ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
 
-Lifecycle timestamp columns (`queued_at`, `started_at`, `completed_at`) are transitional — maintained via dual-write during migration but redundant with the event log. See [Task Lifecycle — Migration Path](task-lifecycle.md#migration-path) for the removal plan.
+#### Coalescing-Aware Reads: `tasks_resolved` View
+
+Coalesced subordinates inherit their root's outcome. Outcome columns (`session_id`, `resume_session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`) are populated only on the task that actually ran. Naive reads of a subordinate row would show null for these columns even though the subordinate's *effective* outcome is whatever the root produced.
+
+The `tasks_resolved` view solves this with a single LEFT JOIN against the root: outcome columns are `COALESCE(self, root)`, intrinsic columns (id, job_id, trigger, context, coalesced_id) pass through unchanged, and two derived columns flag the relationship: `is_subordinate` (1 if `coalesced_id IS NOT NULL`) and `effective_root_id` (`COALESCE(coalesced_id, id)`). The depth-1 invariant on `coalesced_id` (see below) makes the single-level join sufficient — no recursion needed.
+
+Two semantic profiles for queries:
+
+- **"Per-task as the agent saw it"** → read from `tasks_resolved` (or call `get_task_resolved()`). Use this for output/diff/outcome endpoints, the Governor's recent-tasks view, and anywhere a user might click on a subordinate.
+- **"Per-execution / per-cost"** → read from `tasks WHERE coalesced_id IS NULL`. One row per actual run, no double-counting. Use this for aggregates (`dashboard_health`, cost totals, success-rate metrics).
+
+#### Depth-1 Invariant (DB-Level)
+
+The coalescing model requires that a coalesce group has depth exactly 1: a subordinate's `coalesced_id` always points at a root, and a root never itself becomes a subordinate without first flattening its children. Three SQLite triggers enforce this at the database level so a future regression in the application code fails loudly instead of silently producing depth-N chains:
+
+| Trigger | Fires on | Aborts when |
+|---------|----------|-------------|
+| `tasks_depth1_insert` | INSERT | New row's `coalesced_id` points at a row that itself has a non-null `coalesced_id` |
+| `tasks_depth1_update_target` | UPDATE OF `coalesced_id` | New `coalesced_id` points at a subordinate |
+| `tasks_depth1_update_self` | UPDATE OF `coalesced_id` | The task being re-parented currently has subordinates of its own |
+
+The application layer cooperates: every coalesce-mutating operation (`coalesce_under`, `merge_tasks`, `_flatten_coalesce`) re-points subordinates *before* re-parenting their root, so the invariant holds at every intermediate state. The triggers are a hard backstop, not the primary mechanism.
+
+#### Coalescing Locks (Application-Level)
+
+Every coalesce-mutating operation also requires the participants to be in pre-execution states:
+
+- `split_task`, `uncoalesce_task`, `merge_tasks` — all participants must be `pending`
+- `transfer_task` — task must be `pending` or `queued`, roots only
+
+As a result, a terminal coalesced subtree is structurally immutable — the root's outcome columns are permanent. Reply and resume "unlock" a terminal subtree by introducing a *new* non-terminal root above it (inverted coalescing — see [Trigger System — Inverted Coalescing](trigger-system.md#inverted-coalescing-reply-and-resume)).
 
 ### Task Events
 
@@ -109,24 +141,31 @@ Key properties:
 - Indexed on `(task_id, id DESC)` for latest-event queries and `(task_id, event, id DESC)` for latest-event-of-type queries
 - The `detail` column carries event-specific context (error messages, commit hashes, session IDs) as free-form text or JSON
 
+### Governor Tables
+
+`governor_runs` records each Governor invocation (trigger source, task count at trigger, started/completed timestamps, findings count, error). `governor_findings` records the structured output (type=suggestion|observation, status, title, body, optional execution_result for executed suggestions, FK to the run that produced it).
+
+The `governor_task_counter` config key drives the every-10-tasks autotrigger. See [Governor](governor.md) for the full specification.
+
 ### Dashboard Aggregation Queries
 
 The Activity Dashboard (see [Frontend — Dashboard](frontend.md#dashboard)) introduces a read-only aggregation workload over existing tables. Unlike queue operations which filter on lifecycle state (pending, queued, active), dashboard queries filter on terminal events and aggregate across jobs. Key patterns:
 
-- **Health**: `tasks` grouped by `job_id`, classified by `status` column value (materialized), filtered by time range
-- **Timeline**: `task_events` pairs of `active` and terminal events, computing duration from their timestamps
+- **Health**: `tasks WHERE coalesced_id IS NULL` grouped by `job_id`, classified by `status`, filtered by time range — subordinates excluded so a coalesce group counts as one outcome
+- **Timeline**: `task_events` pairs of `activated` and terminal events, computing duration from their timestamps
 - **Dispatch chains**: `tasks` filtered on `trigger = 'agent'`, following `trigger_detail` references
 - **Tool usage**: `chat_events` (where `event_type = 'mcp_tool_use'`) joined through `chat_sessions.task_id` → `tasks.job_id`
 
-The primary worker index is on `(status, approval, coalesced_id)` — covers the worker's queued-task lookup.
+The primary worker index is on `(status, approval, coalesced_id)` — covers the worker's queued-task lookup. `idx_tasks_completed_at` supports time-windowed dashboard queries.
 
 ### Key Invariants
 
 - The `tasks.context` column stores pre-formatted context text built at the enqueue site
 - All foreign keys referencing `jobs(id)` — on `job_properties`, `tasks`, and `chat_sessions` — use `ON DELETE CASCADE`. Deleting a job is a single `DELETE FROM jobs` statement; the database handles dependent row cleanup automatically
 - Deleting an external MCP server cascades to job references: the platform removes the server name from every job's `mcp_servers` property list in the same transaction as the server deletion. This is an application-level cascade (not FK-based) because `mcp_servers` is a JSON property stored in the EAV system, not a relational reference
-- Task state is materialized in the `status` column, set exclusively through `transition_task`. The `task_events` table is the source of truth for transition history. If the two ever disagree, the event log wins
+- Task state is materialized in the `status` column, set exclusively through `transition_task` / `transition_tasks_batch`. The `task_events` table is the source of truth for transition history. If the two ever disagree, the event log wins
 - Tasks with non-null `coalesced_id` are invisible in queue listings but included when their root task is dispatched or acted upon
+- The depth-1 invariant on `coalesced_id` is enforced by SQLite triggers and re-asserted in code on every re-parenting
 
 ## Application Database
 
@@ -134,10 +173,10 @@ The primary worker index is on `(status, approval, coalesced_id)` — covers the
 **Access**: Synchronous via `sqlite3` — short-lived connections per operation
 **Module**: `backend/appstate.py`
 
-The app database holds exactly one table: `recent_projects` (path, name, opened_at). It tracks which project directories the user has opened and when, enabling the recent-projects list on the landing screen.
+The app database holds two tables: `recent_projects` (path, name, opened_at) and `job_templates` (cross-project reusable job definitions). It tracks which project directories the user has opened and when, enabling the recent-projects list on the landing screen, and stores templates a user can apply to new projects.
 
-Sync access is deliberate — this database is only touched during project open/close operations, never during hot paths like task processing.
+Sync access is deliberate — this database is only touched during project open/close operations and template management, never during hot paths like task processing.
 
 ## Relationship Between the Two
 
-The app database knows about project paths. The project database knows nothing about the app. They never reference each other's data. If either is deleted, the other continues to function — the app DB just loses its recent list; the project DB just loses operational state while git content remains intact.
+The app database knows about project paths and templates. The project database knows nothing about the app. They never reference each other's data. If either is deleted, the other continues to function — the app DB just loses its recent list and templates; the project DB just loses operational state while git content remains intact.
