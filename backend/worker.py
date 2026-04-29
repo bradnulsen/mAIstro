@@ -27,6 +27,15 @@ def get_active_task_id() -> int | None:
     return _active_task_id
 
 
+async def _check_governor_trigger():
+    """Increment Governor counter and trigger a run if threshold reached."""
+    from backend import governor
+    count = await db.increment_governor_counter()
+    if count >= 10:
+        await db.reset_governor_counter()
+        governor.spawn(governor.run_governor("auto", task_count=count))
+
+
 # ── Public API ──────────────────────────────────────────────
 
 async def start():
@@ -67,7 +76,7 @@ async def process_one(task_id: int) -> dict | None:
         task = await db.get_task(task_id)
         if not task:
             return None
-        if task.get("status") not in ("pending", "queued"):
+        if task.get("status") not in db.PRE_EXECUTION_STATUSES:
             return None
         if task.get("approval") == "pending":
             await db.approve_task(task_id)
@@ -191,6 +200,7 @@ async def _process_task(task: dict):
     if mcp_error:
         log.warning("[worker] Task #%d failed MCP health check: %s", task_id, mcp_error)
         await db.transition_task(task_id, "failed", error=mcp_error)
+        await db.cascade_completion(task_id, "failed", error=mcp_error)
         pubsub.broadcast(task_id, events.error(mcp_error))
         pubsub.broadcast(task_id, events.done())
         pubsub.cleanup_task(task_id)
@@ -277,47 +287,46 @@ async def _process_task(task: dict):
             await db.transition_task(task_id, "timed_out",
                                      result_commit=head, error="timed out",
                                      **meta_fields)
-            fresh_subs = await db.get_subordinate_tasks(task_id)
-            sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
-            await db.transition_tasks_batch(sub_ids, "timed_out",
-                                            result_commit=head, error="timed out")
+            await db.cascade_completion(task_id, "timed_out",
+                                        result_commit=head, error="timed out")
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
         elif _cancelled:
             await db.transition_task(task_id, "cancelled",
                                      result_commit=head, error="cancelled",
                                      **meta_fields)
-            fresh_subs = await db.get_subordinate_tasks(task_id)
-            sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
-            await db.transition_tasks_batch(sub_ids, "cancelled",
-                                            result_commit=head, error="cancelled")
+            await db.cascade_completion(task_id, "cancelled",
+                                        result_commit=head, error="cancelled")
             log.info("[worker] Task #%d cancelled (dependents skipped)", task_id)
         elif meta_fields.get("stop_reason") == "max_turns":
             # Agent hit turn limit — exhausted, not completed
             max_turns = job["properties"].get("max_turns", 50)
             turns_used = meta_fields.get("num_turns", "?")
+            err = f"hit turn limit ({turns_used}/{max_turns})"
             await db.transition_task(task_id, "exhausted",
-                                     result_commit=head,
-                                     error=f"hit turn limit ({turns_used}/{max_turns})",
+                                     result_commit=head, error=err,
                                      **meta_fields)
-            sub_ids = [s["id"] for s in subordinates]
-            await db.transition_tasks_batch(sub_ids, "exhausted",
-                                            result_commit=head,
-                                            error=f"hit turn limit ({turns_used}/{max_turns})")
+            await db.cascade_completion(task_id, "exhausted",
+                                        result_commit=head, error=err)
             log.info("[worker] Task #%d exhausted (%s/%s turns, commit=%s)",
                      task_id, turns_used, max_turns, head[:8])
         else:
             await db.transition_task(task_id, "completed",
                                      result_commit=head,
                                      **meta_fields)
-            sub_ids = [s["id"] for s in subordinates]
-            await db.transition_tasks_batch(sub_ids, "completed",
-                                            result_commit=head)
+            await db.cascade_completion(task_id, "completed",
+                                        result_commit=head)
             log.info("[worker] Task #%d completed (commit=%s)", task_id, head[:8])
 
             await _enqueue_cascades(job_id, task_id,
                                     job_name=job["name"],
                                     start_commit=start_commit,
                                     result_commit=head)
+
+            # Governor counter: check if it's time for a Governor run
+            try:
+                await _check_governor_trigger()
+            except Exception:
+                log.warning("[worker] Governor counter check failed for task #%d", task_id)
 
     except Exception as e:
         log.exception("[worker] Task #%d failed: %s", task_id, e)
@@ -331,9 +340,7 @@ async def _process_task(task: dict):
             log.warning("[worker] Task #%d failed to write error response: %s", task_id, write_err)
         await db.transition_task(task_id, "failed", error=str(e))
         try:
-            fresh_subs = await db.get_subordinate_tasks(task_id)
-            sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in db.TERMINAL_STATUSES]
-            await db.transition_tasks_batch(sub_ids, "failed", error=str(e))
+            await db.cascade_completion(task_id, "failed", error=str(e))
         except Exception as cascade_err:
             log.warning("[worker] Task #%d failed to cascade failure to subordinates: %s", task_id, cascade_err)
     finally:

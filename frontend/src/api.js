@@ -132,27 +132,31 @@ export const getFeed = (params = {}) => {
   return fetchJSON(`/api/feed/?${qs}`)
 }
 
-// ── Chat ──
+// ── Governor ──
 
-export function sendChatMessage(message, sessionId, context, onEvent) {
-  const body = JSON.stringify({
-    message,
-    session_id: sessionId || undefined,
-    context: context || undefined,
-  })
-  return fetchSSE('/api/chat/', { method: 'POST', body }, onEvent)
+export const getGovernorFindings = (params = {}) => {
+  const qs = new URLSearchParams(params).toString()
+  return fetchJSON(`/api/governor/findings?${qs}`)
 }
 
-export const getChatSessions = () => fetchJSON('/api/chat/sessions')
+export const approveGovernorFinding = (id) =>
+  fetchJSON(`/api/governor/findings/${id}/approve`, { method: 'POST' })
 
-export const getChatMessages = (sessionId) =>
-  fetchJSON(`/api/chat/sessions/${sessionId}/messages`)
+export const declineGovernorFinding = (id) =>
+  fetchJSON(`/api/governor/findings/${id}/decline`, { method: 'POST' })
 
-export const deleteChatSession = (sessionId) =>
-  fetchJSON(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' })
+export const readGovernorFinding = (id) =>
+  fetchJSON(`/api/governor/findings/${id}/read`, { method: 'POST' })
 
-export const getChatSessionStatus = (sessionId) =>
-  fetchJSON(`/api/chat/sessions/${sessionId}/status`)
+export const dismissGovernorFinding = (id) =>
+  fetchJSON(`/api/governor/findings/${id}/dismiss`, { method: 'POST' })
+
+export const triggerGovernor = () =>
+  fetchJSON('/api/governor/trigger', { method: 'POST' })
+
+export const getGovernorRuns = () => fetchJSON('/api/governor/runs')
+
+export const getGovernorStatus = () => fetchJSON('/api/governor/status')
 
 // ── Job Templates ──
 

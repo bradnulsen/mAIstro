@@ -1,25 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTask, getQueueSettings, setQueueSettings, queueAll, shelveAll } from './api'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTask, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus } from './api'
 import Feed from './components/Feed'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
-import Chat from './components/Chat'
+import Governor from './components/Governor'
 import Files from './components/Files'
 import Settings from './components/Settings'
 import McpServers from './components/McpServers'
 import Dashboard from './components/Dashboard'
 
-const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', mcp: 'mcp', dashboard: 'dashboard', settings: 'settings' }
+const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', mcp: 'mcp', dashboard: 'dashboard', governor: 'governor', settings: 'settings' }
 
 export default function App() {
   const [project, setProject] = useState(null)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState(VIEWS.dashboard)
   const [jobs, setJobs] = useState([])
-  const [chatOpen, setChatOpen] = useState(false)
-  const [chatWidth, setChatWidth] = useState(380)
   const [autoQueue, setAutoQueue] = useState(false)
-  const chatTrayRef = useRef(null)
+  const [governorBadge, setGovernorBadge] = useState(0)
 
   // Load auto-queue setting at app level
   useEffect(() => {
@@ -50,32 +48,18 @@ export default function App() {
     return () => clearInterval(interval)
   }, [project, refreshJobs])
 
-  const handleTabMouseDown = useCallback((e) => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startW = chatOpen ? chatWidth : 380
-    let didDrag = false
-
-    if (chatTrayRef.current) chatTrayRef.current.classList.add('dragging')
-
-    const onMove = (e) => {
-      const delta = startX - e.clientX
-      if (!didDrag && Math.abs(delta) > 5) didDrag = true
-      if (didDrag) {
-        const newW = Math.max(250, Math.min(800, startW + delta))
-        setChatWidth(newW)
-        if (!chatOpen) setChatOpen(true)
-      }
+  // Poll governor status for badge count
+  useEffect(() => {
+    if (!project) return
+    const poll = () => {
+      getGovernorStatus()
+        .then(s => setGovernorBadge((s.pending_suggestions || 0) + (s.unread_observations || 0)))
+        .catch(() => {})
     }
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      if (chatTrayRef.current) chatTrayRef.current.classList.remove('dragging')
-      if (!didDrag) setChatOpen(o => !o)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [chatOpen, chatWidth])
+    poll()
+    const interval = setInterval(poll, 10000)
+    return () => clearInterval(interval)
+  }, [project])
 
   if (loading) return <div className="loading">Loading...</div>
   if (!project) return <ProjectOpener onOpen={setProject} />
@@ -114,6 +98,14 @@ export default function App() {
           onClick={() => setView(VIEWS.mcp)}
           title="MCP Servers"
         >⧈</button>
+        <button
+          className={`rail-icon ${view === VIEWS.governor ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.governor)}
+          title="Governor"
+        >
+          ⚑
+          {governorBadge > 0 && <span className="governor-badge">{governorBadge}</span>}
+        </button>
         <div className="rail-spacer" />
         <button
           className={`rail-icon ${view === VIEWS.settings ? 'active' : ''}`}
@@ -131,20 +123,8 @@ export default function App() {
         {view === VIEWS.files && <Files />}
         {view === VIEWS.mcp && <McpServers />}
         {view === VIEWS.dashboard && <Dashboard />}
+        {view === VIEWS.governor && <Governor onBadgeChange={setGovernorBadge} />}
         {view === VIEWS.settings && <Settings />}
-      </div>
-
-      <div ref={chatTrayRef} className={`chat-tray ${chatOpen ? 'open' : ''}`} style={chatOpen ? { width: chatWidth, minWidth: chatWidth } : undefined}>
-        <div className="chat-tray-tab" onMouseDown={handleTabMouseDown}>
-          Chat
-        </div>
-        <div className="chat-tray-content">
-          <div className="chat-tray-header">
-            <span>Chat</span>
-            <button className="small" onClick={() => setChatOpen(false)}>✕</button>
-          </div>
-          <Chat />
-        </div>
       </div>
     </div>
   )

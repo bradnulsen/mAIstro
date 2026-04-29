@@ -96,19 +96,25 @@ async def stream_queue_changes():
 
 @router.get("/api/tasks/{task_id}/stream")
 async def stream_task(task_id: int):
-    """SSE stream of live events for a running task."""
+    """SSE stream of live events for a running task.
+
+    A coalesced subordinate has no events of its own — only its root runs.
+    Subscribe to the root's channel so the subordinate's stream URL still
+    works (otherwise it would hang forever on an empty channel).
+    """
     require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
-    if task.get("status") in ("completed", "exhausted", "failed", "cancelled", "interrupted", "timed_out", "rejected"):
+    if task.get("status") in db.TERMINAL_STATUSES:
         async def done_stream():
             yield {"event": "done", "data": json.dumps({"status": "completed"})}
         return EventSourceResponse(done_stream())
 
-    q = pubsub.subscribe(task_id)
-    log.info("[sse] Task #%d stream connected", task_id)
+    effective_id = task.get("coalesced_id") or task_id
+    q = pubsub.subscribe(effective_id)
+    log.info("[sse] Task #%d stream connected (channel=#%d)", task_id, effective_id)
 
     async def stream():
         try:
@@ -124,7 +130,7 @@ async def stream_task(task_id: int):
                     break
                 yield events.to_sse(event)
         finally:
-            pubsub.unsubscribe(task_id, q)
+            pubsub.unsubscribe(effective_id, q)
             log.info("[sse] Task #%d stream disconnected", task_id)
 
     return EventSourceResponse(stream())
@@ -132,9 +138,14 @@ async def stream_task(task_id: int):
 
 @router.get("/api/tasks/{task_id}/output")
 async def get_task_output(task_id: int):
-    """Get stored output for a task."""
+    """Get stored output for a task.
+
+    Reads through tasks_resolved so a coalesced subordinate returns its
+    root's chat output (otherwise subordinates would always return an
+    empty messages list since they never opened their own session).
+    """
     require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_task_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
@@ -175,9 +186,13 @@ async def get_task_output(task_id: int):
 
 @router.get("/api/tasks/{task_id}/outcome")
 async def get_task_outcome(task_id: int):
-    """Get the outcome summary for a completed task (derived from git)."""
+    """Get the outcome summary for a completed task (derived from git).
+
+    Reads through tasks_resolved so a coalesced subordinate inherits its
+    root's start_commit/result_commit range.
+    """
     project_dir = require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_task_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     start = task.get("start_commit")
@@ -190,9 +205,13 @@ async def get_task_outcome(task_id: int):
 
 @router.get("/api/tasks/{task_id}/diff")
 async def get_task_diff(task_id: int):
-    """Get the git diff for a completed task (start_commit..result_commit)."""
+    """Get the git diff for a completed task (start_commit..result_commit).
+
+    Reads through tasks_resolved so a coalesced subordinate inherits its
+    root's commit range.
+    """
     project_dir = require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_task_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     start = task.get("start_commit")
@@ -211,7 +230,7 @@ async def update_task_route(task_id: int, req: UpdateTaskRequest):
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.get("status") not in ("pending", "queued"):
+    if task.get("status") not in db.PRE_EXECUTION_STATUSES:
         raise HTTPException(409, "Cannot edit a task that has already started")
 
     if req.context is not None:
@@ -238,9 +257,7 @@ async def cancel_task(task_id: int):
         return {"status": "cancelling", "was_running": True}
     # Pending or queued: not being processed by the worker, transition directly.
     await db.transition_task(task_id, "cancelled", error="cancelled")
-    subs = await db.get_subordinate_tasks(task_id)
-    sub_ids = [s["id"] for s in subs if s.get("status") not in db.TERMINAL_STATUSES]
-    await db.transition_tasks_batch(sub_ids, "cancelled", error="cancelled")
+    await db.cascade_completion(task_id, "cancelled", error="cancelled")
     pubsub.notify_queue_changed()
     return {"status": "cancelled", "was_running": False}
 

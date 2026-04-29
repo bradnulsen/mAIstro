@@ -41,16 +41,48 @@ The worker and chat become thin callers that configure the harness (broadcast vs
 
 ---
 
-## R5: Coalescing logic is dispersed across 12+ touch points
+## R5: Coalescing logic is dispersed across 12+ touch points (partially done)
 
-**Problem:** Coalescing is described as a "lightweight FK operation" but is referenced in: `enqueue_task`, `merge_tasks`, `split_task`, `uncoalesce_task`, `_flatten_coalesce`, `get_subordinate_tasks`, `get_oldest_queued_task`, `get_task_queue`, `transfer_task`, `cancel_task` (queue_routes), and three worker completion paths. Depth-1 invariant is maintained by code discipline only.
+**Problem:** Coalescing has two forms of dispersal — *write-side* (mutation) and *read-side* (queries that need coalescing-awareness). Both leak through the codebase as code discipline rather than as expressible invariants.
 
-**Remediation:**
-- Consolidate coalescing operations into a `coalesce` module or a section of `db_tasks.py` with explicit functions: `coalesce_into(root_id, sub_id)`, `decoalesce(sub_id)`, `decoalesce_all(root_id)`, `cascade_completion(root_id, **fields)`.
-- Add a CHECK constraint or trigger ensuring `coalesced_id` chains are depth-1 (a task whose `coalesced_id` is set cannot itself be a `coalesced_id` target).
-- The worker's three completion paths (success, timeout, cancel) all do the same subordinate cascade — extract to `cascade_completion`.
+*Write side.* Coalescing was referenced in: `enqueue_task`, `merge_tasks`, `split_task`, `uncoalesce_task`, `_flatten_coalesce`, `coalesce_under`, `get_subordinate_tasks`, `get_oldest_queued_task`, `get_task_queue`, `transfer_task`, `cancel_task` (queue_routes), and five worker completion paths. The depth-1 invariant was maintained by code discipline only.
 
-**Scope:** Primarily `database.py` restructuring + worker simplification. Medium effort, high bug-prevention value.
+*Read side.* Subordinate task rows have null execution-outcome columns (`num_turns`, `cost_usd`, `stop_reason`, `started_at`, `session_id`, `start_commit`, `result_commit`, `error`) because only the root actually executes. Any query that reads these columns directly off `tasks` returns null for subordinates and a misleading picture of "what actually happened to this task." The Governor was the canary: `get_recent_tasks_for_governor` returned 5 rows with null metrics for an Engineering coalesce group, and the agent inferred (wrongly) that "only the root's context was reviewed." Other consumers — dashboards, queue routes, frontend output endpoints — had the same shape of bug latent in them.
+
+The two dispersals interact: the existing pending-only constraint on every coalesce-mutating op (`split_task`, `uncoalesce_task`, `merge_tasks` require `pending`; `transfer_task` requires `pending`/`queued`) means a terminal coalesced subtree is already structurally immutable. That makes the read-side problem a "show the right thing" issue, not a "guard against split" issue — outcome data for a terminal coalesced group is permanent and safe to inherit.
+
+### Done in this pass
+
+*Write side:*
+- ✅ **Reordered `coalesce_under` and `merge_tasks`** to flatten *before* re-parenting, so depth-1 holds at every intermediate state. Required so the new triggers don't trip on the transient depth-2 state during reply/resume.
+- ✅ **Three SQLite triggers** (`tasks_depth1_insert`, `tasks_depth1_update_target`, `tasks_depth1_update_self`) added to `SCHEMA_SQL`. Depth-1 is now a hard DB-level invariant. Smoke-tested: blocks pointing a `coalesced_id` at a subordinate (insert and update) and blocks demoting a task that still has subordinates of its own. Legitimate flatten+coalesce sequences pass.
+- ✅ **Cleaned up 4 historical depth-N violations** in the local project DB (chains 272→273→274→285 and 359→361→364→369). Iterative flatten run as a one-shot outside the application code (per the no-baked-in-migrations convention). Other projects with legacy data may need the same cleanup; the trigger doesn't validate existing rows on install, so legacy chains don't break — they just produce stale fall-through data in `tasks_resolved`.
+- ✅ **Extracted `db.cascade_completion(root_id, terminal_status, **fields)`** — single helper now used by all five worker completion paths (timeout, cancelled, exhausted, completed, failed). Side benefit: completed/exhausted paths previously used the start-of-task subordinate snapshot, missing late-coalesces that arrived during execution. They now re-query fresh.
+
+*Read side:*
+- ✅ **`tasks_resolved` view** in `SCHEMA_SQL`. Outcome columns COALESCE through `coalesced_id` to root; intrinsic columns pass through unchanged. Adds `is_subordinate` and `effective_root_id` markers. View is `DROP+CREATE` on every `init_db` so the definition stays current without a migration.
+- ✅ **`db.get_task_resolved(task_id)`** added — opt-in resolved read for callers that care about effective outcome.
+- ✅ **`/api/tasks/{id}/output`, `/diff`, `/outcome`** switched to `get_task_resolved`. Subordinate clicks now return the root's chat output / commit range / outcome summary instead of empty.
+- ✅ **`/api/tasks/{id}/stream`** subscribes to the effective root's pubsub channel for subordinates (was hanging forever on an empty channel).
+- ✅ **`get_recent_tasks_for_governor`** reads through `tasks_resolved`; surfaces `is_subordinate` / `effective_root_id` markers; Governor's prompt formatter now renders `coalesced→#N` and is instructed not to sum metrics across coalesced rows.
+- ✅ **`dashboard_health`** filters `coalesced_id IS NULL` to count one row per actual execution. Other dashboard queries (`dashboard_timeline`, `dashboard_chains`, `dashboard_tool_usage`) verified naturally root-only because they join through `task_events` or `chat_sessions`, which subordinates don't have.
+
+*Documentation:*
+- ✅ **CLAUDE.md** describes: depth-1 invariant enforced by triggers, lock-at-terminal as emergent policy from existing pending-only guards, two semantic profiles for reading task data (`tasks_resolved` for "per-task as the agent saw it" vs. `tasks WHERE coalesced_id IS NULL` for "per-execution / per-cost").
+
+### Still outstanding
+
+*Write-side consolidation* — **deferred to R2.** The original plan called for a `coalesce` module with named helpers (`coalesce_into`, `decoalesce`, `decoalesce_all`, etc.). With the depth-1 trigger now in place and `cascade_completion` already extracted, the remaining benefit of a dedicated module is naming/locality, not correctness. Better to fold it into R2's `db_tasks.py` extraction so the helpers and the schema definitions live next to each other from day one.
+
+*Read-side consumer sweep, remaining call sites:*
+- `get_task` and `get_task_with_session` — still raw. Used in many places; some callers want raw subordinate identity (queue listing, drag-drop UI), others would benefit from resolution. Migration is opt-in per call site via the new `get_task_resolved` — no global change needed. Audit the remaining call sites case-by-case as bugs surface or as part of broader refactors.
+- Frontend `Queue.jsx` / `Tasks.jsx` task-card rendering — currently shows null metrics for subordinates because they read `task.num_turns` etc. directly. Could either render `coalesced→#N (inherits #N's metrics)` or fall back to root values via a frontend helper. Low priority — cosmetic, not a correctness bug.
+- Anything else that surfaces — the test for "does this caller need resolution?" is "would a user clicking on a subordinate get a worse experience than clicking on its root?" If yes, switch to `get_task_resolved`. If no, leave alone.
+
+*Legacy data hygiene:*
+- The local DB had 4 depth-N violations cleaned up manually. Other projects that have used the system may have similar legacy chains. A `/scripts/flatten_coalesce.py` one-shot would let users repair their own DBs; not necessary for new projects (trigger prevents new violations).
+
+**Scope of remaining work:** Small. The write-side consolidation rides with R2; the read-side sweep is opt-in per call site as needed. Most R5 risk is now fixed by the trigger making depth-1 violations impossible going forward.
 
 ---
 
