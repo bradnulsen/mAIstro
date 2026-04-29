@@ -122,8 +122,9 @@ Tasks today execute in the project's main working tree. The [task-workspace-isol
 
 Reconciliation depends on the terminal state:
 
-- **Completed** — fast-forward (or merge) the task branch into main; `result_commit` is the post-merge HEAD on main; the worktree is removed.
-- **Exhausted, failed, timed out, cancelled, interrupted** — the worktree and task branch are preserved. The detail drawer offers discard / merge-manually controls. The project's main branch is untouched.
+- **Completed** — the platform integrates the task branch into main. Fast-forward when possible, fall back to a merge commit that names the task. `result_commit` is the post-integration HEAD on main; the worktree is removed. Integration is part of the `active → completed` transition, not a follow-up to it: the `completed` event is written only after the merge succeeds.
+- **Integration conflict** — when the task branch cannot be cleanly integrated (conflicts with main, divergence the platform cannot auto-resolve), the transition target becomes `failed` rather than `completed`. The conflict is captured in the `error` column; the worktree is preserved like other non-success states. This means `failed` covers two distinct cases — agent execution error and platform-side integration failure — distinguished by the error context.
+- **Exhausted, failed (execution error), timed out, cancelled, interrupted** — the worktree and task branch are preserved. The detail drawer offers discard / merge-manually controls. The project's main branch is untouched.
 - **Rejected** — the task never executed; no workspace was created.
 
 The proposal sequences three phases: a CLI subtype-mapping hotfix (so `error_max_turns` correctly transitions to `exhausted` rather than `completed`), a stash-on-orphan interim safety net, and the full worktree migration.

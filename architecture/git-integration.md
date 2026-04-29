@@ -65,7 +65,9 @@ Tasks today execute in the project's main working tree. The [task-workspace-isol
 - `worktree_add(branch, base_commit) → path` — create a worktree at `<project>/.maistro/worktrees/task-<id>/` on a new task branch (`<job-slug>/task-<id>`) branched from the given base commit.
 - `worktree_remove(path)` — tear down a worktree, leaving the branch intact (or removing it on success when the merge is complete).
 - `worktree_list()` — enumerate active worktrees, used by the startup recovery sweep.
-- `branch_fast_forward(branch, target)` / `branch_merge_into_main(branch)` — reconcile a successful task's commits back to the project's main branch.
+- `integrate_branch_into_main(branch) → (ok, result_commit_or_error)` — reconcile a task's commits back to the project's main branch. Fast-forward when possible; fall back to a merge commit that names the task. Returns the post-integration HEAD on success or a structured conflict description on failure (the call site translates this into a `failed` terminal transition rather than `completed`).
+
+Integration is the gate from `active` to `completed` — a worker that calls `integrate_branch_into_main` and gets a conflict back transitions the task to `failed` with the conflict captured in the error context. There is no intermediate "completed-but-not-integrated" state. This is why the helper exposes integration outcome explicitly rather than raising on failure: the worker needs to choose between `completed` and `failed` based on the result.
 
 The post-commit hook (installed on the user's main checkout) continues to fire only on commits to the project's main branch. Commits on task branches do not trigger watch — that is intentional, watch fires when work lands on main.
 

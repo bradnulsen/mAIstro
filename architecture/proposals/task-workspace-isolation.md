@@ -2,9 +2,9 @@
 name: task-workspace-isolation
 description: Each task executes in a dedicated git worktree so non-success terminal states cannot orphan changes in the project's working tree
 type: proposal
-status: proposed
+status: accepted
 raised-by: Engineering
-reviewed-by: pending
+reviewed-by: Architecture; behavioral surface incorporated into DESIGN.md
 ---
 
 # Proposal: Task Workspace Isolation via Per-Task Git Worktrees
@@ -126,10 +126,13 @@ Concretely: introduce a `TaskContext` (or expand the worker's existing per-task 
 
 Phase 3 supersedes Phase 2: once worktrees are in place, the stash mechanism becomes dead code and is removed. Phase 2 is intentionally short-lived.
 
+## Resolutions
+
+- **Merge strategy on `completed`** — resolved. Fast-forward when possible, fall back to merge with a generated message that captures the task's identity. When neither is possible (conflicts, divergence the platform cannot resolve automatically), the task does not reach `completed` — it transitions to `failed` with the conflict surfaced as the error context and the workspace preserved for inspection. Completion is contingent on the work being in main, not just on the agent finishing. DESIGN.md ratifies this in the Workspace Isolation and Failed-terminal-state sections.
+
 ## Open Questions
 
 - **Default behavior on non-success terminal states**: preserve the workspace (current proposal) or auto-delete after N days? Auto-delete simplifies disk hygiene; preserve gives the operator more recovery options. Default *preserve* and let an operator-configurable retention policy come later.
-- **Merge strategy on `completed`**: fast-forward only (clean history, may fail on diverged main) or always merge (creates merge commits)? Fast-forward when possible, fall back to merge with a generated message that captures the task's identity. Surface failures (e.g., conflicts with main) as a `failed` outcome with clear UI.
 - **Worktrees inside `.maistro/`**: gitignored from the user's main checkout, but on Windows worktrees cannot share a parent path with the main repo if filesystem links matter. Concrete path: `<project>/.maistro/worktrees/task-<id>/`. Verify on Windows that `git worktree add` accepts a child of `.maistro/` even though it's gitignored — should work because gitignore only governs the user's main checkout, not git's internal mechanisms.
 - **Read-only session interrogation (P3)**: when interrogating a resolved task's session, does the agent run in the original task's worktree (preserved or recreated from the task branch) or in the main checkout? Worktree-on-the-task-branch is the consistent answer — the agent reasons about exactly the state it produced. Adds a workspace lifecycle note to that feature.
 
@@ -139,4 +142,11 @@ No migration script is required. New tasks dispatched after Phase 3 ships will u
 
 ## Architect Review
 
-Pending.
+Accepted. The three-phase sequencing is sound: each phase is independently shippable and the leverage curve is correct (Phase 1 stops the silent-success classification immediately, Phase 2 bounds the orphan window in the common case, Phase 3 is the durable structural fix that supersedes Phase 2). The R10 alignment is the right read — per-task workspace context is the same plumbing R10 demanded for in-process per-task project context, so Phase 3 absorbs that scope without committing to multi-project per-process.
+
+The behavioral surface (workspace creation at activation, reconciliation per terminal state, integration-failure → `failed`) lives in DESIGN.md. This document is the implementation tier: paths, helper signatures, schema additions, lifecycle plumbing.
+
+Two notes carried forward to implementation:
+
+- **Integration is the gate to `completed`, not a follow-up to it.** The terminal transition that records `completed` must include integration into main as part of the same atomic step (write the event only after the merge succeeds). If integration fails, the transition target is `failed` with the conflict captured in the error column. This avoids an intermediate "completed-but-not-integrated" state that is observable but inconsistent. Worker terminal handlers and `transition_task` callers need to enforce this ordering.
+- **Path-resolution boundary in the MCP server.** `mcp_server.py` distinguishes per-task git/file-write tools (resolve against the worktree) from project-context read tools (`list_files`, `read_file` of project-wide content — read from the main checkout). The boundary is "what the agent is producing" vs. "what the agent is reading about the project." Both surfaces need the per-task path env var, but they use it differently. The implementation should make this distinction explicit rather than blanket-rerooting every tool to the worktree.
