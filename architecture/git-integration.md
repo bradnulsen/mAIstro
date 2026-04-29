@@ -58,6 +58,19 @@ Git log output uses a structured format (`%H|%an|%ae|%s|%ai`) parsed into dicts 
 
 `resolve_glob_files()` resolves subscription patterns to file metadata. Uses Python's `glob.glob` with `recursive=True` for `**` support. Returns relative paths, sizes, and modification times — this data feeds into the task prompt's subscribed files section.
 
+## Worktree Management (Planned)
+
+Tasks today execute in the project's main working tree. The [task-workspace-isolation proposal](proposals/task-workspace-isolation.md) introduces per-task worktrees so an agent's edits never touch the user's main checkout. New helpers in `git.py` will manage their lifecycle:
+
+- `worktree_add(branch, base_commit) → path` — create a worktree at `<project>/.maistro/worktrees/task-<id>/` on a new task branch (`<job-slug>/task-<id>`) branched from the given base commit.
+- `worktree_remove(path)` — tear down a worktree, leaving the branch intact (or removing it on success when the merge is complete).
+- `worktree_list()` — enumerate active worktrees, used by the startup recovery sweep.
+- `branch_fast_forward(branch, target)` / `branch_merge_into_main(branch)` — reconcile a successful task's commits back to the project's main branch.
+
+The post-commit hook (installed on the user's main checkout) continues to fire only on commits to the project's main branch. Commits on task branches do not trigger watch — that is intentional, watch fires when work lands on main.
+
+Existing `run_git`-based helpers will accept an optional `cwd` so per-task git operations target the worktree path rather than the global `state.PROJECT_DIR`. The default remains the main checkout; the override is supplied by the worker for tools running in a task context.
+
 ## Relationship to Other Systems
 
 - [Trigger System](trigger-system.md) depends on the post-commit hook for watch triggers and on `changed_files_in_commit()` for pattern matching

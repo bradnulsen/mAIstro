@@ -68,6 +68,23 @@ The distinction matters: **completed is success; everything else is a form of no
 
 The difference between **exhausted** and **timed out** is the resource that ran out: turns vs. time. Both produce partial work. Both are non-success. But they have different operational responses: exhaustion suggests the task needs more turns (or the instructions are too open-ended), while timeout suggests the task needs more time (or the agent is stuck). The distinction prevents misdiagnosis.
 
+### Task Workspace Isolation
+
+Each task executes in its own filesystem workspace — a git worktree dedicated to that task. The platform creates the workspace when the task activates, the agent operates exclusively within it, and the platform reconciles its state into the project on terminal transition.
+
+The reason: tasks are atomic units of work. Without isolation, an agent's in-progress edits live in the shared project directory, where they can collide with concurrent human edits, leak into the next task's dispatch context, or strand work in the working tree if the task ends without committing. Per-task workspaces eliminate this coupling — the agent never modifies the project's main checkout directly, and orphaned changes vanish with the workspace.
+
+- **Workspace creation** — when a task transitions to `active`, the platform creates a worktree branched from the project's current main HEAD. The agent's working directory for the entire dispatch is this worktree. The user's main checkout is structurally untouchable by the agent.
+- **Agent operations within the workspace** — file reads, edits, and commits all target the worktree. Internal MCP tools (`git_commit`, `git_diff`, `git_status`, file I/O) operate on the worktree path. The project's main working tree is unaffected throughout.
+- **Reconciliation on terminal transition** — depends on the terminal state:
+  - **Completed** — the platform fast-forwards (or merges, when fast-forward is not possible) the task branch into the project's main branch. `result_commit` is the post-merge HEAD on main. The worktree is then removed.
+  - **Exhausted, failed, timed out, cancelled, interrupted** — the worktree and task branch are preserved. The detail drawer surfaces the branch name, commit count, and file change summary, with affordances to discard the workspace or merge it manually if the partial work is salvageable. The project's main branch is untouched.
+  - **Rejected** — the task never executed; no workspace was created.
+- **Concurrent human edits are unaffected** — the user's main checkout is a separate filesystem location. The agent never sees or modifies it. Watch triggers fire on commits to the project's main branch (whether from the user, a successful task's merge, or external pushes); commits on task branches do not trigger watch.
+- **Startup recovery** — on backend startup, any worktree whose task is in a terminal state and was not cleanly handled before shutdown is swept and recorded for review, never blindly deleted. This complements the stale-task sweep for `active` tasks.
+
+The workspace is the agent's sandbox; the main checkout is the user's. Reconciliation between them happens through git, on the platform's terms, at well-defined transitions.
+
 ### Task Ordering
 
 - The queued column maintains a sort order that determines execution priority. The worker pulls the highest-priority queued task (lowest order position). The user controls execution order by reordering queued tasks via drag-and-drop.
@@ -573,6 +590,7 @@ Tool patterns are secondary to health and timing — they support investigation,
 ### Safety
 
 - **Active task locks project state**: while a task is running, the platform keeps the project directory unchanged. This prevents state corruption from changing the working directory mid-execution.
+- **Task workspace is isolated**: each task operates in a dedicated git worktree, not the project's main checkout. The agent's working directory for the duration of a dispatch is the worktree; the user's main checkout is structurally untouchable. Orphaned changes from non-success terminal states never pollute the project's working tree — they are confined to the task's workspace and surfaced with explicit discard / merge controls. See [Task Workspace Isolation](#task-workspace-isolation).
 - **Stale sweep on startup**: any task marked as in-flight when the process starts is marked interrupted. This eliminates zombie tasks.
 - **Approval gates apply to all automated triggers**: manual dispatch (explicit human intent) bypasses the approval check; all other trigger types — including `agent` triggers — respect `require_approval`.
 - **Timeouts are enforced**: every task has a configurable timeout (inherited from its job). The watchdog runs unconditionally. Jobs have bounded execution time.

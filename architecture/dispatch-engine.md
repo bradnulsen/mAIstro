@@ -116,6 +116,18 @@ Newly created tasks are appended to the end of their target column (pending by d
 7. **Completion**: records `completed_at` and `result_commit`; triggers dependent jobs if successful
 8. **Cleanup**: cancels watchdog, broadcasts `_done` to subscribers, clears active task state
 
+### Workspace Lifecycle (Planned)
+
+Tasks today execute in the project's main working tree. The [task-workspace-isolation proposal](proposals/task-workspace-isolation.md) introduces per-task git worktrees: at activation, the platform creates a worktree on a task branch and the CLI subprocess runs with `cwd` set to the worktree path; at terminal transition, the platform reconciles the workspace with the project's main branch.
+
+Reconciliation depends on the terminal state:
+
+- **Completed** — fast-forward (or merge) the task branch into main; `result_commit` is the post-merge HEAD on main; the worktree is removed.
+- **Exhausted, failed, timed out, cancelled, interrupted** — the worktree and task branch are preserved. The detail drawer offers discard / merge-manually controls. The project's main branch is untouched.
+- **Rejected** — the task never executed; no workspace was created.
+
+The proposal sequences three phases: a CLI subtype-mapping hotfix (so `error_max_turns` correctly transitions to `exhausted` rather than `completed`), a stash-on-orphan interim safety net, and the full worktree migration.
+
 ### Cancellation
 
 Cancellation works through an `asyncio.Event` shared with the CLI bridge. Setting the event causes the CLI subprocess to be terminated (SIGTERM, then SIGKILL after 5s grace). Both user-initiated cancellation and timeout use this same mechanism.
