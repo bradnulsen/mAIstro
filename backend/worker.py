@@ -27,13 +27,25 @@ def get_active_task_id() -> int | None:
     return _active_task_id
 
 
-async def _check_governor_trigger():
-    """Increment Governor counter and trigger a run if threshold reached."""
-    from backend import governor
-    count = await db.increment_governor_counter()
-    if count >= 10:
-        await db.reset_governor_counter()
-        governor.spawn(governor.run_governor("auto", task_count=count))
+async def _check_governor_trigger(task_id: int):
+    """Increment Governor counter and trigger a run if threshold reached.
+
+    Called after any executed terminal transition (completed, exhausted,
+    failed, timed_out) so the Governor sees a representative sample of
+    activity — including patterns of failure. Cancelled tasks are excluded
+    (user action, not system signal).
+
+    Failures are logged and swallowed so a counter glitch never breaks
+    terminal handling.
+    """
+    try:
+        from backend import governor
+        count = await db.increment_governor_counter()
+        if count >= 10:
+            await db.reset_governor_counter()
+            governor.spawn(governor.run_governor("auto", task_count=count))
+    except Exception:
+        log.warning("[worker] Governor counter check failed for task #%d", task_id)
 
 
 # ── Public API ──────────────────────────────────────────────
@@ -290,6 +302,7 @@ async def _process_task(task: dict):
             await db.cascade_completion(task_id, "timed_out",
                                         result_commit=head, error="timed out")
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
+            await _check_governor_trigger(task_id)
         elif _cancelled:
             await db.transition_task(task_id, "cancelled",
                                      result_commit=head, error="cancelled",
@@ -309,6 +322,7 @@ async def _process_task(task: dict):
                                         result_commit=head, error=err)
             log.info("[worker] Task #%d exhausted (%s/%s turns, commit=%s)",
                      task_id, turns_used, max_turns, head[:8])
+            await _check_governor_trigger(task_id)
         else:
             await db.transition_task(task_id, "completed",
                                      result_commit=head,
@@ -322,11 +336,7 @@ async def _process_task(task: dict):
                                     start_commit=start_commit,
                                     result_commit=head)
 
-            # Governor counter: check if it's time for a Governor run
-            try:
-                await _check_governor_trigger()
-            except Exception:
-                log.warning("[worker] Governor counter check failed for task #%d", task_id)
+            await _check_governor_trigger(task_id)
 
     except Exception as e:
         log.exception("[worker] Task #%d failed: %s", task_id, e)
@@ -343,6 +353,7 @@ async def _process_task(task: dict):
             await db.cascade_completion(task_id, "failed", error=str(e))
         except Exception as cascade_err:
             log.warning("[worker] Task #%d failed to cascade failure to subordinates: %s", task_id, cascade_err)
+        await _check_governor_trigger(task_id)
     finally:
         # Last-resort: if status is still 'active' (both try and except
         # crashed), force it to failed so tasks can never get stuck.

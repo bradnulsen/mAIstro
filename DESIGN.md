@@ -216,9 +216,11 @@ The Governor replaces the standalone chat interface. Interactive conversation wi
 
 #### Trigger
 
-The Governor runs automatically after every 10 completed tasks (counted project-wide, not per-job). The counter resets after each Governor invocation. The user can also trigger the Governor manually from the Governor view.
+The Governor runs automatically after every 10 executed terminal tasks (counted project-wide, not per-job). "Executed" means the task actually consumed agent turns: `completed`, `exhausted`, `failed`, and `timed_out` all count. `cancelled` and `rejected` are excluded — those reflect user intent, not system behavior, and contain no signal about agent or platform health. The counter resets after each Governor invocation. The user can also trigger the Governor manually from the Governor view.
 
-The trigger is completion-based, not time-based. A project with no activity produces no Governor runs. A project with heavy activity gets proportionally more oversight. The cadence is fixed — the user does not configure the trigger interval. The Governor's personality and behavior are not user-configurable.
+Counting failures is deliberate. A job that consistently fails or exhausts its turn limit is exactly what the Governor should be reviewing. Counting only successes would mean a broken job that never completes also never triggers a review — the opposite of what proactive oversight requires. A project running 10 max-turns exhaustions in a row should produce a Governor run that flags the pattern, not silence.
+
+The trigger is execution-based, not time-based. A project with no activity produces no Governor runs. A project with heavy activity gets proportionally more oversight. The cadence is fixed — the user does not configure the trigger interval. The Governor's personality and behavior are not user-configurable.
 
 #### Findings
 

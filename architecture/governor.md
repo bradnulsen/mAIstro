@@ -14,7 +14,7 @@ The Governor replaces the standalone chat interface that earlier versions of the
 
 Two trigger sources, both routed through `governor.run_governor(trigger, task_count)`:
 
-- **Auto** — the worker increments a `governor_task_counter` (config key) on every successful task completion via `_check_governor_trigger`. When the counter reaches 10, the worker resets it to 0 and spawns a Governor run with `trigger="auto"`. The cadence is fixed; the user does not configure it.
+- **Auto** — the worker increments a `governor_task_counter` (config key) on every executed terminal transition (`completed`, `exhausted`, `failed`, `timed_out`) via `_check_governor_trigger`. `cancelled` is skipped because it reflects user intent rather than system behavior; `rejected` never reaches the worker. When the counter reaches 10, the worker resets it to 0 and spawns a Governor run with `trigger="auto"`. Counting failures alongside successes is intentional — a job consistently exhausting turns or failing is exactly what the Governor should review, and counting only successes would let broken jobs evade oversight indefinitely. The cadence is fixed; the user does not configure it.
 - **Manual** — `POST /api/governor/trigger` calls `run_governor("manual")` directly. Manual runs do not affect the counter.
 
 A third trigger source — `trigger="execution"` — is used by `execute_suggestion` when the operator approves a suggestion. Execution runs are not user-initiated analyses; they are focused, write-enabled passes that apply a single approved change.
