@@ -48,15 +48,14 @@ Structured tools for git interaction with enforced conventions:
 
 These replace unmediated shell-based git access. The key difference is enforcement: an agent using `git_commit` through the MCP server cannot bypass authorship conventions or commit message formatting that the platform requires.
 
-### Git Branch Operations
+### Branch Operations Are Not Exposed
 
-Structured tools for branch management:
+Per-task isolation pins the agent to its own task branch (`<job-slug>/task-<id>`) inside its worktree. Branch creation, switching, and merging are intentionally **not** in the agent's tool surface:
 
-- **`git_branch_create`** — creates a new branch from a specified base. Enforces naming conventions (e.g. `<slug>/<description>`) to prevent namespace collisions between jobs.
-- **`git_branch_switch`** — switches the working directory to a named branch. The platform tracks which branch a task operates on for audit purposes.
-- **`git_branch_merge`** — merges a source branch into the current branch. Merge conflicts surface as structured tool output rather than silent failures.
+- `git_branch_switch` would let the agent move the worktree off the task branch. The worker's later integration step merges that specific branch into main; commits the agent makes on a different branch are orphaned from integration.
+- `git_branch_create` and `git_branch_merge` clutter main's branch namespace from inside the worktree and have no current workflow inside an isolated workspace.
 
-Branch operations are logged identically to other MCP tool calls — the platform can reconstruct which branches a task created, switched to, and merged.
+The previous implementations remain in `backend/mcp_server.py` as commented-out scaffolding and can be reintroduced selectively if a workflow emerges that needs them — the prerequisite is a coherent integration story for branch switching inside a worktree.
 
 ### Read-Only Project Context
 
@@ -95,7 +94,7 @@ The platform makes the full tool inventory visible and selectable so users confi
 Three tool sources, each with a discovery mechanism:
 
 - **Built-in CLI tools** — the platform maintains a canonical set of CLI tool names (`CLI_NATIVE_TOOLS` in `cli.py`). These are the tools that `allowed_tools` selects from. The configuration surface presents them as a selectable inventory — the user picks from what exists rather than typing free-text names.
-- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `git_branch_create`, `git_branch_switch`, `git_branch_merge`, `list_files`, `read_file`, `list_jobs`, `dispatch_task`, `get_queue_status`). The internal server is always connected, but individual internal tools are subject to per-job selection via `allowed_internal_tools`. When no selection is made, all internal tools are available. The configuration surface presents these as a selectable inventory.
+- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_jobs`, `dispatch_task`, `get_queue_status`). The internal server is always connected, but individual internal tools are subject to per-job selection via `allowed_internal_tools`. When no selection is made, all internal tools are available. The configuration surface presents these as a selectable inventory.
 - **External MCP server tools** — when a registered external server is connected, the platform can discover its tool list via the MCP protocol. Discovered tools become visible alongside built-in tools in the per-job configuration surface.
 
 The configuration surfaces for `allowed_tools` and `mcp_servers` present selectable options drawn from these inventories. Users select from what exists; they do not enter arbitrary text that may not correspond to real tools.
@@ -110,7 +109,7 @@ During dispatch, the agent's available tools are the union of three independentl
 
 Each dimension is independently configurable, and the default for each is "everything available." The user can see this composed surface when configuring a job — what the agent will actually have access to.
 
-The `allowed_internal_tools` property enables fine-grained control over internal capabilities. A read-only job can be restricted to `list_files`, `read_file`, `git_log`, `git_diff` — excluding `git_commit`, branch operations, and dispatch tools. An orchestrator job might get `dispatch_task` and `get_queue_status` while a leaf job does not.
+The `allowed_internal_tools` property enables fine-grained control over internal capabilities. A read-only job can be restricted to `list_files`, `read_file`, `git_log`, `git_diff` — excluding `git_commit` and dispatch tools. An orchestrator job might get `dispatch_task` and `get_queue_status` while a leaf job does not.
 
 ## External MCP Servers
 

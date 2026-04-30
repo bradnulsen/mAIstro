@@ -2,12 +2,14 @@
 name: task-workspace-isolation
 description: Each task executes in a dedicated git worktree so non-success terminal states cannot orphan changes in the project's working tree
 type: proposal
-status: accepted
+status: implemented — all three phases shipped (Phase 1 in 1534f31, Phase 2 in ca3ac01, Phase 3 in d22514d, integration hardening + operator-wins in 0475064)
 raised-by: Engineering
 reviewed-by: Architecture; behavioral surface incorporated into DESIGN.md
 ---
 
 # Proposal: Task Workspace Isolation via Per-Task Git Worktrees
+
+**Status**: implemented. Per-task worktrees ship at activation, integrate-or-fail gates the `completed` transition, the operator-wins conflict policy and the manual integrate/discard backend operations are live, and the workspace banner is wired into the Queue detail drawer. The shipped lifecycle and helper surface are documented in [git-integration.md](../../git-integration.md#worktree-management) and [dispatch-engine.md](../../dispatch-engine.md#workspace-lifecycle); the original three-phase proposal text is preserved below for historical reference.
 
 ## Problem
 

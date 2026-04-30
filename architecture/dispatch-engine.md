@@ -12,29 +12,9 @@ This invariant decouples trigger sources from execution. A trigger's responsibil
 
 ## Task Record
 
-Each `tasks` row tracks:
+Task data is split across three tables — `tasks` (atomic identity + queue placement + materialized status), `task_executions` (per-execution outcome data, one row per task that ran), and `task_events` (immutable lifecycle log). See [Storage — Task Record](storage.md#task-record) for the full schema and the rationale for the split.
 
-| Column | Purpose |
-|--------|---------|
-| `job_id` | Which job this task belongs to |
-| `status` | Authoritative task state — see [Task Status](#task-status) below |
-| `trigger` | Primary trigger type (manual, commit, schedule, dependency, resume, retry) |
-| `trigger_detail` | Trigger-specific reference (commit hash, cron expression, upstream job ID) |
-| `context` | Pre-formatted context text built at the enqueue site |
-| `session_id` | Linked chat session (set when execution starts) |
-| `resume_session_id` | CLI session ID for resume tasks |
-| `approval` | Gate status: `null` (no gate), `pending`, `approved`, `rejected` |
-| `start_commit` | HEAD hash when execution began |
-| `stop_reason` | Why the agent stopped (end_turn, max_turns, error, etc.) |
-| `num_turns` | Agent turns consumed during execution |
-| `cost_usd` | Estimated API cost |
-| `created_at` | When the task was enqueued |
-| `queued_at` | When the task was promoted to queued state (NULL = still pending) |
-| `started_at` | When the worker began processing |
-| `completed_at` | When execution finished (success, failure, or cancellation) |
-| `result_commit` | HEAD hash after execution completed |
-| `error` | Error detail for non-success terminal states (free-form text for `failed`, sentinel strings for others) |
-| `coalesced_id` | Links subordinate tasks to a root task for merge; NULL = standalone/root |
+The dispatch engine reads and writes through `transition_task` / `update_task` helpers in `db_tasks`, which route fields between `tasks` and `task_executions` automatically. The worker's queued-task query and coalescing logic both filter on the materialized `tasks.status`. Outcome data (start_commit, result_commit, num_turns, cost_usd, error, worktree_path, task_branch, ...) is written to `task_executions` at activation and updated at terminal — readers that need outcome-with-coalescing-fallthrough use the `tasks_resolved` view.
 
 ### Task Status
 
@@ -116,18 +96,25 @@ Newly created tasks are appended to the end of their target column (pending by d
 7. **Completion**: records `completed_at` and `result_commit`; triggers dependent jobs if successful
 8. **Cleanup**: cancels watchdog, broadcasts `_done` to subscribers, clears active task state
 
-### Workspace Lifecycle (Planned)
+### Workspace Lifecycle
 
-Tasks today execute in the project's main working tree. The [task-workspace-isolation proposal](proposals/task-workspace-isolation.md) introduces per-task git worktrees: at activation, the platform creates a worktree on a task branch and the CLI subprocess runs with `cwd` set to the worktree path; at terminal transition, the platform reconciles the workspace with the project's main branch.
+Each task executes in its own git worktree at `<project>/.maistro/worktrees/task-<id>/` on the task branch `<job-slug>/task-<id>`. The CLI subprocess runs with `cwd` set to the worktree path; the internal MCP server's write-side tools resolve against `MAISTRO_WORKSPACE_DIR` (set to the same path). The operator's main checkout is structurally untouchable by agents.
 
-Reconciliation depends on the terminal state:
+Workspace creation happens at activation as part of the `queued → active` transition; reconciliation happens as part of the terminal transition. Both ends are atomic with the lifecycle event — there is no observable intermediate "active without a workspace" or "completed without integration."
 
-- **Completed** — the platform integrates the task branch into main. Fast-forward when possible, fall back to a merge commit that names the task. `result_commit` is the post-integration HEAD on main; the worktree is removed. Integration is part of the `active → completed` transition, not a follow-up to it: the `completed` event is written only after the merge succeeds.
-- **Integration conflict** — when the task branch cannot be cleanly integrated (conflicts with main, divergence the platform cannot auto-resolve), the transition target becomes `failed` rather than `completed`. The conflict is captured in the `error` column; the worktree is preserved like other non-success states. This means `failed` covers two distinct cases — agent execution error and platform-side integration failure — distinguished by the error context.
-- **Exhausted, failed (execution error), timed out, cancelled, interrupted** — the worktree and task branch are preserved. The detail drawer offers discard / merge-manually controls. The project's main branch is untouched.
-- **Rejected** — the task never executed; no workspace was created.
+| Terminal | Reconciliation |
+|---|---|
+| `completed` | Worker calls `git.integrate_branch(...)`: stash the operator's dirty working tree if any → merge the task branch into PROJECT_DIR's HEAD (FF or `--no-ff` with generated message) → re-apply the operator's stash. `result_commit` is the post-merge HEAD; worktree and branch are removed. Integration is the gate to `completed` — if any step conflicts, the transition target is `failed` instead, with main rolled back to its pre-merge HEAD and the operator's stash restored exactly as it was. |
+| `exhausted`, `failed`, `timed_out`, `cancelled`, `interrupted` | Worktree and task branch are preserved. The Queue detail drawer's `WorkspaceBanner` exposes the path/branch and offers two backend operations: `POST /api/tasks/{id}/workspace/integrate` (re-runs the same stash/merge/unstash flow on demand — useful when the original auto-integration failed because of a transient state the operator has since resolved) and `POST /api/tasks/{id}/workspace/discard` (force-removes worktree+branch). Both validate the task is in a non-success terminal state with a populated `worktree_path` before acting. |
+| `rejected` | The task never executed; no workspace was created. |
 
-The proposal sequences three phases: a CLI subtype-mapping hotfix (so `error_max_turns` correctly transitions to `exhausted` rather than `completed`), a stash-on-orphan interim safety net, and the full worktree migration.
+See [Git Integration — Worktree Management](git-integration.md#worktree-management) for the helper surface and the leak-mode catalog. The proposal that introduced this lifecycle is archived at [task-workspace-isolation](proposals/archive/task-workspace-isolation.md).
+
+#### Resume reuses the original worktree
+
+A `resume` task does **not** create a new worktree. Claude CLI stores resumable session state per-cwd at `~/.claude/projects/<hash-of-cwd>/`; running `--resume <session>` from a fresh worktree directory exits immediately because the per-cwd session storage is empty. The worker therefore reuses the original task's `worktree_path` and `task_branch` for resume — the agent picks up where it left off in the same directory, on the same branch, with its prior commits already present.
+
+The reuse is sound because resume targets are required to be in a non-success terminal state with the worktree still on disk, and that subtree is structurally immutable (any coalesce-mutating op requires pre-execution participants — see [Storage — Coalescing Locks](storage.md#coalescing-locks-application-level)). The same precondition is enforced at three layers — the frontend's Resume button gate, the resume route's validation, and a defensive worker check at activation — so no resume task is enqueued whose original worktree has been integrated or discarded.
 
 ### Cancellation
 
@@ -266,7 +253,7 @@ The coalesced_id approach has structural advantages:
 ## Retry, Resume, and Reply
 
 - **Retry**: creates a new task record with `retry` trigger. The original task is coalesced under the new one (preserving audit trail). The new task enters the queue normally — retry does not bypass the two-stage queue.
-- **Resume**: creates a new task record with `resume_session_id` set to the original CLI session ID. The worker passes this to the CLI's `--resume` flag. If the original chat session still exists, it's reused. The original task is coalesced under the new one via inverted coalescing (see [Trigger System — Inverted Coalescing](trigger-system.md#inverted-coalescing-reply-and-resume)).
+- **Resume**: creates a new task record with `resume_session_id` set to the original CLI session ID. The worker passes this to the CLI's `--resume` flag and reuses the original task's `worktree_path` / `task_branch` (CLI session storage is keyed by cwd, so the resume must run in the same directory — see [Workspace Lifecycle](#workspace-lifecycle)). The original task is coalesced under the new one via inverted coalescing (see [Trigger System — Inverted Coalescing](trigger-system.md#inverted-coalescing-reply-and-resume)).
 - **Reply**: creates a new task record with `reply` trigger and the user's follow-up context. The original task's commit range is included in the trigger context. The original task is coalesced under the new one via inverted coalescing. Unlike resume, reply does not reuse the CLI session — it starts a fresh session with the reply context.
 
 All three create new task records rather than mutating the original. The original becomes a subordinate of the new task, preserving full provenance. In reply chains (A → B → C), the latest task is always the root and all predecessors are flat subordinates — the depth-1 invariant is maintained by `_flatten_coalesce`.
