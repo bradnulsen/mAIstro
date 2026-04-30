@@ -67,7 +67,14 @@ Raw NDJSON lines are parsed and translated through `_translate_event()`. Every v
 | `tool_use` | Tool invocation start | `content_block_start` with tool_use block, or `assistant` with tool_use content |
 | `assistant_complete` | Full assistant turn text | `assistant` message type — authoritative, used for DB storage |
 | `session_id` | CLI session identifier | `result`, `system`, or `init` events |
+| `result_meta` | Execution metadata (`stop_reason`, `num_turns`, `cost_usd`) | `result` events — emitted whether or not `is_error` is true |
 | `error` | Error message | `result` with `is_error=true`, process exit errors |
+
+### Result Events: Dual Emission on Error
+
+A successful `result` event yields a single `result_meta` carrying the CLI's reported `stop_reason`. An error result yields **both** an `error` event and a `result_meta` — the metadata is not discarded just because the run ended in error. `stop_reason` on the `result_meta` is derived from the CLI's `subtype`: `error_max_turns` maps to `max_turns`, and any other subtype passes through verbatim. `num_turns` and `cost_usd` are surfaced either way.
+
+The dual emission exists because the worker's terminal-state classification depends on it. The worker routes a task to `exhausted` when `stop_reason == "max_turns"` and to `failed` otherwise. If the bridge dropped the metadata on error, max-turns exhaustion would arrive at the worker indistinguishable from a generic error and be misclassified — silently as `completed` in earlier versions, or as `failed` after the result-meta path was added but before the error path emitted it. The mapping table is therefore part of the bridge's contract, not an implementation detail.
 
 ### Dual Text Paths
 

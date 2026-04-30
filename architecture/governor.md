@@ -143,15 +143,15 @@ The view does not provide a text input. The operator does not converse with the 
 
 - **Meta-scoped**: write tools are restricted to job config and queue settings. Cannot modify project files, dispatch tasks, or commit code.
 - **No persistent session**: each run is fresh context. Continuity is via prior-findings injection, not session resume.
-- **Lock-serialized**: at most one run in flight. Auto triggers that arrive during a running execution are dropped (the counter does not back-pressure — the next 10 completions trigger the next run).
+- **Lock-serialized**: at most one run in flight. Auto triggers that arrive during a running execution are dropped (the counter does not back-pressure — the next 10 executed terminal transitions trigger the next run).
 - **Independent of the worker**: Governor runs do not block, queue behind, or interact with task dispatch. The two systems share the database but not the execution path.
-- **Fixed cadence**: 10 completed tasks. Not user-configurable.
+- **Fixed cadence**: 10 executed terminal tasks (`completed`, `exhausted`, `failed`, `timed_out`; `cancelled` and `rejected` excluded). Not user-configurable.
 - **Coalescing-aware**: recent-tasks reads through `tasks_resolved`; the system prompt explicitly warns against summing metrics across coalesced subordinates.
 
 ## Relationship to Other Systems
 
 - [Storage](storage.md) — `governor_runs` and `governor_findings` tables; the `governor_task_counter` config key
-- [Dispatch Engine](dispatch-engine.md) — the worker increments the auto-trigger counter on successful completion
+- [Dispatch Engine](dispatch-engine.md) — the worker increments the auto-trigger counter on every executed terminal transition (success and non-cancellation failures alike)
 - [CLI Bridge](cli-bridge.md) — Governor runs invoke the same CLI bridge as job dispatches, with a separate MCP config
 - [Tool Mediation](tool-mediation.md) — the Governor MCP server is structurally similar to the internal MCP server but scoped to meta-operations
 - [Frontend](frontend.md) — the Governor view replaces the prior Chat surface
