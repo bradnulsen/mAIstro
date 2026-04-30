@@ -154,7 +154,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     error TEXT,
     queued_at DATETIME,
     sort_order INTEGER,
-    coalesced_id INTEGER REFERENCES tasks(id)
+    coalesced_id INTEGER REFERENCES tasks(id),
+    orphan_stash_ref TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -255,6 +256,7 @@ SELECT
     COALESCE(t.started_at, r.started_at) AS started_at,
     COALESCE(t.completed_at, r.completed_at) AS completed_at,
     COALESCE(t.error, r.error) AS error,
+    COALESCE(t.orphan_stash_ref, r.orphan_stash_ref) AS orphan_stash_ref,
     -- Markers so consumers can distinguish a real run from a fall-through.
     CASE WHEN t.coalesced_id IS NOT NULL THEN 1 ELSE 0 END AS is_subordinate,
     COALESCE(t.coalesced_id, t.id) AS effective_root_id

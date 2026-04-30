@@ -6,6 +6,7 @@ import {
   streamTask, approveTask, rejectTask,
   reorderTasks, mergeTasks, splitTask, uncoalesceTask, getSubordinates,
   transferTask, resumeTask, replyTask,
+  getOrphanStash, restoreOrphanStash, discardOrphanStash,
 } from '../api'
 import {
   formatDate, formatDuration, formatDurationSecs, TRIGGER_ICONS, mdBreaks,
@@ -940,6 +941,10 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
         )}
       </div>
 
+      {detail.orphan_stash_ref && (
+        <OrphanStashBanner taskId={item.id} sha={detail.orphan_stash_ref} onChange={onUpdate} />
+      )}
+
       {/* Row 2: Triggers — full width */}
       <div className="detail-section">
         <label>Triggers{allTriggers.length > 1 ? ` (${allTriggers.length})` : ''}</label>
@@ -1100,5 +1105,79 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
         </div>
       )}
     </>
+  )
+}
+
+function OrphanStashBanner({ taskId, sha, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [diff, setDiff] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+
+  const loadDiff = async () => {
+    setLoading(true); setError('')
+    try {
+      const data = await getOrphanStash(taskId)
+      setDiff(data.diff || '')
+    } catch (e) { setError(e.message) }
+    finally { setLoading(false) }
+  }
+
+  const toggle = () => {
+    if (!open && diff === null) loadDiff()
+    setOpen(!open)
+  }
+
+  const handleRestore = async () => {
+    setError('')
+    try {
+      await restoreOrphanStash(taskId)
+      if (onChange) await onChange()
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleDiscard = async () => {
+    setError('')
+    try {
+      await discardOrphanStash(taskId)
+      if (onChange) await onChange()
+    } catch (e) { setError(e.message); setConfirmDiscard(false) }
+  }
+
+  return (
+    <div className="detail-section orphan-stash-banner">
+      <label>Orphan Changes Stashed</label>
+      <div className="detail-meta warning-text">
+        Agent left uncommitted edits when it exited. They were stashed (<code>{sha.slice(0, 8)}</code>) so the next task wouldn't inherit them.
+      </div>
+      <div className="action-row compact">
+        <button className="small" onClick={toggle}>{open ? 'Hide diff' : 'View diff'}</button>
+        <button className="small primary" onClick={handleRestore}>Restore to working tree</button>
+        {confirmDiscard ? (
+          <>
+            <span className="confirm-text">Drop the stash?</span>
+            <button className="danger small" onClick={handleDiscard}>Confirm</button>
+            <button className="small" onClick={() => setConfirmDiscard(false)}>No</button>
+          </>
+        ) : (
+          <button className="danger small" onClick={() => setConfirmDiscard(true)}>Discard</button>
+        )}
+        {error && <span className="error-text">{error}</span>}
+      </div>
+      {open && (
+        <pre className="diff-view">
+          {loading ? 'Loading…' : (diff
+            ? diff.split('\n').map((line, i) => (
+                <div key={i} className={
+                  line.startsWith('+') ? 'diff-add' :
+                  line.startsWith('-') ? 'diff-del' :
+                  line.startsWith('@@') ? 'diff-hunk' : ''
+                }>{line}</div>
+              ))
+            : '(empty)')}
+        </pre>
+      )}
+    </div>
   )
 }

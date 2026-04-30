@@ -27,6 +27,33 @@ def get_active_task_id() -> int | None:
     return _active_task_id
 
 
+async def _maybe_stash_orphan(task_id: int, start_commit: str | None,
+                              result_commit: str | None, terminal: str) -> str | None:
+    """Stash agent-orphaned working-tree changes on a non-success terminal.
+
+    Phase 2 of task workspace isolation: when a task ends without committing
+    (start == result) but left a dirty tree, capture those changes into a
+    labeled stash so the next task doesn't inherit them and the operator
+    has a recoverable handle. Phase 3 (per-task worktrees) supersedes this.
+
+    Caveat: a dirty tree at terminal time can also contain the operator's
+    in-progress edits made concurrently. We sweep everything dirty rather
+    than try to attribute — the stash is recoverable and the alternative
+    (silently leaking agent work into the next task's context) is worse.
+    """
+    if not start_commit or not result_commit or start_commit != result_commit:
+        return None
+    if not git.is_dirty(state.PROJECT_DIR):
+        return None
+    stash_ref = git.stash_push_orphan(
+        state.PROJECT_DIR, f"task-{task_id} orphan @ {terminal}"
+    )
+    if stash_ref:
+        log.warning("[worker] Task #%d stashed orphan changes (ref=%s, terminal=%s)",
+                    task_id, stash_ref[:8], terminal)
+    return stash_ref
+
+
 async def _check_governor_trigger(task_id: int):
     """Increment Governor counter and trigger a run if threshold reached.
 
@@ -296,17 +323,21 @@ async def _process_task(task: dict):
             meta_fields["cost_usd"] = _result_meta["cost_usd"]
 
         if _timed_out:
+            stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "timed_out")
+            extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
             await db.transition_task(task_id, "timed_out",
                                      result_commit=head, error="timed out",
-                                     **meta_fields)
+                                     **meta_fields, **extra)
             await db.cascade_completion(task_id, "timed_out",
                                         result_commit=head, error="timed out")
             log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
             await _check_governor_trigger(task_id)
         elif _cancelled:
+            stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "cancelled")
+            extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
             await db.transition_task(task_id, "cancelled",
                                      result_commit=head, error="cancelled",
-                                     **meta_fields)
+                                     **meta_fields, **extra)
             await db.cascade_completion(task_id, "cancelled",
                                         result_commit=head, error="cancelled")
             log.info("[worker] Task #%d cancelled (dependents skipped)", task_id)
@@ -315,9 +346,11 @@ async def _process_task(task: dict):
             max_turns = job["properties"].get("max_turns", 50)
             turns_used = meta_fields.get("num_turns", "?")
             err = f"hit turn limit ({turns_used}/{max_turns})"
+            stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "exhausted")
+            extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
             await db.transition_task(task_id, "exhausted",
                                      result_commit=head, error=err,
-                                     **meta_fields)
+                                     **meta_fields, **extra)
             await db.cascade_completion(task_id, "exhausted",
                                         result_commit=head, error=err)
             log.info("[worker] Task #%d exhausted (%s/%s turns, commit=%s)",
@@ -348,7 +381,10 @@ async def _process_task(task: dict):
             await db.add_chat_message(session_id, "system", f"Error: {e}")
         except Exception as write_err:
             log.warning("[worker] Task #%d failed to write error response: %s", task_id, write_err)
-        await db.transition_task(task_id, "failed", error=str(e))
+        head = git.head_hash(state.PROJECT_DIR)
+        stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "failed")
+        extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
+        await db.transition_task(task_id, "failed", error=str(e), **extra)
         try:
             await db.cascade_completion(task_id, "failed", error=str(e))
         except Exception as cascade_err:

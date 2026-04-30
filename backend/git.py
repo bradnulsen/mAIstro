@@ -203,6 +203,70 @@ def status(cwd: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+def is_dirty(cwd: str) -> bool:
+    """Return True if the working tree has uncommitted or untracked changes."""
+    return bool(status(cwd).strip())
+
+
+# ── Stash operations (orphan-changes safety net) ───────────
+
+def stash_push_orphan(cwd: str, message: str) -> str | None:
+    """Stash all working-tree changes (including untracked) and return the stash commit SHA.
+
+    The SHA is captured immediately after the push so subsequent stashes
+    don't shift our reference (`stash@{N}` indices change as new entries
+    are pushed; the commit SHA is stable). Returns None on failure or if
+    nothing was stashed.
+    """
+    push = run_git("stash", "push", "-u", "-m", message, cwd=cwd)
+    if push.returncode != 0:
+        return None
+    if "No local changes to save" in push.stdout:
+        return None
+    sha = run_git("rev-parse", "stash@{0}", cwd=cwd)
+    if sha.returncode != 0:
+        return None
+    return sha.stdout.strip() or None
+
+
+def _find_stash_index(cwd: str, sha: str) -> str | None:
+    """Locate a stash entry's current `stash@{N}` ref by its commit SHA."""
+    listing = run_git("stash", "list", "--format=%H %gd", cwd=cwd)
+    if listing.returncode != 0:
+        return None
+    for line in listing.stdout.splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2 and parts[0] == sha:
+            return parts[1]
+    return None
+
+
+def stash_show(cwd: str, sha: str) -> str:
+    """Return the patch for a stashed commit (works whether or not it's still in `stash list`)."""
+    result = run_git("show", sha, cwd=cwd)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def stash_apply(cwd: str, sha: str) -> bool:
+    """Re-apply a stash to the working tree. Leaves the stash entry intact."""
+    result = run_git("stash", "apply", sha, cwd=cwd)
+    return result.returncode == 0
+
+
+def stash_drop(cwd: str, sha: str) -> bool:
+    """Remove a stash entry from `stash list` by its commit SHA.
+
+    Returns True if dropped, False if it could not be located (already
+    pruned, expired from reflog, etc.). The underlying commit object may
+    still be recoverable via `git fsck --lost-found` until gc runs.
+    """
+    ref = _find_stash_index(cwd, sha)
+    if not ref:
+        return False
+    result = run_git("stash", "drop", ref, cwd=cwd)
+    return result.returncode == 0
+
+
 def changed_files_in_commit(cwd: str, commit_hash: str) -> list[str]:
     """Get list of files changed in a commit."""
     result = run_git("diff-tree", "--no-commit-id", "--name-only", "-r", commit_hash, cwd=cwd)

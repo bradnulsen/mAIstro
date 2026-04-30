@@ -223,6 +223,62 @@ async def get_task_diff(task_id: int):
     return git.diff_range(project_dir, start, end)
 
 
+@router.get("/api/tasks/{task_id}/orphan-stash")
+async def get_orphan_stash(task_id: int):
+    """Show the diff for a task's stashed orphan changes (Phase 2 safety net)."""
+    project_dir = require_project()
+    task = await db.get_task_resolved(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    sha = task.get("orphan_stash_ref")
+    if not sha:
+        return {"diff": None, "ref": None}
+    return {"diff": git.stash_show(project_dir, sha), "ref": sha}
+
+
+@router.post("/api/tasks/{task_id}/orphan-stash/restore")
+async def restore_orphan_stash(task_id: int):
+    """Re-apply the stashed orphan changes to the working tree.
+
+    The stash entry stays in `git stash list` after apply — operator can
+    drop it manually once they've integrated the changes. The DB column is
+    cleared so the banner stops showing.
+    """
+    project_dir = require_project()
+    task = await db.get_task_resolved(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    sha = task.get("orphan_stash_ref")
+    if not sha:
+        raise HTTPException(404, "No orphan stash for this task")
+    if not git.stash_apply(project_dir, sha):
+        raise HTTPException(500, "git stash apply failed (conflicts? stash pruned?)")
+    # Stash column lives on the executing row (the root for coalesced groups);
+    # update there so the view's fall-through stops surfacing the ref.
+    owner_id = task.get("effective_root_id") or task["id"]
+    await db.update_task(owner_id, orphan_stash_ref=None)
+    pubsub.notify_queue_changed()
+    return {"status": "restored"}
+
+
+@router.post("/api/tasks/{task_id}/orphan-stash/discard")
+async def discard_orphan_stash(task_id: int):
+    """Drop the stash entry. Underlying commit object remains in the reflog
+    until git-gc — recoverable via `git fsck --lost-found` if needed."""
+    project_dir = require_project()
+    task = await db.get_task_resolved(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    sha = task.get("orphan_stash_ref")
+    if not sha:
+        raise HTTPException(404, "No orphan stash for this task")
+    git.stash_drop(project_dir, sha)
+    owner_id = task.get("effective_root_id") or task["id"]
+    await db.update_task(owner_id, orphan_stash_ref=None)
+    pubsub.notify_queue_changed()
+    return {"status": "discarded"}
+
+
 @router.patch("/api/tasks/{task_id}")
 async def update_task_route(task_id: int, req: UpdateTaskRequest):
     """Edit a pending task's context (only before it starts running)."""

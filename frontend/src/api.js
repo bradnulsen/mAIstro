@@ -67,6 +67,14 @@ export const getTaskDiff = (id) => fetchJSON(`/api/tasks/${id}/diff`)
 
 export const getTaskOutcome = (id) => fetchJSON(`/api/tasks/${id}/outcome`)
 
+export const getOrphanStash = (id) => fetchJSON(`/api/tasks/${id}/orphan-stash`)
+
+export const restoreOrphanStash = (id) =>
+  fetchJSON(`/api/tasks/${id}/orphan-stash/restore`, { method: 'POST' })
+
+export const discardOrphanStash = (id) =>
+  fetchJSON(`/api/tasks/${id}/orphan-stash/discard`, { method: 'POST' })
+
 export const cancelTask = (id) =>
   fetchJSON(`/api/tasks/cancel/${id}`, { method: 'POST' })
 
