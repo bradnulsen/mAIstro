@@ -124,10 +124,11 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 ### Other backend modules
 
 - `state.py` — shared mutable state (`PROJECT_DIR`, `_switching` flag) and `require_project()` to break circular imports.
+- `appstate.py` — app-level DB at `<repo>/.maistro/app.db`. Owns the recent-projects list and cross-project job templates (sync sqlite3, not aiosqlite — these are short, infrequent reads outside any project context).
 - `worker.py` — background worker: pulls from queue, runs one task at a time, manages lifecycle via `transition_task()`, handles cancellation/timeout watchdog and stale-task sweep on startup.
 - `scheduler.py` — cron-based scheduler: checks job schedules every 30s, enqueues when due.
 - `dispatch.py` — prompt assembly (`build_dispatch_system_prompt`, `build_user_prompt`), watch trigger matching (`_any_file_matches`, `_glob_to_regex`), job manifest.
-- `cli.py` — Claude CLI subprocess invocation, NDJSON parsing.
+- `cli.py` — Claude CLI subprocess invocation, NDJSON parsing. On `is_error` results, emits `result_meta` alongside the error event with `stop_reason` derived from the CLI's `subtype` (e.g. `error_max_turns` → `max_turns`), so the worker correctly classifies turn-limit failures as `exhausted` rather than `completed`.
 - `git.py` — git subprocess abstraction (still sync `subprocess.run`; see Known Debt).
 - `events.py` — single source of truth for SSE event types and wire serialization (`to_sse()`).
 - `pubsub.py` — task-level + global queue-level subscriber registries for SSE.
