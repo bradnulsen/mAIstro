@@ -132,17 +132,20 @@ The API layer computes these server-side via `compute_durations_from_events` and
 
 ## Transition Function
 
-`transition_task()` is a two-step atomic operation:
+`transition_task()` is an atomic operation across three tables:
 
 1. **Validate** — check that `(current_status, new_status)` is in `LEGAL_TRANSITIONS`. The current status is read from the event log via `_resolve_task_status` (backfilling from the materialized column for legacy tasks).
-2. **Write event** — insert a row into `task_events` with the mapped event type and structured detail (error, result_commit, session_id, start_commit composed by `_build_event_detail`).
-3. **Update materialized status** — `UPDATE tasks SET status = ?, <timestamp_col> = ?, ...` in the same transaction.
+2. **Split fields by destination** — kwargs in `_OUTCOME_FIELDS` (session_id, start_commit, result_commit, num_turns, cost_usd, started_at, completed_at, error, worktree_path, task_branch, orphan_stash_ref, stop_reason) route to `task_executions` via `upsert_execution`. Other kwargs (queued_at and clearing-on-pending) stay on `tasks`. The status timestamp column for the new state is added automatically — `started_at`/`completed_at` go to executions, `queued_at` stays on tasks.
+3. **Write event** — insert a row into `task_events` with the mapped event type and structured detail (error, result_commit, session_id, start_commit composed by `_build_event_detail`).
+4. **Update materialized status + queue placement** — `UPDATE tasks SET status = ?, ...` for the cached status and any non-outcome fields.
+5. **Upsert execution row** — INSERT-or-UPDATE on `task_executions` keyed by `task_id` for any outcome fields.
+6. **Commit** — single transaction.
 
-Steps 2 and 3 happen in the same transaction. The event is the record of what happened; the status update is the cache of where we are.
+All five steps run inside `try/except` with explicit `rollback()` on any failure. Earlier the function did not roll back: a partial commit (e.g. UPDATE failing because a column was missing on an unmigrated DB) would leave the event INSERT pending in the connection's transaction buffer, and the next operation that committed would persist the event without the column update. The events log diverged from the column status, and the worker would then get stuck repeatedly attempting to re-activate a task whose events log already said "active." Task #422 in the dev project was the witnessing case — see the `migrate_to_task_executions.py` reconciliation logic for the cleanup path. The rollback closes that hole structurally.
 
-`transition_tasks_batch()` is the bulk variant used for cascading subordinates: it skips the per-task validation pass (caller asserts uniform source state), writes one event per task, and issues a single `UPDATE ... WHERE id IN (...)`. The worker uses this through `cascade_completion()` after every terminal transition to propagate the outcome to the root's coalesced subtree.
+`transition_tasks_batch()` is the bulk variant used for cascading subordinates: it skips the per-task validation pass (caller asserts uniform source state), writes one event per task, issues a single `UPDATE ... WHERE id IN (...)`, and upserts execution rows per task. Same field-routing and rollback treatment as the single-task version. The worker uses this through `cascade_completion()` after every terminal transition to propagate the outcome to the root's coalesced subtree.
 
-The `**fields` kwargs (error, session_id, start_commit, result_commit) update the task record directly — these are execution metadata that the worker and API read frequently. They also flow into the event's `detail` column for the audit trail.
+`update_task` and `update_tasks_batch` are the non-status helpers. They route fields the same way (outcome fields to executions, non-outcome to tasks) so call sites that update worktree_path, orphan_stash_ref, etc. continue to work unchanged.
 
 ### State Machine
 
@@ -163,46 +166,19 @@ active   → interrupted  (stale sweep on startup)
 
 ## Task Record Columns
 
-The task record retains columns that are either identity (immutable after creation), frequently queried by the worker hot path, or transitional from the pre-event-log era:
+After the schema normalization, task data lives in three tables. See [Storage — Task Record](storage.md#task-record) for the full split. Summary:
 
-| Column | Category | Rationale |
-|--------|----------|-----------|
-| `id`, `job_id`, `trigger`, `trigger_detail`, `context` | Identity | Immutable, set at creation |
-| `status` | Materialized | Worker query performance — indexed, single-column filter |
-| `session_id`, `resume_session_id` | Execution | Set once, read by worker and API on every task access |
-| `approval` | Orthogonal | Not lifecycle state — separate concern, queried with status |
-| `start_commit`, `result_commit` | Execution | Set once, read for outcome summaries and cascade context |
-| `stop_reason`, `num_turns`, `cost_usd` | Execution | Set once at terminal, read by API for execution metadata display |
-| `error` | Execution | Set once on terminal non-success, read by API for display |
-| `coalesced_id`, `sort_order` | Queue management | Not lifecycle state — separate concerns |
-| `created_at` | Identity | Record creation time, used for sort tiebreaking |
-| `queued_at`, `started_at`, `completed_at` | Transitional | Maintained via dual-write — see [Migration Path](#migration-path) |
+| Table | Columns |
+|---|---|
+| `tasks` (12 cols) | id, job_id, trigger, trigger_detail, context, resume_session_id, approval, status, queued_at, sort_order, coalesced_id, created_at |
+| `task_executions` (13 cols, one row per task that ran) | task_id (PK), session_id, start_commit, result_commit, stop_reason, num_turns, cost_usd, started_at, completed_at, error, worktree_path, task_branch, orphan_stash_ref |
+| `task_events` (append-only) | id, task_id, event, detail, created_at |
 
-### Transitional Timestamp Columns
+`tasks` is intentionally narrow: identity, queue placement, and a materialized `status` cache. Adding new per-execution columns now means a single ALTER on `task_executions`, not on the hot table.
 
-| Column | Replaced by |
-|--------|-------------|
-| `queued_at` | `queued` event timestamp |
-| `started_at` | `activated` event timestamp |
-| `completed_at` | Terminal event timestamp |
+`started_at` and `completed_at` moved with the rest of the per-execution data — they're redundant with the event log (which carries the canonical timestamp on each lifecycle event), but kept on the executions row for query convenience. Duration computation reads from the event log per [Duration Computation](#duration-computation); the column-based timestamps exist for queries and dashboards that filter by completion time without needing the full event history.
 
-These columns are still maintained by `transition_task` (dual-write) so existing queries continue to work, but they are redundant with the event log and slated for removal.
-
-## Migration Path
-
-### Phase 1: Dual-Write (Current)
-
-`transition_task()` writes both the event and updates the task record (including timestamp columns). All existing queries continue to work unchanged. The event table accumulates history for new tasks. For legacy tasks with a status column but no events, `_resolve_task_status` backfills a synthetic event on first transition.
-
-### Phase 2: Read Migration
-
-Switch timeline display and duration computation to read from events. The API returns computed timestamps from events. Frontend continues to receive the same data shape — the computation moves server-side.
-
-Drop the `getTaskStatus()` timestamp fallback in the frontend (it exists for pre-event-log data that will have been backfilled in Phase 1).
-
-### Phase 3: Column Removal
-
-Drop `queued_at`, `started_at`, `completed_at` from the task record. These are fully redundant with events. The task record shrinks to identity + materialized status + execution metadata.
+`queued_at` stays on `tasks` because queue placement is per-task (transitions queued↔pending preserve it), not per-execution.
 
 ## Knock-On Effects
 
@@ -212,11 +188,11 @@ No change. The worker queries `WHERE status = 'queued' AND (approval IS NULL OR 
 
 ### Stale Sweep
 
-On startup, find tasks with `status = 'active'` and transition them to `interrupted`. The transition writes an `interrupted` event and updates the materialized status. `sweep_stale_tasks` does this in a single batch.
+On startup, find tasks with `status = 'active'` and transition them to `interrupted`. The transition writes an `interrupted` event, updates the materialized status, and sets `error`/`completed_at` on the execution row. `sweep_stale_tasks` does this in a single batch. The same sweep also runs `git worktree prune` to clear registry entries for worktrees whose directories were removed externally — see [Git Integration — Worktree Management](git-integration.md#worktree-management).
 
 ### Dashboard Aggregation
 
-Health queries filter on `status` (materialized) and `coalesced_id IS NULL` — no change. Timeline queries pair `activated` with terminal events for duration; the `idx_task_events_type` index supports the required lookups.
+Health queries filter on `tasks.status` (materialized) and `tasks.coalesced_id IS NULL`, then JOIN `task_executions` for the time-window filter on `te.completed_at` and per-execution metrics. Timeline queries pair `activated` with terminal events for duration; the `idx_task_events_type` index supports the required lookups. The `idx_task_executions_completed_at` index covers time-window filtering on completion.
 
 ### Coalescing
 

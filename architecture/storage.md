@@ -67,14 +67,15 @@ The HTTP layer additionally checks `worker.get_active_task_id()` before allowing
 
 The schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent. There is no general-purpose migration system. `SEED_SQL` populates `job_property_defs` with core property definitions and sets default config values. `db_migrations.run_migrations()` exists only for legacy table renames (goals→jobs, slug PK→INTEGER PK) and is not where new schema changes belong.
 
-Twelve tables plus one view:
+Thirteen tables plus one view:
 
 | Table | Purpose |
 |-------|---------|
 | `jobs` | Job identity (`INTEGER PRIMARY KEY AUTOINCREMENT`, `slug` UNIQUE, name, created_at) |
 | `job_property_defs` | EAV registry — property keys, defaults, and types |
 | `job_properties` | EAV overrides — per-job property values |
-| `tasks` | Task identity, execution metadata (stop_reason, num_turns, cost_usd), and materialized status |
+| `tasks` | Atomic task identity + queue placement + materialized status |
+| `task_executions` | Per-execution outcome data (one row per task that ran) — keyed by `task_id` |
 | `task_events` | Immutable lifecycle event log — source of truth for when transitions happened |
 | `chat_sessions` | Session metadata, links jobs and tasks to their output |
 | `chat_messages` | Durable chat messages (role + content) |
@@ -83,7 +84,7 @@ Twelve tables plus one view:
 | `config` | Key-value configuration store |
 | `governor_runs` | Each Governor invocation: trigger, task count, findings count, started/completed_at, error |
 | `governor_findings` | Suggestions and observations produced by Governor runs (status, body, execution result) |
-| `tasks_resolved` (view) | Coalescing-aware projection of `tasks` — see [Task Record](#task-record) |
+| `tasks_resolved` (view) | Coalescing-aware projection joining tasks with task_executions — see [Task Record](#task-record) |
 
 ### Entity-Attribute-Value Property System
 
@@ -95,21 +96,38 @@ This design means adding a new property requires only a `SEED_SQL` insert — no
 
 ### Task Record
 
-The task record carries identity (immutable after creation), execution metadata (set once during execution), queue management columns, and a materialized `status` for query performance:
+Task data is split across three tables, each owning one concern:
 
-- **`status`** — materialized from the latest lifecycle event in `task_events`. All hot-path queries (worker, queue rendering, coalescing) filter on this column. Updated atomically with each event insert. See [Task Lifecycle](task-lifecycle.md).
-- **`coalesced_id`** — nullable foreign key referencing another `tasks` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a task ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
+| Table | Owns | Mutability |
+|---|---|---|
+| `tasks` | Identity (id, job_id, trigger, trigger_detail, context, resume_session_id), queue placement (status, queued_at, sort_order, coalesced_id, approval), creation timestamp | Append-only after insert; only `status` and queue-placement columns ever change |
+| `task_executions` | Per-execution outcome data (session_id, start_commit, result_commit, stop_reason, num_turns, cost_usd, started_at, completed_at, error, worktree_path, task_branch, orphan_stash_ref). Keyed by `task_id` (PK + FK ON DELETE CASCADE). | Insert-on-activation, update-on-terminal. One row per task that actually ran. |
+| `task_events` | Immutable lifecycle log. Source of truth for when transitions happened. | Append-only |
+
+Key columns and constraints:
+
+- **`tasks.status`** — materialized from the latest lifecycle event in `task_events`. All hot-path queries (worker, queue rendering, coalescing) filter on this column. Updated atomically with each event insert through `transition_task`, which now wraps the dual-write in `try/except/rollback` so a partial failure can't leave the events log diverged from the column (see [Task Lifecycle — Transition Function](task-lifecycle.md#transition-function)).
+- **`tasks.coalesced_id`** — nullable foreign key referencing another `tasks` row. When set, this task is subordinate to the referenced root task. The queue view filters on `coalesced_id IS NULL` to show only standalone and root tasks. Routes acting on a task ID also act on all rows where `coalesced_id` equals that ID. See [Dispatch Engine — Manual Queue Composition](dispatch-engine.md#manual-queue-composition).
+- **`task_executions.task_id`** is both the PK and an FK to `tasks(id) ON DELETE CASCADE`. The 1:0..1 relationship reflects the current model: tasks atomic, never re-executed (reply/resume creates new tasks). If multi-execution is ever needed, this evolves to a separate AUTOINCREMENT PK.
+
+#### Why the Split
+
+Before normalization, `tasks` was 21+ columns mixing three concerns: atomic identity, queue placement, and per-execution outcome data. The `tasks_resolved` view's COALESCE-on-every-outcome-column was a code smell saying "these fields don't belong on tasks; they belong on whatever-actually-ran." The smell got worse with each new outcome column (Phase 2 of workspace isolation added one, Phase 3 added two).
+
+The split makes the design contract literal: tasks are atomic and immutable except for materialized status and queue placement. Per-execution data lives elsewhere. Adding new execution-side columns now requires zero changes to the tasks table — only to `task_executions`.
 
 #### Coalescing-Aware Reads: `tasks_resolved` View
 
-Coalesced subordinates inherit their root's outcome. Outcome columns (`session_id`, `resume_session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`) are populated only on the task that actually ran. Naive reads of a subordinate row would show null for these columns even though the subordinate's *effective* outcome is whatever the root produced.
+Coalesced subordinates inherit their root's outcome. Subordinates have no row in `task_executions` (they never ran independently), so their effective outcome IS whatever the root's execution row contains.
 
-The `tasks_resolved` view solves this with a single LEFT JOIN against the root: outcome columns are `COALESCE(self, root)`, intrinsic columns (id, job_id, trigger, context, coalesced_id) pass through unchanged, and two derived columns flag the relationship: `is_subordinate` (1 if `coalesced_id IS NOT NULL`) and `effective_root_id` (`COALESCE(coalesced_id, id)`). The depth-1 invariant on `coalesced_id` (see below) makes the single-level join sufficient — no recursion needed.
+The `tasks_resolved` view is a four-way join: `tasks` LEFT JOIN `task_executions` (self) LEFT JOIN `tasks` (root) LEFT JOIN `task_executions` (root). Outcome columns are `COALESCE(te.col, re.col)` — prefer self's execution row, fall through to the root's. Intrinsic columns (id, job_id, trigger, context, coalesced_id) pass through from `tasks` unchanged. Two derived columns flag the relationship: `is_subordinate` (1 if `coalesced_id IS NOT NULL`) and `effective_root_id` (`COALESCE(coalesced_id, id)`). The depth-1 invariant on `coalesced_id` (see below) makes the single-level join sufficient — no recursion needed.
 
 Two semantic profiles for queries:
 
 - **"Per-task as the agent saw it"** → read from `tasks_resolved` (or call `get_task_resolved()`). Use this for output/diff/outcome endpoints, the Governor's recent-tasks view, and anywhere a user might click on a subordinate.
-- **"Per-execution / per-cost"** → read from `tasks WHERE coalesced_id IS NULL`. One row per actual run, no double-counting. Use this for aggregates (`dashboard_health`, cost totals, success-rate metrics).
+- **"Per-execution / per-cost"** → read from `tasks t JOIN task_executions te ON te.task_id = t.id WHERE t.coalesced_id IS NULL`. One row per actual run, no double-counting. Use this for aggregates (`dashboard_health`, cost totals, success-rate metrics).
+
+Helper functions in `db_tasks` route writes between the two tables: outcome fields named in `_OUTCOME_FIELDS` are directed to `task_executions` via `upsert_execution`; non-outcome fields stay on `tasks`. `transition_task`, `transition_tasks_batch`, `update_task`, and `update_tasks_batch` all do this routing internally so callers see the same kwargs interface as before.
 
 #### Depth-1 Invariant (DB-Level)
 
@@ -156,7 +174,7 @@ The Activity Dashboard (see [Frontend — Dashboard](frontend.md#dashboard)) int
 - **Dispatch chains**: `tasks` filtered on `trigger = 'agent'`, following `trigger_detail` references
 - **Tool usage**: `chat_events` (where `event_type = 'mcp_tool_use'`) joined through `chat_sessions.task_id` → `tasks.job_id`
 
-The primary worker index is on `(status, approval, coalesced_id)` — covers the worker's queued-task lookup. `idx_tasks_completed_at` supports time-windowed dashboard queries.
+The primary worker index is on `(status, approval, coalesced_id)` — covers the worker's queued-task lookup. `idx_task_executions_completed_at` supports time-windowed dashboard queries (the index moved with the column when outcome data was split out of `tasks`).
 
 ### Key Invariants
 
