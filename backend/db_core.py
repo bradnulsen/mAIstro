@@ -133,6 +133,12 @@ CREATE TABLE IF NOT EXISTS job_properties (
     PRIMARY KEY (job_id, key)
 );
 
+-- `tasks` holds the atomic identity of a unit of work plus its current
+-- queue placement. Per the design, tasks are append-only after creation —
+-- reply/resume don't mutate, they create new tasks and coalesce the
+-- original. Per-execution outcome data lives in `task_executions`; the
+-- lifecycle log lives in `task_events`. The `status` column here is a
+-- materialized cache of the latest lifecycle event for cheap queue queries.
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -140,27 +146,35 @@ CREATE TABLE IF NOT EXISTS tasks (
     trigger TEXT NOT NULL,
     trigger_detail TEXT,
     context TEXT,
-    session_id TEXT,
     resume_session_id TEXT,
     approval TEXT,
+    created_at DATETIME DEFAULT (datetime('now')),
+    queued_at DATETIME,
+    sort_order INTEGER,
+    coalesced_id INTEGER REFERENCES tasks(id)
+);
+
+-- One row per task that actually ran (or attempted to run). The PK is
+-- task_id so the relationship is 1:0..1 — never re-executed in the
+-- current model. Subordinates have no row here; they inherit the root's
+-- execution via the `tasks_resolved` view's JOIN.
+CREATE TABLE IF NOT EXISTS task_executions (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    session_id TEXT,
     start_commit TEXT,
+    result_commit TEXT,
     stop_reason TEXT,
     num_turns INTEGER,
     cost_usd REAL,
-    created_at DATETIME DEFAULT (datetime('now')),
     started_at DATETIME,
     completed_at DATETIME,
-    result_commit TEXT,
     error TEXT,
-    queued_at DATETIME,
-    sort_order INTEGER,
-    coalesced_id INTEGER REFERENCES tasks(id),
-    orphan_stash_ref TEXT,
-    -- Per-task git worktree (Phase 3 of workspace isolation).
-    -- Phase 3a only adds the columns; population happens in Phase 3b
-    -- when worker.py creates the worktree on activation.
+    -- Per-task git worktree (workspace isolation Phase 3).
     worktree_path TEXT,
-    task_branch TEXT
+    task_branch TEXT,
+    -- Stash safety net for non-success terminals (workspace isolation Phase 2).
+    -- Dead in normal Phase 3 operation; preserved as a fallback.
+    orphan_stash_ref TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -224,15 +238,20 @@ CREATE INDEX IF NOT EXISTS idx_tasks_job_status
 CREATE INDEX IF NOT EXISTS idx_tasks_status_worker
     ON tasks (status, approval, coalesced_id);
 
-CREATE INDEX IF NOT EXISTS idx_tasks_completed_at
-    ON tasks (completed_at);
+-- Drop the old column-based completed_at index (the column moved to
+-- task_executions). Idempotent: safe whether or not it existed.
+DROP INDEX IF EXISTS idx_tasks_completed_at;
+
+CREATE INDEX IF NOT EXISTS idx_task_executions_completed_at
+    ON task_executions (completed_at);
 
 -- View: tasks_resolved
--- Centralized read seam for coalescing-aware queries. Outcome columns
--- (those produced by an actual CLI execution) fall through to the root
--- task when null on a subordinate; intrinsic columns (id, job_id,
--- trigger, context, etc.) are passed through unchanged. Depth-1
--- invariant on coalesced_id makes the single LEFT JOIN sufficient.
+-- Centralized read seam for coalescing-aware queries. Outcome data
+-- (per-execution) is JOINed in from `task_executions`; for subordinates,
+-- the JOIN reaches through to the root's execution via `r.id = t.coalesced_id`.
+-- Intrinsic columns (id, job_id, trigger, context, etc.) are passed
+-- through unchanged. Depth-1 invariant on coalesced_id makes the single
+-- LEFT JOIN sufficient.
 -- DROP+CREATE keeps the view definition in sync on every init_db run
 -- (views hold no data, so this is safe).
 DROP VIEW IF EXISTS tasks_resolved;
@@ -249,26 +268,27 @@ SELECT
     t.created_at,
     t.queued_at,
     t.sort_order,
-    -- Outcome columns: COALESCE(self, root) — null on subordinate
-    -- falls through to whatever the root has.
-    COALESCE(t.session_id, r.session_id) AS session_id,
-    COALESCE(t.resume_session_id, r.resume_session_id) AS resume_session_id,
-    COALESCE(t.start_commit, r.start_commit) AS start_commit,
-    COALESCE(t.result_commit, r.result_commit) AS result_commit,
-    COALESCE(t.stop_reason, r.stop_reason) AS stop_reason,
-    COALESCE(t.num_turns, r.num_turns) AS num_turns,
-    COALESCE(t.cost_usd, r.cost_usd) AS cost_usd,
-    COALESCE(t.started_at, r.started_at) AS started_at,
-    COALESCE(t.completed_at, r.completed_at) AS completed_at,
-    COALESCE(t.error, r.error) AS error,
-    COALESCE(t.orphan_stash_ref, r.orphan_stash_ref) AS orphan_stash_ref,
-    COALESCE(t.worktree_path, r.worktree_path) AS worktree_path,
-    COALESCE(t.task_branch, r.task_branch) AS task_branch,
+    t.resume_session_id,
+    -- Outcome columns: prefer self's execution row, fall through to root's.
+    COALESCE(te.session_id, re.session_id) AS session_id,
+    COALESCE(te.start_commit, re.start_commit) AS start_commit,
+    COALESCE(te.result_commit, re.result_commit) AS result_commit,
+    COALESCE(te.stop_reason, re.stop_reason) AS stop_reason,
+    COALESCE(te.num_turns, re.num_turns) AS num_turns,
+    COALESCE(te.cost_usd, re.cost_usd) AS cost_usd,
+    COALESCE(te.started_at, re.started_at) AS started_at,
+    COALESCE(te.completed_at, re.completed_at) AS completed_at,
+    COALESCE(te.error, re.error) AS error,
+    COALESCE(te.orphan_stash_ref, re.orphan_stash_ref) AS orphan_stash_ref,
+    COALESCE(te.worktree_path, re.worktree_path) AS worktree_path,
+    COALESCE(te.task_branch, re.task_branch) AS task_branch,
     -- Markers so consumers can distinguish a real run from a fall-through.
     CASE WHEN t.coalesced_id IS NOT NULL THEN 1 ELSE 0 END AS is_subordinate,
     COALESCE(t.coalesced_id, t.id) AS effective_root_id
 FROM tasks t
-LEFT JOIN tasks r ON r.id = t.coalesced_id;
+LEFT JOIN task_executions te ON te.task_id = t.id
+LEFT JOIN tasks r ON r.id = t.coalesced_id
+LEFT JOIN task_executions re ON re.task_id = r.id;
 
 -- Depth-1 invariant: a task's coalesced_id must point at a root
 -- (not at another subordinate), and a task that has its own

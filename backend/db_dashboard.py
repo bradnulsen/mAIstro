@@ -36,9 +36,10 @@ async def dashboard_health(window_days: int) -> list[dict]:
             SUM(CASE WHEN t.status = 'exhausted' THEN 1 ELSE 0 END) AS exhausted
         FROM tasks t
         JOIN jobs j ON j.id = t.job_id
+        LEFT JOIN task_executions te ON te.task_id = t.id
         WHERE t.status IN {TERMINAL_STATUSES_SQL}
           AND t.coalesced_id IS NULL
-          AND t.completed_at >= datetime('now', ?)
+          AND te.completed_at >= datetime('now', ?)
         GROUP BY t.job_id, j.name
     """
     current = await db.execute_fetchall(sql, (f"-{window_days} days",))
@@ -50,10 +51,11 @@ async def dashboard_health(window_days: int) -> list[dict]:
             COUNT(*) AS total,
             SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed
         FROM tasks t
+        LEFT JOIN task_executions te ON te.task_id = t.id
         WHERE t.status IN {TERMINAL_STATUSES_SQL}
           AND t.coalesced_id IS NULL
-          AND t.completed_at >= datetime('now', ?)
-          AND t.completed_at < datetime('now', ?)
+          AND te.completed_at >= datetime('now', ?)
+          AND te.completed_at < datetime('now', ?)
         GROUP BY t.job_id
     """
     prev = await db.execute_fetchall(
@@ -90,9 +92,10 @@ async def dashboard_timeline(window_days: int) -> list[dict]:
         f"""SELECT t.id, t.job_id, j.name AS job_name,
                   te_start.created_at AS started_at,
                   te_end.created_at AS completed_at,
-                  t.error, t.status
+                  tx.error, t.status
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
+           LEFT JOIN task_executions tx ON tx.task_id = t.id
            JOIN task_events te_start ON te_start.task_id = t.id AND te_start.event IN ('activated', 'active')
            LEFT JOIN task_events te_end ON te_end.task_id = t.id
              AND te_end.event IN {terminal_events_sql}
@@ -113,12 +116,13 @@ async def dashboard_chains(window_days: int) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
         """SELECT t.id, t.job_id, j.name AS job_name,
-                  t.trigger_detail, t.error, t.completed_at
+                  t.trigger_detail, te.error, te.completed_at
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
+           LEFT JOIN task_executions te ON te.task_id = t.id
            WHERE t.trigger = 'agent'
-             AND t.completed_at IS NOT NULL
-             AND t.completed_at >= datetime('now', ?)""",
+             AND te.completed_at IS NOT NULL
+             AND te.completed_at >= datetime('now', ?)""",
         (f"-{window_days} days",)
     )
     return [dict(r) for r in rows]

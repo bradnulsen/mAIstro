@@ -22,6 +22,59 @@ from backend.db_core import get_db
 log = logging.getLogger("maistro.database")
 
 
+# ── Schema split: outcome fields live on `task_executions` ────
+#
+# The tasks table holds atomic identity + queue placement; per-execution
+# outcome data lives on a separate row keyed by task_id. Helpers below
+# route writes accordingly. Reads use a SELECT fragment that joins the
+# execution row so callers see the same dict shape they always have.
+
+_OUTCOME_FIELDS = frozenset({
+    "session_id", "start_commit", "result_commit",
+    "stop_reason", "num_turns", "cost_usd",
+    "started_at", "completed_at", "error",
+    "worktree_path", "task_branch", "orphan_stash_ref",
+})
+
+# Reusable SELECT fragment that pulls every execution column out of a
+# LEFT JOIN aliased as `te`. Used so callers' returned dicts include the
+# same keys they had before normalization.
+_TASK_EXECUTION_SELECT = (
+    "te.session_id, te.start_commit, te.result_commit, "
+    "te.stop_reason, te.num_turns, te.cost_usd, "
+    "te.started_at, te.completed_at, te.error, "
+    "te.worktree_path, te.task_branch, te.orphan_stash_ref"
+)
+
+
+async def upsert_execution(task_id: int, conn=None, _commit: bool = True, **fields):
+    """Create or update the per-task execution row.
+
+    Insert-or-update on `task_executions` keyed by task_id. The first call
+    for a task (typically at activation) creates the row; later calls
+    (terminal handling) update it. Unknown fields raise — outcome fields
+    must be in the canonical set (`_OUTCOME_FIELDS`).
+    """
+    if not fields:
+        return
+    bad = set(fields) - _OUTCOME_FIELDS
+    if bad:
+        raise ValueError(f"upsert_execution: unknown outcome fields {bad}")
+    if conn is None:
+        conn = await get_db()
+    cols = list(fields.keys())
+    placeholders = ", ".join("?" * (1 + len(cols)))
+    set_clause = ", ".join(f"{c} = excluded.{c}" for c in cols)
+    sql = (
+        f"INSERT INTO task_executions (task_id, {', '.join(cols)}) "
+        f"VALUES ({placeholders}) "
+        f"ON CONFLICT(task_id) DO UPDATE SET {set_clause}"
+    )
+    await conn.execute(sql, [task_id] + [fields[c] for c in cols])
+    if _commit:
+        await conn.commit()
+
+
 async def enqueue_task(job_id: int, trigger: str,
                        trigger_detail: str | None = None,
                        context: str | None = None) -> int:
@@ -104,9 +157,20 @@ async def enqueue_task(job_id: int, trigger: str,
 
 
 async def get_task(task_id: int) -> dict | None:
+    """Read a task with its execution row (if it ran) joined.
+
+    Identity-mode read: returns this task's own data without coalescing
+    fall-through. Use `get_task_resolved` when you want subordinates to
+    inherit their root's execution outcome.
+    """
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT t.*, j.name as job_name FROM tasks t JOIN jobs j ON j.id = t.job_id WHERE t.id = ?",
+        f"""SELECT t.*, j.name as job_name,
+                  {_TASK_EXECUTION_SELECT}
+           FROM tasks t
+           JOIN jobs j ON j.id = t.job_id
+           LEFT JOIN task_executions te ON te.task_id = t.id
+           WHERE t.id = ?""",
         (task_id,)
     )
     if not rows:
@@ -177,11 +241,13 @@ async def get_agent_dispatch_depth(task_id: int) -> int:
 async def get_task_queue(limit: int = 50) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
-        """SELECT t.*, j.name as job_name,
-                  COUNT(sub.id) as subordinate_count
+        f"""SELECT t.*, j.name as job_name,
+                  COUNT(sub.id) as subordinate_count,
+                  {_TASK_EXECUTION_SELECT}
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
            LEFT JOIN tasks sub ON sub.coalesced_id = t.id
+           LEFT JOIN task_executions te ON te.task_id = t.id
            WHERE t.coalesced_id IS NULL
            GROUP BY t.id
            ORDER BY t.created_at DESC LIMIT ?""",
@@ -206,10 +272,20 @@ async def get_oldest_queued_task() -> dict | None:
 
 
 async def update_task(task_id: int, _commit: bool = True, **kwargs):
+    """Update fields on a task, routing outcome fields to its execution row.
+
+    Tasks-table columns and task_executions columns get directed to the
+    right table based on `_OUTCOME_FIELDS` membership.
+    """
     db = await get_db()
-    sets = ", ".join(f"{k} = ?" for k in kwargs)
-    vals = list(kwargs.values()) + [task_id]
-    await db.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
+    exec_kwargs = {k: kwargs[k] for k in kwargs if k in _OUTCOME_FIELDS}
+    task_kwargs = {k: kwargs[k] for k in kwargs if k not in _OUTCOME_FIELDS}
+    if task_kwargs:
+        sets = ", ".join(f"{k} = ?" for k in task_kwargs)
+        vals = list(task_kwargs.values()) + [task_id]
+        await db.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
+    if exec_kwargs:
+        await upsert_execution(task_id, conn=db, _commit=False, **exec_kwargs)
     if _commit:
         await db.commit()
 
@@ -217,16 +293,22 @@ async def update_task(task_id: int, _commit: bool = True, **kwargs):
 async def update_tasks_batch(task_ids: list[int], **kwargs):
     """Update multiple tasks with the same field values in a single statement.
 
-    Always commits — even when task_ids is empty — to flush any prior
-    uncommitted writes in the same transaction (e.g. a preceding
-    update_task with _commit=False).
+    Routes outcome fields to per-task execution rows. Always commits —
+    even when task_ids is empty — to flush any prior uncommitted writes
+    in the same transaction.
     """
     db = await get_db()
+    exec_kwargs = {k: kwargs[k] for k in kwargs if k in _OUTCOME_FIELDS}
+    task_kwargs = {k: kwargs[k] for k in kwargs if k not in _OUTCOME_FIELDS}
     if task_ids:
-        sets = ", ".join(f"{k} = ?" for k in kwargs)
-        placeholders = ",".join("?" * len(task_ids))
-        vals = list(kwargs.values()) + list(task_ids)
-        await db.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
+        if task_kwargs:
+            sets = ", ".join(f"{k} = ?" for k in task_kwargs)
+            placeholders = ",".join("?" * len(task_ids))
+            vals = list(task_kwargs.values()) + list(task_ids)
+            await db.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
+        if exec_kwargs:
+            for tid in task_ids:
+                await upsert_execution(tid, conn=db, _commit=False, **exec_kwargs)
     await db.commit()
 
 
@@ -341,7 +423,9 @@ async def _resolve_task_status(task_id: int, conn) -> str:
     log.warning("[database] Task #%d had no events — backfilled from status=%s", task_id, status)
     return status
 
-# Map status to the timestamp column that should be set on transition
+# Map status to the timestamp column that should be set on transition.
+# `queued_at` lives on tasks (queue placement); `started_at` and
+# `completed_at` live on task_executions (execution data).
 _STATUS_TIMESTAMP = {
     "queued": "queued_at",
     "active": "started_at",
@@ -353,6 +437,10 @@ _STATUS_TIMESTAMP = {
     "interrupted": "completed_at",
     "rejected": "completed_at",
 }
+
+_TASK_TIMESTAMP_COLS = frozenset({"queued_at"})  # remaining on tasks
+# Other timestamps (started_at, completed_at) are routed to task_executions
+# via the _OUTCOME_FIELDS membership check.
 
 
 def _build_event_detail(new_status: str, fields: dict) -> str | None:
@@ -378,10 +466,14 @@ def _build_event_detail(new_status: str, fields: dict) -> str | None:
 async def transition_task(task_id: int, new_status: str, _commit: bool = True, **fields):
     """Transition a task to a new status with validation.
 
-    All status changes must go through this function. Sets the corresponding
-    timestamp column automatically and writes an event to task_events (Phase 1
-    dual-write). Additional fields (error, result_commit, session_id, etc.)
-    can be passed as kwargs.
+    All status changes must go through this function. Status + queue
+    placement go to `tasks`; execution-related fields (start_commit,
+    result_commit, session_id, num_turns, etc.) are routed to the per-task
+    `task_executions` row. The lifecycle event (source of truth) is
+    written to `task_events`. The full sequence is wrapped in a single
+    transaction with explicit rollback on failure — partial commits used
+    to leave the events log diverged from the column when an UPDATE
+    failed mid-transition.
 
     Raises ValueError if the transition is illegal.
     """
@@ -393,75 +485,118 @@ async def transition_task(task_id: int, new_status: str, _commit: bool = True, *
             f"Illegal transition for task #{task_id}: {current_status} → {new_status}"
         )
 
-    updates = {"status": new_status}
+    from backend.state import utcnow
 
-    # Set the corresponding timestamp if applicable
+    # Split fields by destination table.
+    exec_fields = {k: fields[k] for k in fields if k in _OUTCOME_FIELDS}
+    task_fields = {k: fields[k] for k in fields if k not in _OUTCOME_FIELDS}
+
+    # Apply per-status defaults to the right table.
     ts_col = _STATUS_TIMESTAMP.get(new_status)
+    ts_value = None
     if ts_col:
-        from backend.state import utcnow
-        updates[ts_col] = fields.pop(ts_col, utcnow())
+        if ts_col in _OUTCOME_FIELDS:
+            ts_value = exec_fields.pop(ts_col, utcnow())
+            exec_fields[ts_col] = ts_value
+        else:
+            ts_value = task_fields.pop(ts_col, utcnow())
+            task_fields[ts_col] = ts_value
 
-    # When going back to pending, clear queued_at
     if new_status == "pending":
-        updates["queued_at"] = None
+        task_fields["queued_at"] = None
 
-    updates.update(fields)
+    # Build the task-row update (status is always written to materialize the cache).
+    task_updates = {"status": new_status, **task_fields}
 
-    # Dual-write: event log (source of truth) + task record (materialized cache)
     event_type = _STATUS_TO_EVENT[new_status]
     event_detail = _build_event_detail(new_status, fields)
-    event_ts = updates.get(ts_col) if ts_col else None
-    if event_ts:
+    event_ts = ts_value or utcnow()
+
+    try:
+        # Event log: the source of truth.
         await conn.execute(
             "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
             (task_id, event_type, event_detail, event_ts)
         )
-    else:
-        from backend.state import utcnow
-        await conn.execute(
-            "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
-            (task_id, event_type, event_detail, utcnow())
-        )
 
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    vals = list(updates.values()) + [task_id]
-    await conn.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
-    if _commit:
-        await conn.commit()
+        # Materialized status + queue placement on tasks.
+        sets = ", ".join(f"{k} = ?" for k in task_updates)
+        vals = list(task_updates.values()) + [task_id]
+        await conn.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
+
+        # Execution data on its own row (insert-or-update on task_id).
+        if exec_fields:
+            await upsert_execution(task_id, conn=conn, _commit=False, **exec_fields)
+
+        if _commit:
+            await conn.commit()
+    except Exception:
+        # Roll back the partial transaction so the event log doesn't diverge
+        # from the materialized task row on a mid-flight failure (the bug
+        # that originally motivated this rewrite).
+        try:
+            await conn.rollback()
+        except Exception:
+            log.exception("[database] rollback after transition_task failure also failed")
+        raise
 
 
 async def transition_tasks_batch(task_ids: list[int], new_status: str, **fields):
     """Transition multiple tasks to the same new status.
 
     Skips validation per-task for performance — caller is responsible for
-    ensuring all tasks are in a valid source state. Used for subordinate tasks.
-    Writes events for each task in the batch (Phase 1 dual-write).
+    ensuring all tasks are in a valid source state. Used for subordinate
+    cascades. Outcome fields are routed to per-task `task_executions`
+    rows; status + queue placement are written to `tasks`. Wrapped in a
+    transaction with rollback on failure.
     """
     if not task_ids:
         return
     conn = await get_db()
     from backend.state import utcnow
-    updates = {"status": new_status}
-    ts_col = _STATUS_TIMESTAMP.get(new_status)
     now = utcnow()
-    if ts_col:
-        updates[ts_col] = fields.pop(ts_col, now)
-    updates.update(fields)
 
-    # Dual-write: batch-insert events for all tasks
+    exec_fields = {k: fields[k] for k in fields if k in _OUTCOME_FIELDS}
+    task_fields = {k: fields[k] for k in fields if k not in _OUTCOME_FIELDS}
+
+    ts_col = _STATUS_TIMESTAMP.get(new_status)
+    ts_value = None
+    if ts_col:
+        if ts_col in _OUTCOME_FIELDS:
+            ts_value = exec_fields.pop(ts_col, now)
+            exec_fields[ts_col] = ts_value
+        else:
+            ts_value = task_fields.pop(ts_col, now)
+            task_fields[ts_col] = ts_value
+
+    task_updates = {"status": new_status, **task_fields}
+
     event_type = _STATUS_TO_EVENT[new_status]
     event_detail = _build_event_detail(new_status, fields)
-    event_ts = updates.get(ts_col) if ts_col else now
-    await conn.executemany(
-        "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
-        [(tid, event_type, event_detail, event_ts) for tid in task_ids]
-    )
+    event_ts = ts_value or now
 
-    sets = ", ".join(f"{k} = ?" for k in updates)
-    placeholders = ",".join("?" * len(task_ids))
-    vals = list(updates.values()) + list(task_ids)
-    await conn.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
-    await conn.commit()
+    try:
+        await conn.executemany(
+            "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
+            [(tid, event_type, event_detail, event_ts) for tid in task_ids]
+        )
+
+        sets = ", ".join(f"{k} = ?" for k in task_updates)
+        placeholders = ",".join("?" * len(task_ids))
+        vals = list(task_updates.values()) + list(task_ids)
+        await conn.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
+
+        if exec_fields:
+            for tid in task_ids:
+                await upsert_execution(tid, conn=conn, _commit=False, **exec_fields)
+
+        await conn.commit()
+    except Exception:
+        try:
+            await conn.rollback()
+        except Exception:
+            log.exception("[database] rollback after transition_tasks_batch failure also failed")
+        raise
 
 
 # ── Task Event Queries ────────────────────────────────────
