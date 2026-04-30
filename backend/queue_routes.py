@@ -223,6 +223,42 @@ async def get_task_diff(task_id: int):
     return git.diff_range(project_dir, start, end)
 
 
+async def _resolve_workspace_for_action(task_id: int) -> tuple[str, str, int]:
+    """Validate a workspace action (discard / integrate) and return its target.
+
+    Returns (worktree_path, branch, owner_id). Raises HTTPException with
+    a coherent message if the action isn't valid right now.
+
+    The check is on the *owner's* status, not the queried task's status —
+    when a resume task Y reuses the original task X's worktree, Y becomes
+    the workspace owner (X is coalesced under Y). Reading X's own status
+    would still show 'failed' from its prior run, but the worktree itself
+    is in active use by Y. Gating on the owner's status (resolved via
+    effective_root_id) prevents discard/integrate from yanking a worktree
+    out from under a running resume.
+    """
+    task = await db.get_task_resolved(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    wt_path = task.get("worktree_path")
+    branch = task.get("task_branch")
+    if not wt_path:
+        raise HTTPException(404, "No preserved workspace for this task")
+    owner_id = task.get("effective_root_id") or task["id"]
+    if owner_id == task["id"]:
+        owner_status = task.get("status")
+    else:
+        owner = await db.get_task(owner_id)
+        owner_status = owner.get("status") if owner else None
+    if owner_status not in db.NON_SUCCESS_TERMINAL_STATUSES:
+        raise HTTPException(
+            409,
+            f"Workspace can only be modified for a non-success terminal task "
+            f"(owner task is in state '{owner_status}')",
+        )
+    return wt_path, branch, owner_id
+
+
 @router.post("/api/tasks/{task_id}/workspace/integrate")
 async def integrate_task_workspace(task_id: int):
     """Manually retry the merge of a preserved task branch into main.
@@ -244,15 +280,9 @@ async def integrate_task_workspace(task_id: int):
     dirty main, manually rebased the task branch, etc.).
     """
     project_dir = require_project()
-    task = await db.get_task_resolved(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    wt_path = task.get("worktree_path")
-    branch = task.get("task_branch")
-    if not wt_path or not branch:
-        raise HTTPException(404, "No preserved workspace for this task")
-    if task.get("status") not in db.NON_SUCCESS_TERMINAL_STATUSES:
-        raise HTTPException(409, "Workspace can only be integrated for a non-success terminal task")
+    wt_path, branch, owner_id = await _resolve_workspace_for_action(task_id)
+    if not branch:
+        raise HTTPException(404, "No task branch recorded for this workspace")
 
     ok, err = git.integrate_branch(
         project_dir, branch,
@@ -264,7 +294,6 @@ async def integrate_task_workspace(task_id: int):
     git.worktree_remove(project_dir, wt_path, force=True)
     git.worktree_prune(project_dir)
     git.branch_delete(project_dir, branch, force=True)
-    owner_id = task.get("effective_root_id") or task["id"]
     await db.update_task(owner_id, worktree_path=None, task_branch=None)
     pubsub.notify_queue_changed()
     return {"status": "integrated", "result_commit": git.head_hash(project_dir)}
@@ -281,27 +310,11 @@ async def discard_task_workspace(task_id: int):
     erased — only the live working copy is.
     """
     project_dir = require_project()
-    task = await db.get_task_resolved(task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
-    wt_path = task.get("worktree_path")
-    branch = task.get("task_branch")
-    if not wt_path:
-        raise HTTPException(404, "No preserved workspace for this task")
-    # Discard is only safe for non-success terminals. Active tasks have
-    # their worktree as the CLI subprocess's cwd; pulling it out from
-    # under a running agent corrupts mid-task. Completed tasks already
-    # cleared the worktree on integration; rejected/pending/queued never
-    # had one. The view fall-through can also surface the root's path on
-    # a subordinate, so check the resolved status (the root's, for subs).
-    if task.get("status") not in db.NON_SUCCESS_TERMINAL_STATUSES:
-        raise HTTPException(409, "Workspace can only be discarded for a non-success terminal task")
-    if wt_path:
-        git.worktree_remove(project_dir, wt_path, force=True)
-        git.worktree_prune(project_dir)
+    wt_path, branch, owner_id = await _resolve_workspace_for_action(task_id)
+    git.worktree_remove(project_dir, wt_path, force=True)
+    git.worktree_prune(project_dir)
     if branch:
         git.branch_delete(project_dir, branch, force=True)
-    owner_id = task.get("effective_root_id") or task["id"]
     await db.update_task(owner_id, worktree_path=None, task_branch=None)
     pubsub.notify_queue_changed()
     return {"status": "discarded"}
@@ -404,13 +417,26 @@ async def cancel_task(task_id: int):
 
 @router.post("/api/tasks/{task_id}/resume")
 async def resume_task(task_id: int):
-    """Resume a failed/timed-out task using its CLI session ID."""
+    """Resume a non-success terminal task by re-entering its preserved worktree.
+
+    Resume only makes sense for tasks where (a) the agent's session is still
+    on disk to be `--resume`d and (b) the worktree is still around on the
+    original branch. Both conditions hold exactly when the task is in a
+    non-success terminal state with `worktree_path` populated:
+    `completed` cleared the worktree on integration; `rejected` never had
+    one; pre-execution states never had one. Discarding the workspace
+    (operator-initiated or via Integrate) clears `worktree_path` too, so
+    resume is naturally blocked once the operator has decided what to do
+    with the preserved workspace.
+    """
     require_project()
     task = await db.get_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.get("status") not in db.TERMINAL_STATUSES:
-        raise HTTPException(409, "Task is not completed")
+    if task.get("status") not in db.NON_SUCCESS_TERMINAL_STATUSES:
+        raise HTTPException(409, "Resume is only valid for non-success terminal tasks (failed, exhausted, timed_out, cancelled, interrupted)")
+    if not task.get("worktree_path"):
+        raise HTTPException(409, "Cannot resume: the original workspace has been integrated or discarded")
 
     session_id = task.get("session_id")
     if not session_id:

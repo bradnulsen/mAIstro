@@ -391,6 +391,48 @@ async def _process_task(task: dict):
     # checkout (state.PROJECT_DIR) is structurally untouchable by the agent.
     workspace_dir = _worktree_path_for(state.PROJECT_DIR, task_id)
     task_branch = _task_branch_for(job["slug"], task_id)
+    reuse_existing_worktree = False
+
+    # Resume tasks must run in the original task's worktree. Claude CLI
+    # stores sessions per-cwd at ~/.claude/projects/<hash-of-cwd>/, so a
+    # `--resume <session>` invocation in a fresh worktree finds nothing
+    # and insta-fails. The original's worktree also still has the agent's
+    # prior commits on its branch — picking up there is what "resume"
+    # actually means.
+    if resume_session_id and task.get("trigger_detail"):
+        try:
+            original_id = int(task["trigger_detail"])
+        except (ValueError, TypeError):
+            original_id = None
+        if original_id:
+            original = await db.get_task(original_id)
+            original_path = original.get("worktree_path") if original else None
+            original_branch = original.get("task_branch") if original else None
+            if original_path and os.path.isdir(original_path):
+                workspace_dir = original_path
+                task_branch = original_branch or task_branch
+                reuse_existing_worktree = True
+                log.info("[worker] Task #%d resuming in original worktree %s on branch %s",
+                         task_id, workspace_dir, task_branch)
+            else:
+                # Original's worktree is gone (cleaned up after successful
+                # integration, or operator discarded it). The session
+                # storage is gone too — resume can't find it. Fail loudly.
+                err = (f"cannot resume task #{original_id}: the original "
+                       f"worktree no longer exists")
+                await db.transition_task(task_id, "active",
+                                         session_id=session_id,
+                                         start_commit=start_commit)
+                await db.transition_task(task_id, "failed", error=err)
+                await db.cascade_completion(task_id, "failed", error=err)
+                pubsub.broadcast(task_id, events.error(err))
+                pubsub.broadcast(task_id, events.done())
+                pubsub.cleanup_task(task_id)
+                pubsub.notify_queue_changed()
+                _active_task_id = None
+                _cancel_event = None
+                return
+
     if not start_commit:
         await db.transition_task(task_id, "active",
                                  session_id=session_id,
@@ -406,31 +448,32 @@ async def _process_task(task: dict):
         _cancel_event = None
         return
 
-    # Defensive cleanup: a stale worktree from a prior crashed attempt
-    # would block creation. Task IDs are unique so this only collides on
-    # leftover state, never on legitimate concurrent runs.
-    if os.path.exists(workspace_dir):
-        log.warning("[worker] Task #%d found stale workspace at %s — removing", task_id, workspace_dir)
-        _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
-        # Drop any leftover branch from the prior attempt too
-        git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
+    if not reuse_existing_worktree:
+        # Defensive cleanup: a stale worktree from a prior crashed attempt
+        # would block creation. Task IDs are unique so this only collides on
+        # leftover state, never on legitimate concurrent runs.
+        if os.path.exists(workspace_dir):
+            log.warning("[worker] Task #%d found stale workspace at %s — removing", task_id, workspace_dir)
+            _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
+            # Drop any leftover branch from the prior attempt too
+            git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
 
-    wt_ok, wt_err = git.worktree_add(state.PROJECT_DIR, workspace_dir, task_branch, start_commit)
-    if not wt_ok:
-        log.error("[worker] Task #%d worktree creation failed: %s", task_id, wt_err)
-        await db.transition_task(task_id, "active",
-                                 session_id=session_id,
-                                 start_commit=start_commit)
-        await db.transition_task(task_id, "failed",
-                                 error=f"worktree creation failed: {wt_err}")
-        await db.cascade_completion(task_id, "failed",
-                                    error=f"worktree creation failed: {wt_err}")
-        pubsub.broadcast(task_id, events.done())
-        pubsub.cleanup_task(task_id)
-        pubsub.notify_queue_changed()
-        _active_task_id = None
-        _cancel_event = None
-        return
+        wt_ok, wt_err = git.worktree_add(state.PROJECT_DIR, workspace_dir, task_branch, start_commit)
+        if not wt_ok:
+            log.error("[worker] Task #%d worktree creation failed: %s", task_id, wt_err)
+            await db.transition_task(task_id, "active",
+                                     session_id=session_id,
+                                     start_commit=start_commit)
+            await db.transition_task(task_id, "failed",
+                                     error=f"worktree creation failed: {wt_err}")
+            await db.cascade_completion(task_id, "failed",
+                                        error=f"worktree creation failed: {wt_err}")
+            pubsub.broadcast(task_id, events.done())
+            pubsub.cleanup_task(task_id)
+            pubsub.notify_queue_changed()
+            _active_task_id = None
+            _cancel_event = None
+            return
 
     await db.transition_task(task_id, "active",
                              session_id=session_id,

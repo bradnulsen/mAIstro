@@ -493,11 +493,11 @@ export default function Queue() {
                   </>
                 ) : (
                   <div className="action-row">
-                    {selected.error && !['cancelled', 'rejected'].includes(selectedStatus) && (
+                    {selected.worktree_path && NON_SUCCESS_TERMINAL_STATUSES.includes(selectedStatus) && (
                       <button
                         className="small primary"
                         onClick={() => handleResume(selected.id)}
-                        title="Continue from the last Claude session checkpoint (--resume)"
+                        title="Re-enter the preserved worktree and continue the agent's session"
                       >
                         ↻ Resume
                       </button>
