@@ -78,18 +78,39 @@ async def _integrate_or_fail(task_id: int, job: dict,
     project_dir = state.PROJECT_DIR
     job_id = job["id"]
 
-    # No commits → nothing to integrate. Mark failed with a clear error
-    # so the operator knows the agent didn't commit; preserve the
-    # workspace so they can see what (if anything) was left dirty.
+    # No commits → two cases, distinguished by worktree dirtiness:
+    #   1. Clean worktree: agent intentionally did nothing. The dispatch
+    #      system prompt explicitly invites this ("Doing nothing is a
+    #      valid outcome"). Mark completed (no-op), clean up the empty
+    #      worktree, fire cascades normally.
+    #   2. Dirty worktree: agent edited files but didn't commit them.
+    #      That's a real failure — the work is at risk and the operator
+    #      should see it. Mark failed, preserve the workspace.
     if not start_commit or worktree_head == start_commit:
-        err = "agent finished without committing"
-        await db.transition_task(task_id, "failed",
-                                 result_commit=worktree_head,
-                                 error=err, **meta_fields)
-        await db.cascade_completion(task_id, "failed",
-                                    result_commit=worktree_head, error=err)
-        log.warning("[worker] Task #%d completed without commits — marked failed, workspace preserved",
-                    task_id)
+        if git.is_dirty(workspace_dir):
+            err = "agent left uncommitted changes in the worktree"
+            await db.transition_task(task_id, "failed",
+                                     result_commit=worktree_head,
+                                     error=err, **meta_fields)
+            await db.cascade_completion(task_id, "failed",
+                                        result_commit=worktree_head, error=err)
+            log.warning("[worker] Task #%d ended with uncommitted changes — marked failed, workspace preserved",
+                        task_id)
+            await _check_governor_trigger(task_id)
+            return
+        # No-op success: agent ran, decided nothing was needed. Cascades
+        # are deliberately *not* fired here — propagating an empty commit
+        # range to downstream cascade-trigger jobs would just produce a
+        # chain of identical no-ops at real CLI cost. Cascades require
+        # actual work to react to.
+        await db.transition_task(task_id, "completed",
+                                 result_commit=start_commit, **meta_fields)
+        await db.cascade_completion(task_id, "completed",
+                                    result_commit=start_commit)
+        log.info("[worker] Task #%d completed with no commits (no-op outcome, cascades suppressed)", task_id)
+        _force_remove_worktree(project_dir, workspace_dir)
+        git.branch_delete(project_dir, task_branch, force=True)
+        await db.update_task(task_id, worktree_path=None, task_branch=None)
         await _check_governor_trigger(task_id)
         return
 
