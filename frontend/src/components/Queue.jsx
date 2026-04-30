@@ -7,6 +7,7 @@ import {
   reorderTasks, mergeTasks, splitTask, uncoalesceTask, getSubordinates,
   transferTask, resumeTask, replyTask,
   getOrphanStash, restoreOrphanStash, discardOrphanStash,
+  discardTaskWorkspace,
 } from '../api'
 import {
   formatDate, formatDuration, formatDurationSecs, TRIGGER_ICONS, mdBreaks,
@@ -945,6 +946,15 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
         <OrphanStashBanner taskId={item.id} sha={detail.orphan_stash_ref} onChange={onUpdate} />
       )}
 
+      {detail.worktree_path && (
+        <WorkspaceBanner
+          taskId={item.id}
+          workspacePath={detail.worktree_path}
+          branch={detail.task_branch}
+          onChange={onUpdate}
+        />
+      )}
+
       {/* Row 2: Triggers — full width */}
       <div className="detail-section">
         <label>Triggers{allTriggers.length > 1 ? ` (${allTriggers.length})` : ''}</label>
@@ -1105,6 +1115,56 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
         </div>
       )}
     </>
+  )
+}
+
+function WorkspaceBanner({ taskId, workspacePath, branch, onChange }) {
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [error, setError] = useState('')
+  const [showMerge, setShowMerge] = useState(false)
+
+  const handleDiscard = async () => {
+    setError('')
+    try {
+      await discardTaskWorkspace(taskId)
+      if (onChange) await onChange()
+    } catch (e) { setError(e.message); setConfirmDiscard(false) }
+  }
+
+  return (
+    <div className="detail-section">
+      <label>Preserved Workspace</label>
+      <div className="detail-meta warning-text">
+        Agent's work was not integrated into main. The worktree and branch are preserved
+        so you can inspect, manually merge, or discard.
+      </div>
+      <div className="detail-meta">
+        <div><strong>Worktree:</strong> <code>{workspacePath}</code></div>
+        {branch && <div><strong>Branch:</strong> <code>{branch}</code></div>}
+      </div>
+      <div className="action-row compact">
+        {branch && (
+          <button className="small" onClick={() => setShowMerge(s => !s)}>
+            {showMerge ? 'Hide merge command' : 'Merge manually'}
+          </button>
+        )}
+        {confirmDiscard ? (
+          <>
+            <span className="confirm-text">Delete workspace and branch?</span>
+            <button className="danger small" onClick={handleDiscard}>Confirm</button>
+            <button className="small" onClick={() => setConfirmDiscard(false)}>No</button>
+          </>
+        ) : (
+          <button className="danger small" onClick={() => setConfirmDiscard(true)}>
+            Discard workspace
+          </button>
+        )}
+        {error && <span className="error-text">{error}</span>}
+      </div>
+      {showMerge && branch && (
+        <pre className="context-display">{`git merge --no-ff ${branch}\n# resolve any conflicts, then:\n# git worktree remove --force ${workspacePath}\n# git branch -D ${branch}`}</pre>
+      )}
+    </div>
   )
 }
 

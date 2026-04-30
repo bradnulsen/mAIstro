@@ -67,6 +67,9 @@ export const getTaskDiff = (id) => fetchJSON(`/api/tasks/${id}/diff`)
 
 export const getTaskOutcome = (id) => fetchJSON(`/api/tasks/${id}/outcome`)
 
+export const discardTaskWorkspace = (id) =>
+  fetchJSON(`/api/tasks/${id}/workspace/discard`, { method: 'POST' })
+
 export const getOrphanStash = (id) => fetchJSON(`/api/tasks/${id}/orphan-stash`)
 
 export const restoreOrphanStash = (id) =>

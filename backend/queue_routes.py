@@ -223,6 +223,35 @@ async def get_task_diff(task_id: int):
     return git.diff_range(project_dir, start, end)
 
 
+@router.post("/api/tasks/{task_id}/workspace/discard")
+async def discard_task_workspace(task_id: int):
+    """Remove a non-success task's preserved worktree and delete its branch.
+
+    Use when the operator has reviewed the agent's work in the workspace
+    and decided to throw it away. The task row keeps `result_commit` (commits
+    are still in the reflog and can be recovered via `git fsck --lost-found`
+    until git-gc runs), so the audit trail of what the agent produced isn't
+    erased — only the live working copy is.
+    """
+    project_dir = require_project()
+    task = await db.get_task_resolved(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    wt_path = task.get("worktree_path")
+    branch = task.get("task_branch")
+    if not wt_path:
+        raise HTTPException(404, "No preserved workspace for this task")
+    if wt_path:
+        git.worktree_remove(project_dir, wt_path, force=True)
+        git.worktree_prune(project_dir)
+    if branch:
+        git.branch_delete(project_dir, branch, force=True)
+    owner_id = task.get("effective_root_id") or task["id"]
+    await db.update_task(owner_id, worktree_path=None, task_branch=None)
+    pubsub.notify_queue_changed()
+    return {"status": "discarded"}
+
+
 @router.get("/api/tasks/{task_id}/orphan-stash")
 async def get_orphan_stash(task_id: int):
     """Show the diff for a task's stashed orphan changes (Phase 2 safety net)."""

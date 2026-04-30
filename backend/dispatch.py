@@ -20,6 +20,7 @@ async def run_task(
     cancel_event=None,
     task: dict | None = None,
     subordinates: list[dict] | None = None,
+    workspace_dir: str | None = None,
 ) -> AsyncIterator[dict]:
     """Build prompts, invoke Claude CLI, yield events.
 
@@ -31,8 +32,13 @@ async def run_task(
 
     ``subordinates`` — coalesced tasks whose context is merged into the
     invocation section so the agent addresses all triggers in one pass.
+
+    ``workspace_dir`` — cwd for the CLI subprocess and for the MCP server's
+    write-side tools. Phase 3a defaults to project_dir; Phase 3b will
+    receive a per-task worktree path from the worker.
     """
     props = job["properties"]
+    workspace = workspace_dir or project_dir
 
     log.info("[task:%d] Starting job=%s", task_id, job["id"])
 
@@ -56,6 +62,7 @@ async def run_task(
         session_id=session_id,
         external_servers=external_servers,
         task_id=task_id,
+        workspace_dir=workspace,
     )
     log.info("[task:%d] MCP config written to %s", task_id, mcp_config_path)
 
@@ -69,7 +76,7 @@ async def run_task(
         async for event in cli.invoke(
             prompt=user_prompt,
             system_prompt=system_prompt,
-            cwd=project_dir,
+            cwd=workspace,
             model=props.get("model"),
             max_turns=props.get("max_turns", 50),
             allowed_tools=allowed,

@@ -208,6 +208,111 @@ def is_dirty(cwd: str) -> bool:
     return bool(status(cwd).strip())
 
 
+# ── Worktree operations (per-task workspace isolation) ────
+
+def worktree_add(project_dir: str, path: str, branch: str,
+                 base_commit: str) -> tuple[bool, str]:
+    """Create a new worktree on a fresh branch from base_commit.
+
+    Returns (ok, error_message). The branch is created (-b) so this fails
+    if it already exists — task IDs are unique so this is correct: a stale
+    branch from a previous attempt indicates a state that needs operator
+    attention, not silent reuse.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    result = run_git("worktree", "add", "-b", branch, path, base_commit, cwd=project_dir)
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout).strip()
+    return True, ""
+
+
+def worktree_remove(project_dir: str, path: str, force: bool = False) -> bool:
+    """Remove a worktree (does not delete the underlying branch).
+
+    `force=True` allows removing a worktree that has uncommitted changes
+    (used in cleanup paths where the work is being deliberately discarded).
+    """
+    args = ["worktree", "remove"]
+    if force:
+        args.append("--force")
+    args.append(path)
+    result = run_git(*args, cwd=project_dir)
+    return result.returncode == 0
+
+
+def worktree_list(project_dir: str) -> list[dict]:
+    """List all worktrees registered with this repo."""
+    result = run_git("worktree", "list", "--porcelain", cwd=project_dir)
+    if result.returncode != 0:
+        return []
+    entries: list[dict] = []
+    current: dict = {}
+    for line in result.stdout.splitlines():
+        if not line:
+            if current:
+                entries.append(current)
+                current = {}
+            continue
+        if line.startswith("worktree "):
+            current["path"] = line[len("worktree "):].strip()
+        elif line.startswith("HEAD "):
+            current["head"] = line[len("HEAD "):].strip()
+        elif line.startswith("branch "):
+            current["branch"] = line[len("branch "):].strip()
+        elif line == "detached":
+            current["detached"] = True
+        elif line == "prunable" or line.startswith("prunable "):
+            current["prunable"] = True
+    if current:
+        entries.append(current)
+    return entries
+
+
+def worktree_prune(project_dir: str):
+    """Clean up registry entries for worktrees whose directories were removed."""
+    run_git("worktree", "prune", cwd=project_dir)
+
+
+def branch_delete(project_dir: str, branch: str, force: bool = False) -> bool:
+    """Delete a branch by name."""
+    flag = "-D" if force else "-d"
+    result = run_git("branch", flag, branch, cwd=project_dir)
+    return result.returncode == 0
+
+
+def is_ancestor(cwd: str, commit: str, ref: str) -> bool:
+    """Return True if `commit` is an ancestor of (or equal to) `ref`."""
+    result = run_git("merge-base", "--is-ancestor", commit, ref, cwd=cwd)
+    return result.returncode == 0
+
+
+def merge_branch(project_dir: str, source_branch: str,
+                 ff_only: bool = False, no_ff: bool = False,
+                 message: str | None = None) -> tuple[bool, str]:
+    """Merge source_branch into the current branch of project_dir.
+
+    Returns (ok, output_or_error). The caller is expected to have ensured
+    project_dir's HEAD is on the integration target (typically main/master).
+    """
+    args = ["merge"]
+    if ff_only:
+        args.append("--ff-only")
+    if no_ff:
+        args.append("--no-ff")
+    if message:
+        args.extend(["-m", message])
+    args.append(source_branch)
+    result = run_git(*args, cwd=project_dir)
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout).strip()
+    return True, result.stdout.strip()
+
+
+def merge_abort(project_dir: str):
+    """Abort an in-progress merge and reset the working tree."""
+    run_git("merge", "--abort", cwd=project_dir)
+
+
 # ── Stash operations (orphan-changes safety net) ───────────
 
 def stash_push_orphan(cwd: str, message: str) -> str | None:

@@ -85,6 +85,12 @@ async def post_commit_hook(req: PostCommitRequest):
     if not project_dir:
         return {"status": "no project"}
 
+    # Worktrees share the same .git, so a commit on a per-task branch will
+    # also fire this hook from the worktree's cwd. Watch should only fire
+    # on commits reachable from the operator's main HEAD; ignore others.
+    if not git.is_ancestor(project_dir, req.commit_hash, "HEAD"):
+        return {"status": "skipped — commit not on main"}
+
     triggered = await check_watch_triggers(req.commit_hash, project_dir)
     dispatched = []
 

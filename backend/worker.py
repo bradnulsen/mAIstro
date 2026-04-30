@@ -6,11 +6,59 @@ All feeders (manual, watch, timer) just create task records.
 
 import asyncio
 import logging
+import os
+import shutil
 
 from backend import database as db, events, git, pubsub, state
 from backend.dispatch import run_task, build_trigger_context
 from backend.mcp_probe import probe_server
 from backend.state import utcnow
+
+
+# ── Per-task workspace (Phase 3 of workspace isolation) ────
+
+def _worktree_path_for(project_dir: str, task_id: int) -> str:
+    """Stable per-task worktree path under the project's .maistro/."""
+    return os.path.join(project_dir, ".maistro", "worktrees", f"task-{task_id}")
+
+
+def _task_branch_for(job_slug: str, task_id: int) -> str:
+    """Branch naming convention from the workspace-isolation proposal."""
+    return f"{job_slug}/task-{task_id}"
+
+
+def _detect_main_branch(project_dir: str) -> str:
+    """Return the operator's integration branch name.
+
+    Looks at PROJECT_DIR's current HEAD branch — that's the branch the
+    operator works on. Falls back to 'main' if HEAD is detached or unknown.
+    """
+    import subprocess
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, encoding="utf-8", cwd=project_dir,
+    )
+    if result.returncode == 0:
+        name = result.stdout.strip()
+        if name and name != "HEAD":
+            return name
+    return "main"
+
+
+def _force_remove_worktree(project_dir: str, path: str):
+    """Remove a worktree whether or not git tracks it cleanly.
+
+    Tries the proper `git worktree remove --force` first. If git refuses
+    or the directory still exists afterward (Windows file-lock weirdness,
+    interrupted prior removal), falls back to rmtree + prune.
+    """
+    git.worktree_remove(project_dir, path, force=True)
+    if os.path.exists(path):
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+        except Exception:
+            pass
+    git.worktree_prune(project_dir)
 
 log = logging.getLogger("maistro.worker")
 
@@ -25,6 +73,79 @@ _cancel_event: asyncio.Event | None = None
 def get_active_task_id() -> int | None:
     """Return the task ID currently being processed, or None."""
     return _active_task_id
+
+
+async def _integrate_or_fail(task_id: int, job: dict,
+                             workspace_dir: str, task_branch: str,
+                             worktree_head: str, start_commit: str | None,
+                             meta_fields: dict):
+    """Atomically gate `completed` on successful integration into main.
+
+    The architect's note in the workspace-isolation proposal: integration
+    is the gate to `completed`, not a follow-up to it. The terminal
+    transition that records `completed` only fires after the merge succeeds;
+    otherwise the target is `failed` with the conflict captured and the
+    workspace preserved for inspection.
+    """
+    project_dir = state.PROJECT_DIR
+    job_id = job["id"]
+
+    # No commits → nothing to integrate. The agent ran but produced no
+    # durable output. Treat as failed with a clear error so the operator
+    # knows the agent didn't commit; preserve the workspace so they can
+    # see what (if anything) was left dirty in the worktree.
+    if not start_commit or worktree_head == start_commit:
+        err = "agent finished without committing"
+        await db.transition_task(task_id, "failed",
+                                 result_commit=worktree_head,
+                                 error=err, **meta_fields)
+        await db.cascade_completion(task_id, "failed",
+                                    result_commit=worktree_head, error=err)
+        log.warning("[worker] Task #%d completed without commits — marked failed, workspace preserved",
+                    task_id)
+        await _check_governor_trigger(task_id)
+        return
+
+    main_branch = _detect_main_branch(project_dir)
+    # Try fast-forward first (clean linear history when main hasn't moved).
+    ok, out = git.merge_branch(project_dir, task_branch, ff_only=True)
+    if not ok:
+        # Main has moved during the task. Make a merge commit instead.
+        msg = f"Merge task #{task_id} ({job['name']}) into {main_branch}"
+        ok, out = git.merge_branch(project_dir, task_branch, no_ff=True, message=msg)
+        if not ok:
+            git.merge_abort(project_dir)
+            err = f"integration failed: {out}"
+            await db.transition_task(task_id, "failed",
+                                     result_commit=worktree_head,
+                                     error=err, **meta_fields)
+            await db.cascade_completion(task_id, "failed",
+                                        result_commit=worktree_head, error=err)
+            log.warning("[worker] Task #%d integration failed (merge conflict?) — workspace preserved at %s",
+                        task_id, workspace_dir)
+            await _check_governor_trigger(task_id)
+            return
+
+    # Integration succeeded. The new main HEAD is the durable record.
+    integrated_head = git.head_hash(project_dir) or worktree_head
+    await db.transition_task(task_id, "completed",
+                             result_commit=integrated_head,
+                             **meta_fields)
+    await db.cascade_completion(task_id, "completed",
+                                result_commit=integrated_head)
+    log.info("[worker] Task #%d completed and integrated (main=%s, branch=%s)",
+             task_id, integrated_head[:8], task_branch)
+
+    # Workspace + branch are no longer needed — discard them.
+    _force_remove_worktree(project_dir, workspace_dir)
+    git.branch_delete(project_dir, task_branch, force=True)
+    await db.update_task(task_id, worktree_path=None, task_branch=None)
+
+    await _enqueue_cascades(job_id, task_id,
+                            job_name=job["name"],
+                            start_commit=start_commit,
+                            result_commit=integrated_head)
+    await _check_governor_trigger(task_id)
 
 
 async def _maybe_stash_orphan(task_id: int, start_commit: str | None,
@@ -130,12 +251,23 @@ async def process_one(task_id: int) -> dict | None:
 # ── Internal ────────────────────────────────────────────────
 
 async def _sweep_stale():
-    """On startup, mark any in-flight tasks as interrupted."""
+    """On startup, mark any in-flight tasks as interrupted and reconcile worktrees.
+
+    Worktrees belonging to interrupted tasks are preserved (operator can
+    inspect what the agent left). `git worktree prune` clears registry
+    entries for directories that were manually removed while the backend
+    was down.
+    """
     if not db.DB_PATH:
         return
     stale_ids = await db.sweep_stale_tasks(utcnow())
     for tid in stale_ids:
-        log.warning("[worker] Marked stale task #%d as interrupted", tid)
+        log.warning("[worker] Marked stale task #%d as interrupted (workspace preserved)", tid)
+    if state.PROJECT_DIR:
+        try:
+            git.worktree_prune(state.PROJECT_DIR)
+        except Exception:
+            log.warning("[worker] worktree prune on startup failed")
 
 
 async def _loop():
@@ -227,18 +359,72 @@ async def _process_task(task: dict):
     _cancel_event = asyncio.Event()
     _active_task_id = task_id
     start_commit = git.head_hash(state.PROJECT_DIR)
+
+    # Phase 3b: per-task worktree. The CLI subprocess and MCP server's
+    # write/read tools all resolve against this path. The operator's main
+    # checkout (state.PROJECT_DIR) is structurally untouchable by the agent.
+    workspace_dir = _worktree_path_for(state.PROJECT_DIR, task_id)
+    task_branch = _task_branch_for(job["slug"], task_id)
+    if not start_commit:
+        await db.transition_task(task_id, "active",
+                                 session_id=session_id,
+                                 start_commit=start_commit)
+        await db.transition_task(task_id, "failed",
+                                 error="cannot create worktree: project has no commits yet")
+        await db.cascade_completion(task_id, "failed",
+                                    error="cannot create worktree: project has no commits yet")
+        pubsub.broadcast(task_id, events.done())
+        pubsub.cleanup_task(task_id)
+        pubsub.notify_queue_changed()
+        _active_task_id = None
+        _cancel_event = None
+        return
+
+    # Defensive cleanup: a stale worktree from a prior crashed attempt
+    # would block creation. Task IDs are unique so this only collides on
+    # leftover state, never on legitimate concurrent runs.
+    if os.path.exists(workspace_dir):
+        log.warning("[worker] Task #%d found stale workspace at %s — removing", task_id, workspace_dir)
+        _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
+        # Drop any leftover branch from the prior attempt too
+        git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
+
+    wt_ok, wt_err = git.worktree_add(state.PROJECT_DIR, workspace_dir, task_branch, start_commit)
+    if not wt_ok:
+        log.error("[worker] Task #%d worktree creation failed: %s", task_id, wt_err)
+        await db.transition_task(task_id, "active",
+                                 session_id=session_id,
+                                 start_commit=start_commit)
+        await db.transition_task(task_id, "failed",
+                                 error=f"worktree creation failed: {wt_err}")
+        await db.cascade_completion(task_id, "failed",
+                                    error=f"worktree creation failed: {wt_err}")
+        pubsub.broadcast(task_id, events.done())
+        pubsub.cleanup_task(task_id)
+        pubsub.notify_queue_changed()
+        _active_task_id = None
+        _cancel_event = None
+        return
+
     await db.transition_task(task_id, "active",
                              session_id=session_id,
-                             start_commit=start_commit)
+                             start_commit=start_commit,
+                             worktree_path=workspace_dir,
+                             task_branch=task_branch)
     pubsub.notify_queue_changed()
 
-    log.info("[worker] Processing task #%d (job=%s)", task_id, job_id)
+    log.info("[worker] Processing task #%d (job=%s, worktree=%s, branch=%s)",
+             task_id, job_id, workspace_dir, task_branch)
 
     # ── Pre-dispatch health check: probe external MCP servers ──
     mcp_error = await _check_external_mcp_servers(job)
     if mcp_error:
         log.warning("[worker] Task #%d failed MCP health check: %s", task_id, mcp_error)
-        await db.transition_task(task_id, "failed", error=mcp_error)
+        # Health-check failure means the agent never ran — discard the empty worktree.
+        _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
+        git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
+        await db.transition_task(task_id, "failed", error=mcp_error,
+                                 worktree_path=None, task_branch=None)
         await db.cascade_completion(task_id, "failed", error=mcp_error)
         pubsub.broadcast(task_id, events.error(mcp_error))
         pubsub.broadcast(task_id, events.done())
@@ -271,7 +457,8 @@ async def _process_task(task: dict):
         async for event in run_task(task_id, job, state.PROJECT_DIR,
                                     cancel_event=_cancel_event,
                                     task=task_with_session,
-                                    subordinates=subordinates):
+                                    subordinates=subordinates,
+                                    workspace_dir=workspace_dir):
             etype = event.get("type")
 
             # Incremental persistence: write each raw NDJSON event immediately
@@ -311,7 +498,9 @@ async def _process_task(task: dict):
                 log.exception("[worker] Task #%d failed to write response", task_id)
 
         _cancelled = local_cancel.is_set() and not _timed_out
-        head = git.head_hash(state.PROJECT_DIR)
+        # Per-task workspace: result_commit reflects the agent's branch tip,
+        # not the operator's main HEAD (which the agent never touches).
+        worktree_head = git.head_hash(workspace_dir) or start_commit
 
         # Build execution metadata fields for task record
         meta_fields = {}
@@ -323,53 +512,45 @@ async def _process_task(task: dict):
             meta_fields["cost_usd"] = _result_meta["cost_usd"]
 
         if _timed_out:
-            stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "timed_out")
-            extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
             await db.transition_task(task_id, "timed_out",
-                                     result_commit=head, error="timed out",
-                                     **meta_fields, **extra)
+                                     result_commit=worktree_head, error="timed out",
+                                     **meta_fields)
             await db.cascade_completion(task_id, "timed_out",
-                                        result_commit=head, error="timed out")
-            log.info("[worker] Task #%d timed out (partial commit=%s, dependents skipped)", task_id, head[:8])
+                                        result_commit=worktree_head, error="timed out")
+            log.info("[worker] Task #%d timed out (worktree=%s, dependents skipped, workspace preserved)",
+                     task_id, worktree_head[:8])
             await _check_governor_trigger(task_id)
         elif _cancelled:
-            stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "cancelled")
-            extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
             await db.transition_task(task_id, "cancelled",
-                                     result_commit=head, error="cancelled",
-                                     **meta_fields, **extra)
+                                     result_commit=worktree_head, error="cancelled",
+                                     **meta_fields)
             await db.cascade_completion(task_id, "cancelled",
-                                        result_commit=head, error="cancelled")
-            log.info("[worker] Task #%d cancelled (dependents skipped)", task_id)
+                                        result_commit=worktree_head, error="cancelled")
+            log.info("[worker] Task #%d cancelled (worktree=%s, workspace preserved)",
+                     task_id, worktree_head[:8])
         elif meta_fields.get("stop_reason") == "max_turns":
             # Agent hit turn limit — exhausted, not completed
             max_turns = job["properties"].get("max_turns", 50)
             turns_used = meta_fields.get("num_turns", "?")
             err = f"hit turn limit ({turns_used}/{max_turns})"
-            stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "exhausted")
-            extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
             await db.transition_task(task_id, "exhausted",
-                                     result_commit=head, error=err,
-                                     **meta_fields, **extra)
+                                     result_commit=worktree_head, error=err,
+                                     **meta_fields)
             await db.cascade_completion(task_id, "exhausted",
-                                        result_commit=head, error=err)
-            log.info("[worker] Task #%d exhausted (%s/%s turns, commit=%s)",
-                     task_id, turns_used, max_turns, head[:8])
+                                        result_commit=worktree_head, error=err)
+            log.info("[worker] Task #%d exhausted (%s/%s turns, worktree=%s, workspace preserved)",
+                     task_id, turns_used, max_turns, worktree_head[:8])
             await _check_governor_trigger(task_id)
         else:
-            await db.transition_task(task_id, "completed",
-                                     result_commit=head,
-                                     **meta_fields)
-            await db.cascade_completion(task_id, "completed",
-                                        result_commit=head)
-            log.info("[worker] Task #%d completed (commit=%s)", task_id, head[:8])
-
-            await _enqueue_cascades(job_id, task_id,
-                                    job_name=job["name"],
-                                    start_commit=start_commit,
-                                    result_commit=head)
-
-            await _check_governor_trigger(task_id)
+            # Integration is the gate to `completed`. Try to fold the agent's
+            # branch into main; on conflict, transition to `failed` and
+            # preserve the workspace for the operator to resolve.
+            await _integrate_or_fail(
+                task_id=task_id, job=job,
+                workspace_dir=workspace_dir, task_branch=task_branch,
+                worktree_head=worktree_head, start_commit=start_commit,
+                meta_fields=meta_fields,
+            )
 
     except Exception as e:
         log.exception("[worker] Task #%d failed: %s", task_id, e)
@@ -381,12 +562,12 @@ async def _process_task(task: dict):
             await db.add_chat_message(session_id, "system", f"Error: {e}")
         except Exception as write_err:
             log.warning("[worker] Task #%d failed to write error response: %s", task_id, write_err)
-        head = git.head_hash(state.PROJECT_DIR)
-        stash_ref = await _maybe_stash_orphan(task_id, start_commit, head, "failed")
-        extra = {"orphan_stash_ref": stash_ref} if stash_ref else {}
-        await db.transition_task(task_id, "failed", error=str(e), **extra)
+        worktree_head = git.head_hash(workspace_dir) or start_commit
+        await db.transition_task(task_id, "failed",
+                                 result_commit=worktree_head, error=str(e))
         try:
-            await db.cascade_completion(task_id, "failed", error=str(e))
+            await db.cascade_completion(task_id, "failed",
+                                        result_commit=worktree_head, error=str(e))
         except Exception as cascade_err:
             log.warning("[worker] Task #%d failed to cascade failure to subordinates: %s", task_id, cascade_err)
         await _check_governor_trigger(task_id)

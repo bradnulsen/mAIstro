@@ -155,7 +155,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     queued_at DATETIME,
     sort_order INTEGER,
     coalesced_id INTEGER REFERENCES tasks(id),
-    orphan_stash_ref TEXT
+    orphan_stash_ref TEXT,
+    -- Per-task git worktree (Phase 3 of workspace isolation).
+    -- Phase 3a only adds the columns; population happens in Phase 3b
+    -- when worker.py creates the worktree on activation.
+    worktree_path TEXT,
+    task_branch TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -257,6 +262,8 @@ SELECT
     COALESCE(t.completed_at, r.completed_at) AS completed_at,
     COALESCE(t.error, r.error) AS error,
     COALESCE(t.orphan_stash_ref, r.orphan_stash_ref) AS orphan_stash_ref,
+    COALESCE(t.worktree_path, r.worktree_path) AS worktree_path,
+    COALESCE(t.task_branch, r.task_branch) AS task_branch,
     -- Markers so consumers can distinguish a real run from a fall-through.
     CASE WHEN t.coalesced_id IS NOT NULL THEN 1 ELSE 0 END AS is_subordinate,
     COALESCE(t.coalesced_id, t.id) AS effective_root_id

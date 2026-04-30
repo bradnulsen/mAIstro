@@ -8,7 +8,8 @@ Each task gets an instance configured via environment variables:
     MAISTRO_JOB_ID                   job slug (e.g. "engineer")
     MAISTRO_JOB_SLUG                 job slug for git authorship
     MAISTRO_JOB_NAME                 display name (e.g. "Engineer")
-    MAISTRO_PROJECT_DIR             absolute path to project directory
+    MAISTRO_PROJECT_DIR             absolute path to project directory (read source for project-wide context)
+    MAISTRO_WORKSPACE_DIR           cwd for the agent's edits and commits (Phase 3a: equals project_dir; Phase 3b: per-task worktree)
     MAISTRO_SESSION_ID              chat session ID for audit logging
     MAISTRO_BACKEND_PORT            backend HTTP port (default 8420)
     MAISTRO_TASK_ID                 current task ID (for provenance)
@@ -32,6 +33,13 @@ JOB_ID = os.environ.get("MAISTRO_JOB_ID", "0")
 JOB_SLUG = os.environ.get("MAISTRO_JOB_SLUG", "unknown")
 JOB_NAME = os.environ.get("MAISTRO_JOB_NAME", "Unknown")
 PROJECT_DIR = os.environ.get("MAISTRO_PROJECT_DIR", ".")
+# Where the agent's edits and commits land. Defaults to PROJECT_DIR for
+# Phase 3a (no behavior change). Phase 3b populates this with a per-task
+# worktree so write-side tools no longer share a tree with the operator
+# or with other tasks. Tools that read project-wide context (list_files,
+# read_file of project files, list_jobs) keep using PROJECT_DIR; tools
+# that write or inspect agent work (git_*, mcp file edits) use WORKSPACE_DIR.
+WORKSPACE_DIR = os.environ.get("MAISTRO_WORKSPACE_DIR", PROJECT_DIR)
 SESSION_ID = os.environ.get("MAISTRO_SESSION_ID", "")
 BACKEND_PORT = int(os.environ.get("MAISTRO_BACKEND_PORT", "8420"))
 TASK_ID = os.environ.get("MAISTRO_TASK_ID", "")
@@ -48,9 +56,12 @@ ALLOWED_DISPATCH_TARGETS = set(int(x) for x in json.loads(_dispatch_raw)) if _di
 # ── Git helpers ──────────────────────────────────────────────
 
 def _run_git(*args) -> tuple[bool, str]:
+    # All git operations target the workspace — that's where the agent's
+    # commits go on the task branch. PROJECT_DIR is the operator's main
+    # checkout, which should never be mutated by the agent.
     result = subprocess.run(
         ["git", *args],
-        capture_output=True, text=True, encoding="utf-8", cwd=PROJECT_DIR,
+        capture_output=True, text=True, encoding="utf-8", cwd=WORKSPACE_DIR,
     )
     ok = result.returncode == 0
     return ok, (result.stdout if ok else result.stderr).strip()
@@ -103,7 +114,7 @@ def tool_git_commit(args: dict) -> str:
     # Stage specified paths
     stage = subprocess.run(
         ["git", "add", "--", *paths],
-        capture_output=True, text=True, encoding="utf-8", cwd=PROJECT_DIR,
+        capture_output=True, text=True, encoding="utf-8", cwd=WORKSPACE_DIR,
     )
     if stage.returncode != 0:
         return f"Error staging files: {stage.stderr.strip()}"
@@ -161,12 +172,15 @@ def tool_list_files(args: dict) -> str:
     pattern = args.get("pattern", "**/*")
     max_files = min(int(args.get("max", 200)), 500)
 
+    # WORKSPACE_DIR so the agent sees their own creates/edits, not the
+    # operator's stale view. At task start the worktree mirrors PROJECT_DIR;
+    # divergence is the agent's own work.
     matches = []
-    full_pattern = os.path.join(PROJECT_DIR, pattern)
+    full_pattern = os.path.join(WORKSPACE_DIR, pattern)
     for fpath in globmod.glob(full_pattern, recursive=True):
         if not os.path.isfile(fpath):
             continue
-        rel = os.path.relpath(fpath, PROJECT_DIR).replace("\\", "/")
+        rel = os.path.relpath(fpath, WORKSPACE_DIR).replace("\\", "/")
         size = os.path.getsize(fpath)
         matches.append(f"{rel} ({size}B)")
         if len(matches) >= max_files:
@@ -181,10 +195,10 @@ def tool_read_file(args: dict) -> str:
     if not path:
         return "Error: path is required"
 
-    # Prevent path traversal outside project directory
-    abs_path = os.path.normpath(os.path.join(PROJECT_DIR, path))
-    if not abs_path.startswith(os.path.normpath(PROJECT_DIR)):
-        return "Error: path escapes project directory"
+    # Prevent path traversal outside the workspace
+    abs_path = os.path.normpath(os.path.join(WORKSPACE_DIR, path))
+    if not abs_path.startswith(os.path.normpath(WORKSPACE_DIR)):
+        return "Error: path escapes workspace directory"
 
     if not os.path.isfile(abs_path):
         return f"Error: file not found: {path}"
