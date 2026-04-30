@@ -223,6 +223,53 @@ async def get_task_diff(task_id: int):
     return git.diff_range(project_dir, start, end)
 
 
+@router.post("/api/tasks/{task_id}/workspace/integrate")
+async def integrate_task_workspace(task_id: int):
+    """Manually retry the merge of a preserved task branch into main.
+
+    Same logic as the worker's automatic integration on `completed`:
+    transparently stashes operator-dirty state, merges --ff-only with
+    --no-ff fallback, restores the stash, with operator-wins rollback
+    on any conflict. On success, the worktree and branch are removed
+    and the task's worktree_path/task_branch columns are cleared so
+    the banner stops showing.
+
+    The task's status is unchanged. The historical fact that the
+    automatic integration failed is preserved in the event log; this
+    is a follow-up action, not a replay of the original execution.
+    Cascading dependencies do not re-fire.
+
+    Useful when the original auto-integration failed because of a
+    transient state the operator has since resolved (cleaned their
+    dirty main, manually rebased the task branch, etc.).
+    """
+    project_dir = require_project()
+    task = await db.get_task_resolved(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    wt_path = task.get("worktree_path")
+    branch = task.get("task_branch")
+    if not wt_path or not branch:
+        raise HTTPException(404, "No preserved workspace for this task")
+    if task.get("status") not in db.NON_SUCCESS_TERMINAL_STATUSES:
+        raise HTTPException(409, "Workspace can only be integrated for a non-success terminal task")
+
+    ok, err = git.integrate_branch(
+        project_dir, branch,
+        stash_label=f"maistro pre-integrate task-{task_id} (manual)",
+    )
+    if not ok:
+        raise HTTPException(409, err)
+
+    git.worktree_remove(project_dir, wt_path, force=True)
+    git.worktree_prune(project_dir)
+    git.branch_delete(project_dir, branch, force=True)
+    owner_id = task.get("effective_root_id") or task["id"]
+    await db.update_task(owner_id, worktree_path=None, task_branch=None)
+    pubsub.notify_queue_changed()
+    return {"status": "integrated", "result_commit": git.head_hash(project_dir)}
+
+
 @router.post("/api/tasks/{task_id}/workspace/discard")
 async def discard_task_workspace(task_id: int):
     """Remove a non-success task's preserved worktree and delete its branch.

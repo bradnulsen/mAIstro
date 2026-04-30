@@ -335,6 +335,86 @@ def reset_hard(cwd: str, target: str) -> bool:
     return result.returncode == 0
 
 
+def current_branch_name(cwd: str) -> str:
+    """Return the current branch name, or 'main' if HEAD is detached/unknown.
+
+    Used to label merge commits and to identify the operator's
+    integration branch when integrating a task branch.
+    """
+    result = run_git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd)
+    if result.returncode == 0:
+        name = result.stdout.strip()
+        if name and name != "HEAD":
+            return name
+    return "main"
+
+
+def integrate_branch(project_dir: str, branch: str, stash_label: str,
+                     merge_message: str | None = None) -> tuple[bool, str]:
+    """Merge `branch` into project_dir's HEAD, transparently handling operator-dirty state.
+
+    Stashes any operator-dirty working tree before the merge and re-applies
+    after. Operator-wins conflict policy: any failure (merge conflict OR
+    post-merge stash conflict) rolls main back to its pre-merge HEAD,
+    restores the stash, and returns (False, error). On success returns
+    (True, "").
+
+    Used by both the worker's automatic integration after a successful
+    task and the manual `POST /workspace/integrate` route. `stash_label`
+    is the message attached to the temporary stash so the operator can
+    find it if rollback restoration ever fails. `merge_message` is the
+    commit message for the no-FF fallback merge; if None, a default is
+    generated.
+    """
+    pre_merge_head = head_hash(project_dir)
+
+    pre_stash_ref = None
+    if is_dirty(project_dir):
+        pre_stash_ref = stash_push_orphan(project_dir, stash_label)
+        if not pre_stash_ref:
+            return False, ("could not stash operator's dirty working tree "
+                           "before merge")
+
+    def _rollback_and_restore() -> None:
+        if pre_merge_head:
+            current = head_hash(project_dir)
+            if current and current != pre_merge_head:
+                reset_hard(project_dir, pre_merge_head)
+        if pre_stash_ref:
+            if stash_apply(project_dir, pre_stash_ref):
+                stash_drop(project_dir, pre_stash_ref)
+            # On apply failure, the stash entry stays in `git stash list`
+            # for manual recovery. Caller can surface a warning.
+
+    main_branch = current_branch_name(project_dir)
+    ok, out = merge_branch(project_dir, branch, ff_only=True)
+    if not ok:
+        msg = merge_message or f"Merge {branch} into {main_branch}"
+        ok, out = merge_branch(project_dir, branch, no_ff=True, message=msg)
+        if not ok:
+            merge_abort(project_dir)
+            _rollback_and_restore()
+            return False, (f"integration conflict — branch '{branch}' could "
+                           f"not merge into {main_branch}:\n{out}")
+
+    # Merge succeeded. Restore the operator's stash on top of integrated main.
+    if pre_stash_ref:
+        if stash_apply(project_dir, pre_stash_ref):
+            stash_drop(project_dir, pre_stash_ref)
+        else:
+            # Operator's edits overlap the integrated commits. Clear the
+            # partial apply, roll the merge back, restore the stash on
+            # the original main.
+            integrated_head = head_hash(project_dir)
+            if integrated_head:
+                reset_hard(project_dir, integrated_head)
+            _rollback_and_restore()
+            return False, ("integration conflict — operator's in-progress "
+                           "working-tree edits overlap with merged commits")
+
+    return True, ""
+
+
 # ── Stash operations (orphan-changes safety net) ───────────
 
 def stash_push_orphan(cwd: str, message: str) -> str | None:

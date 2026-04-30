@@ -67,6 +67,9 @@ export const getTaskDiff = (id) => fetchJSON(`/api/tasks/${id}/diff`)
 
 export const getTaskOutcome = (id) => fetchJSON(`/api/tasks/${id}/outcome`)
 
+export const integrateTaskWorkspace = (id) =>
+  fetchJSON(`/api/tasks/${id}/workspace/integrate`, { method: 'POST' })
+
 export const discardTaskWorkspace = (id) =>
   fetchJSON(`/api/tasks/${id}/workspace/discard`, { method: 'POST' })
 

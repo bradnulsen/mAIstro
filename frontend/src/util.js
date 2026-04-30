@@ -114,6 +114,14 @@ export const STATUS_LABELS = {
   rejected: 'Rejected',
 }
 
+// Terminal states where a per-task worktree is preserved for inspection.
+// Mirror of backend db_tasks.NON_SUCCESS_TERMINAL_STATUSES — these are the
+// only states where the WorkspaceBanner ("preserved workspace, decide
+// what to do") and the workspace-discard endpoint are valid. Active tasks
+// have a worktree but it's mid-flight; completed tasks already cleared
+// it on integration; pending/queued/rejected never had one.
+export const NON_SUCCESS_TERMINAL_STATUSES = ['exhausted', 'failed', 'cancelled', 'interrupted', 'timed_out']
+
 export const TRIGGER_LABELS = {
   manual: 'User',
   commit: 'Commit',
