@@ -163,9 +163,19 @@ def migrate(db_path: str):
     # 4. Rebuild tasks without the moved columns (only if they're still present).
     if moved_cols_present:
         print("  rebuilding tasks table without moved columns")
-        # Foreign-key checks have to be off for the rename dance because
-        # task_events has FK on tasks(id).
+        # Foreign-key checks off for the rename dance: task_events,
+        # task_executions, and chat_sessions all have FK on tasks(id),
+        # which would block ALTER and DROP if enforcement were on.
         cur.execute("PRAGMA foreign_keys = OFF")
+        # CRITICAL: legacy_alter_table=ON tells SQLite NOT to rewrite FK
+        # references in dependent tables when we rename `tasks` to
+        # `tasks_old`. With the modern default (OFF), task_events and
+        # friends end up with FKs pointing at "tasks_old", and once we
+        # DROP TABLE tasks_old at the end of this block, all subsequent
+        # inserts to those tables fail with `no such table: main.tasks_old`.
+        # See recover_tasks_old_fk.py for the patch-script that fixes
+        # any DB that got migrated before this safeguard was added.
+        cur.execute("PRAGMA legacy_alter_table = ON")
 
         # Drop the view + triggers that reference tasks columns; init_db
         # recreates them against the new schema on next backend startup.
@@ -211,6 +221,7 @@ def migrate(db_path: str):
         # Drop it so init_db doesn't try to re-create against a missing column.
         cur.execute("DROP INDEX IF EXISTS idx_tasks_completed_at")
 
+        cur.execute("PRAGMA legacy_alter_table = OFF")
         cur.execute("PRAGMA foreign_keys = ON")
         print("  tasks rebuilt")
 
