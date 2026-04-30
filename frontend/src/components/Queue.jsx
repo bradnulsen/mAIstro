@@ -948,11 +948,11 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
         <OrphanStashBanner taskId={item.id} sha={detail.orphan_stash_ref} onChange={onUpdate} />
       )}
 
-      {detail.worktree_path && NON_SUCCESS_TERMINAL_STATUSES.includes(detail.status) && (
+      {item.worktree_path && NON_SUCCESS_TERMINAL_STATUSES.includes(item.status) && (
         <WorkspaceBanner
           taskId={item.id}
-          workspacePath={detail.worktree_path}
-          branch={detail.task_branch}
+          workspacePath={item.worktree_path}
+          branch={item.task_branch}
           onChange={onUpdate}
         />
       )}
