@@ -241,6 +241,14 @@ async def discard_task_workspace(task_id: int):
     branch = task.get("task_branch")
     if not wt_path:
         raise HTTPException(404, "No preserved workspace for this task")
+    # Discard is only safe for non-success terminals. Active tasks have
+    # their worktree as the CLI subprocess's cwd; pulling it out from
+    # under a running agent corrupts mid-task. Completed tasks already
+    # cleared the worktree on integration; rejected/pending/queued never
+    # had one. The view fall-through can also surface the root's path on
+    # a subordinate, so check the resolved status (the root's, for subs).
+    if task.get("status") not in db.NON_SUCCESS_TERMINAL_STATUSES:
+        raise HTTPException(409, "Workspace can only be discarded for a non-success terminal task")
     if wt_path:
         git.worktree_remove(project_dir, wt_path, force=True)
         git.worktree_prune(project_dir)

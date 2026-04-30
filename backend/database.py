@@ -42,6 +42,7 @@ from backend.db_jobs import (
 # ── Tasks (CRUD, state machine, coalescing) ────────────────
 from backend.db_tasks import (
     LEGAL_TRANSITIONS,
+    NON_SUCCESS_TERMINAL_STATUSES,
     PRE_EXECUTION_STATUSES,
     PRE_EXECUTION_STATUSES_SQL,
     TERMINAL_STATUSES,

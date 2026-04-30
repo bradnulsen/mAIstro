@@ -331,6 +331,11 @@ LEGAL_TRANSITIONS: set[tuple[str, str]] = {
 }
 
 TERMINAL_STATUSES = frozenset({"completed", "exhausted", "failed", "cancelled", "interrupted", "timed_out", "rejected"})
+# Terminal states where a per-task worktree is preserved for inspection.
+# Excludes `completed` (worktree is removed after integration) and
+# `rejected` (never executed, no worktree). Used to gate workspace-discard
+# affordances so an active or already-cleaned task can't have its worktree yanked.
+NON_SUCCESS_TERMINAL_STATUSES = frozenset({"exhausted", "failed", "cancelled", "interrupted", "timed_out"})
 
 # Pre-execution: still in the queue, not yet running. Coalesce / merge / split /
 # uncoalesce / restore are all "pending-or-queued column" operations.

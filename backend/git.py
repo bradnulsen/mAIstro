@@ -280,10 +280,21 @@ def branch_delete(project_dir: str, branch: str, force: bool = False) -> bool:
     return result.returncode == 0
 
 
-def is_ancestor(cwd: str, commit: str, ref: str) -> bool:
-    """Return True if `commit` is an ancestor of (or equal to) `ref`."""
+def is_ancestor(cwd: str, commit: str, ref: str) -> bool | None:
+    """Return True if `commit` is an ancestor of (or equal to) `ref`.
+
+    Returns False if `commit` is definitively not an ancestor (git exit 1),
+    None if git couldn't answer (exit 128 — detached HEAD with missing ref,
+    unknown commit, broken repo). Callers that lump None into False risk
+    silently dropping commits the hook should have processed; check
+    explicitly when the distinction matters.
+    """
     result = run_git("merge-base", "--is-ancestor", commit, ref, cwd=cwd)
-    return result.returncode == 0
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
 
 
 def merge_branch(project_dir: str, source_branch: str,
@@ -311,6 +322,17 @@ def merge_branch(project_dir: str, source_branch: str,
 def merge_abort(project_dir: str):
     """Abort an in-progress merge and reset the working tree."""
     run_git("merge", "--abort", cwd=project_dir)
+
+
+def reset_hard(cwd: str, target: str) -> bool:
+    """Reset the index and working tree to `target`, discarding all local changes.
+
+    Destructive — used by the integration path to roll back a merge or
+    clear a partial stash apply. Caller is responsible for ensuring any
+    state that needs to survive the reset has been stashed first.
+    """
+    result = run_git("reset", "--hard", target, cwd=cwd)
+    return result.returncode == 0
 
 
 # ── Stash operations (orphan-changes safety net) ───────────

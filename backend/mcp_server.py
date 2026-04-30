@@ -127,45 +127,47 @@ def tool_git_commit(args: dict) -> str:
     return out
 
 
-def tool_git_branch_create(args: dict) -> str:
-    """Create a new branch from a specified base."""
-    name = (args.get("name") or "").strip()
-    base = (args.get("base") or "HEAD").strip()
-    if not name:
-        return "Error: branch name is required"
-
-    # Enforce naming convention: <job-slug>/<description>
-    if not name.startswith(f"{JOB_SLUG}/"):
-        name = f"{JOB_SLUG}/{name}"
-
-    ok, out = _run_git("branch", name, base)
-    if not ok:
-        return f"Error: {out}"
-    return f"Created branch '{name}' from '{base}'"
-
-
-def tool_git_branch_switch(args: dict) -> str:
-    """Switch the working directory to a named branch."""
-    name = (args.get("name") or "").strip()
-    if not name:
-        return "Error: branch name is required"
-
-    ok, out = _run_git("checkout", name)
-    if not ok:
-        return f"Error: {out}"
-    return f"Switched to branch '{name}'"
-
-
-def tool_git_branch_merge(args: dict) -> str:
-    """Merge a source branch into the current branch."""
-    source = (args.get("source") or "").strip()
-    if not source:
-        return "Error: source branch is required"
-
-    ok, out = _run_git("merge", source)
-    if not ok:
-        return f"Merge conflict or error:\n{out}"
-    return out or f"Merged '{source}' into current branch"
+# Branch tools disabled while task workspace isolation is fresh.
+# - git_branch_switch is unsafe inside a worktree: switching the worktree
+#   off `<job-slug>/task-<id>` orphans the agent's commits from the
+#   worker's later integration step (which merges that specific branch).
+# - git_branch_create / git_branch_merge are not currently used by agents
+#   and clutter main's branch namespace from inside the worktree.
+# Re-enable selectively if a real workflow needs them; revisit the
+# integration story for git_branch_switch first.
+#
+# def tool_git_branch_create(args: dict) -> str:
+#     """Create a new branch from a specified base."""
+#     name = (args.get("name") or "").strip()
+#     base = (args.get("base") or "HEAD").strip()
+#     if not name:
+#         return "Error: branch name is required"
+#     if not name.startswith(f"{JOB_SLUG}/"):
+#         name = f"{JOB_SLUG}/{name}"
+#     ok, out = _run_git("branch", name, base)
+#     if not ok:
+#         return f"Error: {out}"
+#     return f"Created branch '{name}' from '{base}'"
+#
+# def tool_git_branch_switch(args: dict) -> str:
+#     """Switch the working directory to a named branch."""
+#     name = (args.get("name") or "").strip()
+#     if not name:
+#         return "Error: branch name is required"
+#     ok, out = _run_git("checkout", name)
+#     if not ok:
+#         return f"Error: {out}"
+#     return f"Switched to branch '{name}'"
+#
+# def tool_git_branch_merge(args: dict) -> str:
+#     """Merge a source branch into the current branch."""
+#     source = (args.get("source") or "").strip()
+#     if not source:
+#         return "Error: source branch is required"
+#     ok, out = _run_git("merge", source)
+#     if not ok:
+#         return f"Merge conflict or error:\n{out}"
+#     return out or f"Merged '{source}' into current branch"
 
 
 def tool_list_files(args: dict) -> str:
@@ -378,52 +380,8 @@ TOOLS = [
             "required": ["message"],
         },
     },
-    {
-        "name": "git_branch_create",
-        "description": f"Create a new branch. Enforces naming convention: {JOB_ID}/<description>.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Branch name (job-id prefix is added automatically if missing)",
-                },
-                "base": {
-                    "type": "string",
-                    "description": "Base ref to branch from (default: HEAD)",
-                },
-            },
-            "required": ["name"],
-        },
-    },
-    {
-        "name": "git_branch_switch",
-        "description": "Switch the working directory to a named branch.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Branch name to switch to",
-                },
-            },
-            "required": ["name"],
-        },
-    },
-    {
-        "name": "git_branch_merge",
-        "description": "Merge a source branch into the current branch.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "source": {
-                    "type": "string",
-                    "description": "Branch name to merge from",
-                },
-            },
-            "required": ["source"],
-        },
-    },
+    # git_branch_create / git_branch_switch / git_branch_merge are
+    # disabled — see the comment block above the tool functions.
     {
         "name": "list_files",
         "description": "List files in the project matching a glob pattern.",
@@ -500,9 +458,7 @@ TOOL_HANDLERS = {
     "git_log": tool_git_log,
     "git_diff": tool_git_diff,
     "git_commit": tool_git_commit,
-    "git_branch_create": tool_git_branch_create,
-    "git_branch_switch": tool_git_branch_switch,
-    "git_branch_merge": tool_git_branch_merge,
+    # Branch tools disabled — see comment block above tool functions.
     "list_files": tool_list_files,
     "read_file": tool_read_file,
     "list_jobs": tool_list_jobs,

@@ -47,7 +47,7 @@ async def run_task(
     manifest = await build_job_manifest()
     resume_session_id = task_record.get("resume_session_id") if task_record else None
 
-    system_prompt = build_dispatch_system_prompt(job, project_dir)
+    system_prompt = build_dispatch_system_prompt(job, workspace)
     user_prompt = build_user_prompt(job, project_dir, queue_context, manifest)
 
     log.info("[task:%d] System: %d chars, User: %d chars%s",
@@ -105,7 +105,7 @@ You are an autonomous agent in mAistro, a development engine where tasks coordin
 Your job is {job_name}.
 
 ## Execution Mode
-You are running in HEADLESS DISPATCH mode in {project_dir}. There is no human in the loop.
+You are running in HEADLESS DISPATCH mode. Your working directory is {cwd} — a dedicated git worktree for this task on its own branch. Edits and commits made here are integrated into the operator's main branch when the task completes successfully. There is no human in the loop.
 - Act autonomously — do not ask questions or wait for confirmation.
 - If ambiguous, use your best judgment and document your reasoning in commit messages.
 - Doing nothing is a valid outcome. If the triggering context doesn't require changes within your scope, say so briefly and stop. Not every trigger demands action.
@@ -117,10 +117,10 @@ You are running in HEADLESS DISPATCH mode in {project_dir}. There is no human in
 - Documentation files should be first-principle, as-is representations of current state — not task lists or work-in-progress notes. Reasoning and work context belong in commit messages."""
 
 
-def build_dispatch_system_prompt(job: dict, project_dir: str) -> str:
+def build_dispatch_system_prompt(job: dict, cwd: str) -> str:
     return DISPATCH_SYSTEM_PROMPT.format(
         job_name=job["name"],
-        project_dir=project_dir,
+        cwd=cwd,
     )
 
 

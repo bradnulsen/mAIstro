@@ -174,6 +174,9 @@ def migrate(db_path: str):
         cur.execute("DROP TRIGGER IF EXISTS tasks_depth1_update_target")
         cur.execute("DROP TRIGGER IF EXISTS tasks_depth1_update_self")
 
+        # If a prior run was interrupted between the rename and the drop,
+        # tasks_old will still exist. Clean it up before renaming.
+        cur.execute("DROP TABLE IF EXISTS tasks_old")
         cur.execute("ALTER TABLE tasks RENAME TO tasks_old")
         cur.execute("""
             CREATE TABLE tasks (

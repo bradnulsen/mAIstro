@@ -81,19 +81,29 @@ async def _integrate_or_fail(task_id: int, job: dict,
                              meta_fields: dict):
     """Atomically gate `completed` on successful integration into main.
 
-    The architect's note in the workspace-isolation proposal: integration
-    is the gate to `completed`, not a follow-up to it. The terminal
-    transition that records `completed` only fires after the merge succeeds;
-    otherwise the target is `failed` with the conflict captured and the
-    workspace preserved for inspection.
+    Integration policy: the operator's main checkout is sacred. Any
+    integration conflict — agent's branch vs. main, or operator's
+    in-progress dirty edits vs. the integrated result — fails the task
+    loudly. Operator state is restored to exactly what it was before
+    integration started; the agent's work stays on the preserved task
+    branch in the worktree for manual integration.
+
+    The four cases:
+      - Operator clean, no conflict       → completed, worktree removed
+      - Operator dirty, no conflict       → stash, merge, unstash,
+                                              completed, worktree removed
+      - Operator clean, agent conflicts   → failed, main unchanged,
+                                              worktree preserved
+      - Operator dirty, any conflict      → failed, merge rolled back,
+                                              stash restored, worktree
+                                              preserved
     """
     project_dir = state.PROJECT_DIR
     job_id = job["id"]
 
-    # No commits → nothing to integrate. The agent ran but produced no
-    # durable output. Treat as failed with a clear error so the operator
-    # knows the agent didn't commit; preserve the workspace so they can
-    # see what (if anything) was left dirty in the worktree.
+    # No commits → nothing to integrate. Mark failed with a clear error
+    # so the operator knows the agent didn't commit; preserve the
+    # workspace so they can see what (if anything) was left dirty.
     if not start_commit or worktree_head == start_commit:
         err = "agent finished without committing"
         await db.transition_task(task_id, "failed",
@@ -106,6 +116,54 @@ async def _integrate_or_fail(task_id: int, job: dict,
         await _check_governor_trigger(task_id)
         return
 
+    pre_merge_head = git.head_hash(project_dir)
+
+    # Stash any operator-dirty state so the merge has a clean working tree.
+    pre_stash_ref = None
+    if git.is_dirty(project_dir):
+        pre_stash_ref = git.stash_push_orphan(
+            project_dir, f"maistro pre-integrate task-{task_id}"
+        )
+        if not pre_stash_ref:
+            err = ("integration aborted: could not stash operator's dirty "
+                   "working tree before merge")
+            await db.transition_task(task_id, "failed",
+                                     result_commit=worktree_head,
+                                     error=err, **meta_fields)
+            await db.cascade_completion(task_id, "failed",
+                                        result_commit=worktree_head, error=err)
+            log.warning("[worker] Task #%d: pre-integrate stash failed — marked failed, workspace preserved",
+                        task_id)
+            await _check_governor_trigger(task_id)
+            return
+
+    async def _fail_and_restore(error_message: str):
+        """Roll back any merge, restore operator's stash, mark failed.
+
+        The agent's commits remain on the preserved task branch in the
+        worktree; the operator's main and working tree end up exactly
+        where they were before the integration step started.
+        """
+        # If a merge created commits on main, undo them. main goes back
+        # to pre_merge_head; the agent's commits live on the task branch
+        # untouched. If no merge happened (FF/no-FF both refused), this
+        # is effectively a no-op.
+        if pre_merge_head:
+            current_head = git.head_hash(project_dir)
+            if current_head and current_head != pre_merge_head:
+                git.reset_hard(project_dir, pre_merge_head)
+        if pre_stash_ref:
+            _restore_pre_integrate_stash(project_dir, pre_stash_ref, task_id)
+        await db.transition_task(task_id, "failed",
+                                 result_commit=worktree_head,
+                                 error=error_message, **meta_fields)
+        await db.cascade_completion(task_id, "failed",
+                                    result_commit=worktree_head,
+                                    error=error_message)
+        log.warning("[worker] Task #%d integration failed — workspace preserved at %s "
+                    "on branch '%s'", task_id, workspace_dir, task_branch)
+        await _check_governor_trigger(task_id)
+
     main_branch = _detect_main_branch(project_dir)
     # Try fast-forward first (clean linear history when main hasn't moved).
     ok, out = git.merge_branch(project_dir, task_branch, ff_only=True)
@@ -114,20 +172,38 @@ async def _integrate_or_fail(task_id: int, job: dict,
         msg = f"Merge task #{task_id} ({job['name']}) into {main_branch}"
         ok, out = git.merge_branch(project_dir, task_branch, no_ff=True, message=msg)
         if not ok:
+            # Real merge conflict between agent's branch and main.
             git.merge_abort(project_dir)
-            err = f"integration failed: {out}"
-            await db.transition_task(task_id, "failed",
-                                     result_commit=worktree_head,
-                                     error=err, **meta_fields)
-            await db.cascade_completion(task_id, "failed",
-                                        result_commit=worktree_head, error=err)
-            log.warning("[worker] Task #%d integration failed (merge conflict?) — workspace preserved at %s",
-                        task_id, workspace_dir)
-            await _check_governor_trigger(task_id)
+            await _fail_and_restore(
+                f"integration conflict — agent's branch '{task_branch}' could "
+                f"not merge into {main_branch}:\n{out}"
+            )
             return
 
-    # Integration succeeded. The new main HEAD is the durable record.
+    # Merge succeeded. New main HEAD is the durable record (for now).
     integrated_head = git.head_hash(project_dir) or worktree_head
+
+    # Restore operator's pre-integrate stash on top of the integrated main.
+    # If their dirty edits overlap with the agent's commits, fail loudly:
+    # roll back the merge, restore their state to exactly what it was,
+    # preserve the worktree so they can manually integrate.
+    if pre_stash_ref:
+        if git.stash_apply(project_dir, pre_stash_ref):
+            git.stash_drop(project_dir, pre_stash_ref)
+        else:
+            # Partial apply left conflict markers in the working tree;
+            # clear them so the upcoming reset_hard in _fail_and_restore
+            # has a clean slate to roll back from. The stash entry is
+            # still in the list — _fail_and_restore re-applies it after
+            # rolling main back to pre_merge_head.
+            git.reset_hard(project_dir, integrated_head)
+            await _fail_and_restore(
+                f"integration conflict — operator's in-progress working-tree "
+                f"edits overlap with agent's commits. Workspace preserved on "
+                f"branch '{task_branch}' for manual integration."
+            )
+            return
+
     await db.transition_task(task_id, "completed",
                              result_commit=integrated_head,
                              **meta_fields)
@@ -146,6 +222,23 @@ async def _integrate_or_fail(task_id: int, job: dict,
                             start_commit=start_commit,
                             result_commit=integrated_head)
     await _check_governor_trigger(task_id)
+
+
+def _restore_pre_integrate_stash(project_dir: str, stash_ref: str, task_id: int):
+    """Re-apply and drop the stash captured before a failed integration.
+
+    Called from the rollback path after main has been reset to its
+    pre-merge state. Apply should succeed cleanly because main is back
+    to exactly where the stash was created from. On the rare apply
+    failure, the stash is left in `git stash list` and a warning logged
+    so the operator can recover via `git stash apply`.
+    """
+    if git.stash_apply(project_dir, stash_ref):
+        git.stash_drop(project_dir, stash_ref)
+    else:
+        log.warning("[worker] Task #%d: pre-integrate stash %s could not be re-applied "
+                    "after rollback — left in `git stash list` for manual recovery",
+                    task_id, stash_ref[:8])
 
 
 async def _maybe_stash_orphan(task_id: int, start_commit: str | None,
@@ -256,7 +349,9 @@ async def _sweep_stale():
     Worktrees belonging to interrupted tasks are preserved (operator can
     inspect what the agent left). `git worktree prune` clears registry
     entries for directories that were manually removed while the backend
-    was down.
+    was down. `_sweep_orphan_worktrees` removes worktree directories whose
+    tasks shouldn't have one — covers the activation race where the
+    backend crashed between `worktree_add` and the DB transition.
     """
     if not db.DB_PATH:
         return
@@ -268,6 +363,47 @@ async def _sweep_stale():
             git.worktree_prune(state.PROJECT_DIR)
         except Exception:
             log.warning("[worker] worktree prune on startup failed")
+        try:
+            await _sweep_orphan_worktrees()
+        except Exception:
+            log.exception("[worker] orphan-worktree sweep failed")
+
+
+async def _sweep_orphan_worktrees():
+    """Remove worktree dirs whose task is missing or shouldn't have one.
+
+    Closes the activation race: if the backend crashed between
+    `worktree_add` and the `transition_task(active, worktree_path=...)`
+    write, the directory is on disk but no task references it. Also
+    catches manual/test detritus and worktrees left after a task was
+    deleted directly from the DB.
+    """
+    worktrees_dir = os.path.join(state.PROJECT_DIR, ".maistro", "worktrees")
+    if not os.path.isdir(worktrees_dir):
+        return
+    for entry in os.listdir(worktrees_dir):
+        if not entry.startswith("task-"):
+            continue
+        try:
+            task_id = int(entry[len("task-"):])
+        except ValueError:
+            continue
+        task = await db.get_task(task_id)
+        # Keep worktrees for active tasks (in-flight) and non-success
+        # terminals (preserved for inspection).
+        if task and task.get("status") in db.NON_SUCCESS_TERMINAL_STATUSES | {"active"}:
+            continue
+        full_path = os.path.join(worktrees_dir, entry)
+        log.warning("[worker] Sweeping orphan worktree task-%d (status=%s)",
+                    task_id, task.get("status") if task else "MISSING")
+        _force_remove_worktree(state.PROJECT_DIR, full_path)
+        # Best-effort branch cleanup if we can resolve the slug.
+        if task:
+            job = await db.get_job(task["job_id"])
+            if job:
+                git.branch_delete(state.PROJECT_DIR,
+                                  _task_branch_for(job["slug"], task_id),
+                                  force=True)
 
 
 async def _loop():
