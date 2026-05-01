@@ -353,9 +353,16 @@ export default function Queue() {
     return s === 'queued' || (s === 'pending_approval' && i.queued_at)
   }))
   const activeItems = items.filter(i => getStatus(i) === 'running')
-  const resolvedItems = items
-    .filter(i => TERMINAL_STATES.has(getStatus(i)))
-    .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
+  // Two-stage Resolved column: tasks with a preserved worktree (the
+  // operator still has to decide Integrate vs. Discard) sit on top,
+  // then everything else by completed_at descending. Keeps actionable
+  // work visible without filtering anything out.
+  const terminalItems = items.filter(i => TERMINAL_STATES.has(getStatus(i)))
+  const byCompletedDesc = (a, b) => (b.completed_at || '').localeCompare(a.completed_at || '')
+  const resolvedItems = [
+    ...terminalItems.filter(i => i.worktree_path).sort(byCompletedDesc),
+    ...terminalItems.filter(i => !i.worktree_path).sort(byCompletedDesc),
+  ]
 
   const selectedStatus = selected ? getStatus(selected) : null
   const selectedIsPreExec = selected && isPreExecution(selected)
