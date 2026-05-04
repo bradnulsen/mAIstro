@@ -14,7 +14,7 @@ const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', mc
 export default function App() {
   const [project, setProject] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState(VIEWS.dashboard)
+  const [view, setView] = useState(VIEWS.queue)
   const [jobs, setJobs] = useState([])
   const [autoQueue, setAutoQueue] = useState(false)
   const [governorBadge, setGovernorBadge] = useState(0)
@@ -69,15 +69,15 @@ export default function App() {
       <nav className="rail">
         <div className="rail-logo" onClick={() => { setProject(null); setJobs([]) }} title="Switch project">⬡</div>
         <button
-          className={`rail-icon ${view === VIEWS.dashboard ? 'active' : ''}`}
-          onClick={() => setView(VIEWS.dashboard)}
-          title="Dashboard"
-        >⊞</button>
-        <button
           className={`rail-icon ${view === VIEWS.queue ? 'active' : ''}`}
           onClick={() => setView(VIEWS.queue)}
           title="Dispatch"
         >▶</button>
+        <button
+          className={`rail-icon ${view === VIEWS.dashboard ? 'active' : ''}`}
+          onClick={() => setView(VIEWS.dashboard)}
+          title="Dashboard"
+        >⊞</button>
         <button
           className={`rail-icon ${view === VIEWS.feed ? 'active' : ''}`}
           onClick={() => setView(VIEWS.feed)}
@@ -115,7 +115,7 @@ export default function App() {
       </nav>
 
       <div className="main-area">
-        <CommandBar jobs={jobs} onNavigate={setView} refreshJobs={refreshJobs} autoQueue={autoQueue} setAutoQueue={setAutoQueue} />
+        <CommandBar project={project} jobs={jobs} onNavigate={setView} refreshJobs={refreshJobs} autoQueue={autoQueue} setAutoQueue={setAutoQueue} />
 
         {view === VIEWS.feed && <Feed />}
         {view === VIEWS.tasks && <Tasks jobs={jobs} onRefresh={refreshJobs} />}
@@ -130,7 +130,7 @@ export default function App() {
   )
 }
 
-function CommandBar({ jobs, onNavigate, refreshJobs, autoQueue, setAutoQueue }) {
+function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAutoQueue }) {
   const [popout, setPopout] = useState(null) // job id
   const [context, setContext] = useState('')
   const [dispatching, setDispatching] = useState(false)
@@ -184,6 +184,11 @@ function CommandBar({ jobs, onNavigate, refreshJobs, autoQueue, setAutoQueue }) 
 
   return (
     <div className="command-bar">
+      {project && (
+        <div className="command-bar-project" title={project.path}>
+          {project.name}
+        </div>
+      )}
       <div className="command-bar-jobs">
         {jobs.map(j => {
           const p = j.properties || {}
