@@ -57,8 +57,16 @@ async def open_project(req: OpenProjectRequest):
         state.PROJECT_DIR = path
     finally:
         state._switching = False
+    added_ignore = git.ensure_gitignore(path)
+    # Bootstrap before installing the hook so the initial commit doesn't fire it.
+    # ensure_initial_commit handles fresh repos; for existing repos that just
+    # had .gitignore amended, commit that change too so project-open never
+    # leaves the working tree dirty (which would trip the integration path's
+    # stash flow on the next merge).
+    git.ensure_initial_commit(path)
+    if added_ignore:
+        git.commit_gitignore_additions_if_safe(path, added_ignore)
     git.install_post_commit_hook(path)
-    git.ensure_gitignore(path)
     appstate.touch_project(path)
     worker.notify()
 

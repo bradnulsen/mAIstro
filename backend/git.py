@@ -28,6 +28,86 @@ def ensure_repo(project_dir: str):
         run_git("init", cwd=project_dir)
 
 
+def ensure_initial_commit(project_dir: str) -> str | None:
+    """Bootstrap an initial commit on a fresh repo so HEAD is non-null.
+
+    The worktree-based dispatch path branches every task off the project's
+    main HEAD; a repo from a bare `git init` has no commits, so worktree
+    creation fails before the agent ever runs. Bootstrap one empty commit
+    (or one that captures `.gitignore` if it was just written) so the
+    platform's "every task branches from a real ref" invariant always
+    holds. Author is mAistro to keep provenance clear.
+
+    Idempotent: returns None if HEAD already exists.
+    """
+    if head_hash(project_dir) is not None:
+        return None
+    gitignore = os.path.join(project_dir, ".gitignore")
+    base = ["-c", "user.name=mAistro", "-c", "user.email=maistro@local"]
+    if os.path.isfile(gitignore):
+        run_git("add", ".gitignore", cwd=project_dir)
+        result = run_git(*base, "commit", "-m", "Initialize mAistro project", cwd=project_dir)
+    else:
+        result = run_git(*base, "commit", "--allow-empty", "-m", "Initialize mAistro project", cwd=project_dir)
+    if result.returncode != 0:
+        return None
+    return head_hash(project_dir)
+
+
+def commit_gitignore_additions_if_safe(project_dir: str, entries: list[str]) -> bool:
+    """Commit `.gitignore` if (and only if) we just appended `entries` to it
+    and that's the *only* change in the working tree.
+
+    Project-open's `ensure_gitignore` may have appended platform entries to
+    an existing tracked `.gitignore` in a repo that already has commits.
+    That dirties the tree and trips the integration path's stash flow
+    later. Resolve by committing the change atomically with project-open
+    when it's clearly ours, or leaving it alone when the operator has
+    other in-flight changes (we don't know what they want to do with the
+    tree, so we don't touch it).
+
+    Returns True if a commit was made.
+    """
+    head = head_hash(project_dir)
+    if head is None:
+        return False  # ensure_initial_commit handles the no-HEAD case
+    # Inspect the working tree. We only auto-commit when .gitignore is the
+    # one and only dirty path — anything else is operator-owned.
+    full_status = run_git("status", "--porcelain", cwd=project_dir).stdout
+    dirty_lines = [l for l in full_status.splitlines() if l.strip()]
+    if len(dirty_lines) != 1:
+        if dirty_lines:
+            # Operator has other in-flight work; leave .gitignore alone too
+            return False
+        return False
+    line = dirty_lines[0]
+    # Porcelain format: "XY path"; we want the path portion
+    if len(line) < 4:
+        return False
+    path = line[3:].strip()
+    if os.path.normpath(path) != ".gitignore":
+        return False
+    # Verify the only diff is appending the entries we just added —
+    # if the operator was simultaneously editing .gitignore for their
+    # own reasons, refuse to commit on their behalf.
+    diff = run_git("diff", "--", ".gitignore", cwd=project_dir).stdout
+    added_lines = [
+        l[1:].strip() for l in diff.splitlines()
+        if l.startswith("+") and not l.startswith("+++")
+    ]
+    if not added_lines:
+        return False
+    expected = {e.strip() for e in entries if e.strip()}
+    actual_added = {l for l in added_lines if l}
+    if not actual_added.issubset(expected):
+        return False  # Operator is also editing .gitignore — don't touch it
+    base = ["-c", "user.name=mAistro", "-c", "user.email=maistro@local"]
+    run_git("add", ".gitignore", cwd=project_dir)
+    result = run_git(*base, "commit", "-m",
+                     "Add mAistro entries to .gitignore", cwd=project_dir)
+    return result.returncode == 0
+
+
 def install_post_commit_hook(project_dir: str, port: int = 8420):
     """Install the maistro post-commit hook."""
     hooks_dir = os.path.join(project_dir, ".git", "hooks")
@@ -47,8 +127,13 @@ curl -s -X POST http://localhost:{port}/api/hooks/post-commit \\
         pass
 
 
-def ensure_gitignore(project_dir: str, entries: list[str] | None = None):
-    """Add entries to .gitignore if not already present."""
+def ensure_gitignore(project_dir: str, entries: list[str] | None = None) -> list[str]:
+    """Add entries to .gitignore if not already present.
+
+    Returns the list of entries that were appended (empty if the file
+    already had everything). Caller decides whether to commit the change
+    via `commit_gitignore_additions_if_safe`.
+    """
     if entries is None:
         entries = [".maistro/", ".claude/"]
     gitignore = os.path.join(project_dir, ".gitignore")
@@ -61,6 +146,7 @@ def ensure_gitignore(project_dir: str, entries: list[str] | None = None):
         with open(gitignore, "a") as f:
             for entry in to_add:
                 f.write(f"\n{entry}\n")
+    return to_add
 
 
 # ── Log parsing ─────────────────────────────────────────────
@@ -280,6 +366,13 @@ def branch_delete(project_dir: str, branch: str, force: bool = False) -> bool:
     return result.returncode == 0
 
 
+def branch_exists(project_dir: str, branch: str) -> bool:
+    """Return True if a local branch by this name exists."""
+    result = run_git("show-ref", "--verify", "--quiet",
+                     f"refs/heads/{branch}", cwd=project_dir)
+    return result.returncode == 0
+
+
 def is_ancestor(cwd: str, commit: str, ref: str) -> bool | None:
     """Return True if `commit` is an ancestor of (or equal to) `ref`.
 
@@ -299,17 +392,25 @@ def is_ancestor(cwd: str, commit: str, ref: str) -> bool | None:
 
 def merge_branch(project_dir: str, source_branch: str,
                  ff_only: bool = False, no_ff: bool = False,
-                 message: str | None = None) -> tuple[bool, str]:
+                 message: str | None = None,
+                 strategy_option: str | None = None) -> tuple[bool, str]:
     """Merge source_branch into the current branch of project_dir.
 
     Returns (ok, output_or_error). The caller is expected to have ensured
     project_dir's HEAD is on the integration target (typically main/master).
+
+    `strategy_option` maps to git's -X flag: `theirs` resolves any conflict
+    in source_branch's favor; `ours` resolves in the integration target's
+    favor. Useful for the "Take task's version" / "Keep mine" buttons in
+    the workspace banner. Has no effect on FF merges (no conflict possible).
     """
     args = ["merge"]
     if ff_only:
         args.append("--ff-only")
     if no_ff:
         args.append("--no-ff")
+    if strategy_option:
+        args.extend(["-X", strategy_option])
     if message:
         args.extend(["-m", message])
     args.append(source_branch)
@@ -349,8 +450,56 @@ def current_branch_name(cwd: str) -> str:
     return "main"
 
 
+def _format_git_conflict_paths(detail: str) -> tuple[list[str], list[str]]:
+    """Extract conflicting paths and any non-boilerplate residual lines from git stderr.
+
+    Recognises the two repetitive shapes git produces during failed merges
+    and stash applies — `<path>: already exists, no checkout` (untracked
+    overwrite) and `CONFLICT (...): ... <path>` (content overlap) — so the
+    operator-facing error can show one line per path instead of git's
+    raw output. Returns (sorted_unique_paths, other_lines). Boilerplate
+    trailers like "Automatic merge failed; ..." are dropped.
+    """
+    if not detail:
+        return [], []
+
+    paths: list[str] = []
+    other: list[str] = []
+    boilerplate = (
+        "error: could not restore untracked files from stash",
+        "Automatic merge failed; fix conflicts and then commit the result.",
+    )
+
+    for raw in detail.splitlines():
+        line = raw.strip()
+        if not line or line in boilerplate:
+            continue
+        if line.endswith("already exists, no checkout"):
+            paths.append(line[: -len("already exists, no checkout")].rstrip(" :"))
+            continue
+        if line.startswith("CONFLICT") and " in " in line:
+            # CONFLICT (content): Merge conflict in <path>
+            # CONFLICT (modify/delete): <path> deleted in <ref>
+            paths.append(line.rsplit(" in ", 1)[1].strip())
+            continue
+        other.append(line)
+
+    return sorted(set(paths)), other
+
+
+def _format_path_list(paths: list[str], limit: int = 12) -> str:
+    if not paths:
+        return ""
+    if len(paths) <= limit:
+        return "\n".join(f"  {p}" for p in paths)
+    shown = "\n".join(f"  {p}" for p in paths[:limit])
+    return f"{shown}\n  …and {len(paths) - limit} more"
+
+
 def integrate_branch(project_dir: str, branch: str, stash_label: str,
-                     merge_message: str | None = None) -> tuple[bool, str]:
+                     merge_message: str | None = None,
+                     strategy: str = "default",
+                     dedup_label: str | None = None) -> tuple[bool, str]:
     """Merge `branch` into project_dir's HEAD, transparently handling operator-dirty state.
 
     Stashes any operator-dirty working tree before the merge and re-applies
@@ -365,7 +514,26 @@ def integrate_branch(project_dir: str, branch: str, stash_label: str,
     find it if rollback restoration ever fails. `merge_message` is the
     commit message for the no-FF fallback merge; if None, a default is
     generated.
+
+    `strategy` selects conflict resolution behaviour:
+      - "default": no -X flag; conflicts fail the integration (operator-wins)
+      - "theirs":  -X theirs; conflicts resolve in the task branch's favour
+                   (operator says "use the agent's version")
+      - "ours":    -X ours;   conflicts resolve in main's favour
+                   (operator says "keep mine, but take any new files")
+
+    `dedup_label` is a substring matched against `git stash list` messages.
+    Stashes whose message contains it are dropped both before stashing
+    (cleaning up debris from prior failed retries on the same task) and
+    after a successful integration (the operator state is now part of
+    main's history and the stash is redundant). When None, no dedup runs.
     """
+    # Dedup retries: drop any prior pre-integrate stashes for this task
+    # before creating a new one. Keeps `git stash list` from accumulating
+    # N copies of identical operator state across retry attempts.
+    if dedup_label:
+        stash_drop_matching(project_dir, dedup_label)
+
     pre_merge_head = head_hash(project_dir)
 
     pre_stash_ref = None
@@ -381,36 +549,87 @@ def integrate_branch(project_dir: str, branch: str, stash_label: str,
             if current and current != pre_merge_head:
                 reset_hard(project_dir, pre_merge_head)
         if pre_stash_ref:
-            if stash_apply(project_dir, pre_stash_ref):
+            ok_apply, _ = stash_apply(project_dir, pre_stash_ref)
+            if ok_apply:
                 stash_drop(project_dir, pre_stash_ref)
             # On apply failure, the stash entry stays in `git stash list`
             # for manual recovery. Caller can surface a warning.
 
+    strategy_opt = None
+    if strategy == "theirs":
+        strategy_opt = "theirs"
+    elif strategy == "ours":
+        strategy_opt = "ours"
+    elif strategy != "default":
+        return False, f"unknown integration strategy {strategy!r}"
+
     main_branch = current_branch_name(project_dir)
-    ok, out = merge_branch(project_dir, branch, ff_only=True)
+    # FF merge ignores -X (no conflict possible); attempt it first only
+    # when strategy is default. With theirs/ours the operator is asking
+    # for a specific conflict-resolution behaviour, so always go through
+    # the no-FF path even if FF would have worked — the resulting merge
+    # commit makes the operator's choice explicit in history.
+    if strategy_opt is None:
+        ok, out = merge_branch(project_dir, branch, ff_only=True)
+    else:
+        ok = False
+        out = ""
     if not ok:
         msg = merge_message or f"Merge {branch} into {main_branch}"
-        ok, out = merge_branch(project_dir, branch, no_ff=True, message=msg)
+        ok, out = merge_branch(project_dir, branch, no_ff=True, message=msg,
+                               strategy_option=strategy_opt)
         if not ok:
             merge_abort(project_dir)
             _rollback_and_restore()
-            return False, (f"integration conflict — branch '{branch}' could "
-                           f"not merge into {main_branch}:\n{out}")
+            paths, other = _format_git_conflict_paths(out)
+            sections: list[str] = [
+                f"Merge of '{branch}' into {main_branch} hit conflicts. "
+                f"Working tree restored; the agent's commits are preserved "
+                f"on '{branch}' for manual resolution."
+            ]
+            if paths:
+                sections.append(
+                    "Conflicting paths:\n" + _format_path_list(paths)
+                )
+            if other:
+                sections.append("\n".join(other))
+            return False, "\n\n".join(sections)
 
     # Merge succeeded. Restore the operator's stash on top of integrated main.
     if pre_stash_ref:
-        if stash_apply(project_dir, pre_stash_ref):
+        ok_apply, apply_err = stash_apply(project_dir, pre_stash_ref)
+        if ok_apply:
             stash_drop(project_dir, pre_stash_ref)
         else:
-            # Operator's edits overlap the integrated commits. Clear the
-            # partial apply, roll the merge back, restore the stash on
-            # the original main.
+            # Stash re-apply failed — could be content overlap, untracked-
+            # overwrite, missing stash, anything. Clear the partial apply,
+            # roll the merge back, restore the stash on the original main.
             integrated_head = head_hash(project_dir)
             if integrated_head:
                 reset_hard(project_dir, integrated_head)
             _rollback_and_restore()
-            return False, ("integration conflict — operator's in-progress "
-                           "working-tree edits overlap with merged commits")
+            paths, other = _format_git_conflict_paths(apply_err)
+            sections: list[str] = [
+                f"Your dirty working-tree changes overlap with files the "
+                f"agent committed on '{branch}', so they couldn't be "
+                f"reapplied after the merge. The merge has been rolled "
+                f"back and your changes restored; the agent's commits are "
+                f"preserved on '{branch}' for manual resolution."
+            ]
+            if paths:
+                sections.append(
+                    "Overlapping paths:\n" + _format_path_list(paths)
+                )
+            if other:
+                sections.append("\n".join(other))
+            elif not paths:
+                sections.append(apply_err or "(no detail from git)")
+            return False, "\n\n".join(sections)
+
+    # Success cleanup: any remaining stashes for this task are now
+    # subsumed by main's history.
+    if dedup_label:
+        stash_drop_matching(project_dir, dedup_label)
 
     return True, ""
 
@@ -454,10 +673,17 @@ def stash_show(cwd: str, sha: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
-def stash_apply(cwd: str, sha: str) -> bool:
-    """Re-apply a stash to the working tree. Leaves the stash entry intact."""
+def stash_apply(cwd: str, sha: str) -> tuple[bool, str]:
+    """Re-apply a stash to the working tree. Leaves the stash entry intact.
+
+    Returns (ok, error). On failure `error` carries git's stderr (or stdout
+    if stderr is empty) so callers can distinguish content conflicts from
+    untracked-overwrite, missing-stash, or lock errors.
+    """
     result = run_git("stash", "apply", sha, cwd=cwd)
-    return result.returncode == 0
+    if result.returncode == 0:
+        return True, ""
+    return False, (result.stderr or result.stdout).strip()
 
 
 def stash_drop(cwd: str, sha: str) -> bool:
@@ -472,6 +698,33 @@ def stash_drop(cwd: str, sha: str) -> bool:
         return False
     result = run_git("stash", "drop", ref, cwd=cwd)
     return result.returncode == 0
+
+
+def stash_drop_matching(cwd: str, label_substring: str) -> int:
+    """Drop every stash entry whose message contains `label_substring`.
+
+    Returns the count dropped. Stable across drops by collecting commit
+    SHAs first and dropping by SHA — `stash@{N}` indices shift as entries
+    are removed, but commit SHAs don't.
+
+    Used by the integration path to clean up the stash debris that piles
+    up when the same task is integrated multiple times — each retry was
+    creating a new pre-integrate stash without dropping the prior ones,
+    yielding N copies of the same operator state in `git stash list`.
+    """
+    listing = run_git("stash", "list", "--format=%H %gs", cwd=cwd)
+    if listing.returncode != 0:
+        return 0
+    targets: list[str] = []
+    for line in listing.stdout.splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2 and label_substring in parts[1]:
+            targets.append(parts[0])
+    dropped = 0
+    for sha in targets:
+        if stash_drop(cwd, sha):
+            dropped += 1
+    return dropped
 
 
 def changed_files_in_commit(cwd: str, commit_hash: str) -> list[str]:

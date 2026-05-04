@@ -119,6 +119,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
         project_dir, task_branch,
         stash_label=f"maistro pre-integrate task-{task_id}",
         merge_message=merge_msg,
+        dedup_label=f"pre-integrate task-{task_id}",
     )
     if not ok:
         await db.transition_task(task_id, "failed",
@@ -278,6 +279,44 @@ async def _sweep_stale():
             await _sweep_orphan_worktrees()
         except Exception:
             log.exception("[worker] orphan-worktree sweep failed")
+        try:
+            await _sweep_stale_workspace_pointers()
+        except Exception:
+            log.exception("[worker] stale-workspace-pointer sweep failed")
+
+
+async def _sweep_stale_workspace_pointers():
+    """Clear DB worktree_path/task_branch on tasks whose disk artifacts are gone.
+
+    Reverse of _sweep_orphan_worktrees: that sweep walks the disk and
+    cleans up directories with no DB task. This walks the DB and clears
+    pointers on tasks whose directory or branch has gone missing (operator
+    cleanup, partial crash recovery, manual `git worktree remove`, etc.).
+    Without this, the WorkspaceBanner keeps surfacing for a workspace that
+    no longer exists, and clicking Integrate produces a confusing error
+    because the branch isn't there to merge.
+    """
+    db_conn = await db.get_db()
+    rows = await db_conn.execute_fetchall(
+        """SELECT t.id, te.worktree_path, te.task_branch
+           FROM tasks t
+           JOIN task_executions te ON te.task_id = t.id
+           WHERE te.worktree_path IS NOT NULL"""
+    )
+    for row in rows:
+        tid = row["id"]
+        wt_path = row["worktree_path"]
+        branch = row["task_branch"]
+        dir_exists = bool(wt_path) and os.path.isdir(wt_path)
+        branch_present = bool(branch) and git.branch_exists(state.PROJECT_DIR, branch)
+        if dir_exists and branch_present:
+            continue
+        log.warning(
+            "[worker] Clearing stale workspace pointers for task #%d "
+            "(dir_exists=%s, branch_exists=%s, path=%s, branch=%s)",
+            tid, dir_exists, branch_present, wt_path, branch,
+        )
+        await db.update_task(tid, worktree_path=None, task_branch=None)
 
 
 async def _sweep_orphan_worktrees():
@@ -406,6 +445,13 @@ async def _process_task(task: dict):
     _cancel_event = asyncio.Event()
     _active_task_id = task_id
     start_commit = git.head_hash(state.PROJECT_DIR)
+
+    # Self-heal projects that were opened before the bootstrap-on-open fix:
+    # if HEAD is null, create the platform's bootstrap commit now so this
+    # task (and every future one) has a real ref to branch off.
+    if not start_commit:
+        log.info("[worker] Task #%d: project has no commits — bootstrapping initial commit", task_id)
+        start_commit = git.ensure_initial_commit(state.PROJECT_DIR)
 
     # Phase 3b: per-task worktree. The CLI subprocess and MCP server's
     # write/read tools all resolve against this path. The operator's main

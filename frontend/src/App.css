@@ -734,6 +734,7 @@ label.muted-text {
 .queue-status.pending_approval { color: var(--warning); }
 .queue-status.interrupted { color: var(--warning); }
 .queue-status.rejected { color: var(--text-muted); text-decoration: line-through; }
+.queue-status.resolved { color: var(--warning); font-style: italic; }
 
 
 
@@ -939,6 +940,15 @@ label.muted-text {
   gap: var(--space-2);
 }
 .collapsible-label:hover { color: var(--accent); }
+.collapsible-label.inline {
+  font-size: var(--text-sm);
+  color: var(--text-secondary, currentColor);
+  margin-top: var(--space-2);
+}
+.workspace-error-details { margin-top: var(--space-2); }
+.workspace-error-details .detail-meta {
+  margin-top: var(--space-1);
+}
 .collapse-arrow {
   display: inline-block;
   transition: transform 0.15s ease;
@@ -2426,10 +2436,6 @@ label.muted-text {
   border-radius: var(--radius);
 }
 
-.mcp-add-form > button {
-  margin-top: var(--space-4);
-}
-
 .mcp-config-panel.is-drop-target {
   outline: 2px dashed var(--accent);
   outline-offset: -4px;
@@ -2484,6 +2490,10 @@ label.muted-text {
   display: flex;
   gap: var(--space-2);
   margin-top: var(--space-3);
+}
+
+.mcp-add-form > button {
+  margin-top: var(--space-4);
 }
 
 .mcp-add-form-row {
@@ -2824,6 +2834,11 @@ label.muted-text {
 
 .detail-meta {
   font-size: var(--text-sm);
+}
+
+.detail-meta.error-text,
+.detail-meta.warning-text {
+  white-space: pre-wrap;
 }
 
 .detail-duration {

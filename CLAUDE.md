@@ -41,13 +41,14 @@ The repo's design documentation is layered. When you need depth, read these in o
 
 ### Data Model
 
-- **Jobs** (`jobs` table): `INTEGER PRIMARY KEY AUTOINCREMENT` ID + `slug` (derived via `slugify()`). Configuration via EAV (`job_property_defs` + `job_properties`) — properties are `string`, `json`, `integer`, or `boolean` with defaults. Notable properties: `max_turns` (default 50), `timeout`, `coalesce_tasks`, `require_approval`, `schedule` (cron), `allowed_tools`, `allowed_internal_tools`, `mcp_servers`, `subscriptions`, `allowed_dispatch_targets`. Description is the north star — declarative, first-principle definition of good output. Slug drives git authorship (`<slug>@maistro.local`) and branch naming.
+- **Jobs** (`jobs` table): `INTEGER PRIMARY KEY AUTOINCREMENT` ID + `slug` (derived via `slugify()`). Configuration via EAV (`job_property_defs` + `job_properties`) — properties are `string`, `json`, `integer`, or `boolean` with defaults. Notable properties: `max_turns` (default 100), `timeout`, `coalesce_tasks`, `require_approval`, `schedule` (cron), `allowed_tools`, `allowed_internal_tools`, `mcp_servers`, `subscriptions`, `allowed_dispatch_targets`. Description is the north star — declarative, first-principle definition of good output. Slug drives git authorship (`<slug>@maistro.local`) and branch naming.
 - **Tasks** (`tasks` table): atomic. Each row has exactly one trigger, one context, one `job_id` FK. Tasks are never mutated after creation — retry, reply, and resume create new tasks and coalesce the original under the new one.
 - **Coalescing**: `coalesced_id` FK links subordinates to a root. Depth-1 is enforced by SQLite triggers (`tasks_depth1_insert`, `tasks_depth1_update_target`, `tasks_depth1_update_self`). `coalesce_under()` and `merge_tasks()` flatten before re-parenting so depth-1 holds at every intermediate state. `cascade_completion()` is the single helper used by every worker completion path to terminal-cascade subordinates of a root.
 - **Coalescing lock**: every coalesce-mutating op (`split_task`, `uncoalesce_task`, `merge_tasks`) requires all participants to be `pending`; `transfer_task` requires `pending`/`queued` and roots only. Therefore a terminal coalesced subtree is structurally immutable — outcome data on the root is permanent. Reply/resume "unlock" a terminal subtree by introducing a new non-terminal root above it.
-- **Reading task data with coalescing awareness**: outcome columns (`session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`) live only on the task that actually ran. Two semantic profiles for queries:
-  - **"Per-task as the agent saw it"** → read from the `tasks_resolved` view or call `get_task_resolved()`. Outcome columns COALESCE through to the root for subordinates; intrinsic columns (id, trigger, context) pass through. Use this for output/diff/outcome endpoints, the Governor's recent-tasks view, and anywhere a user might click on a subordinate.
-  - **"Per-execution / per-cost"** → `tasks WHERE coalesced_id IS NULL`. One row per actual run, no double-counting. Use for aggregates (`dashboard_health`, cost totals, success-rate metrics).
+- **`tasks` vs `task_executions`**: `tasks` holds intrinsic identity + queue placement + materialized status. Per-execution outcome data (`session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`, `worktree_path`, `task_branch`) lives in a sibling `task_executions` table keyed by `task_id` — one row per task that actually ran. Coalesced subordinates have no `task_executions` row; their effective outcome is the root's. Write helpers in `db_tasks` (`transition_task`, `update_task`, etc.) route outcome fields to `task_executions` via `upsert_execution` automatically — callers see the same kwargs interface.
+- **Reading task data — two semantic profiles**:
+  - **"Per-task as the agent saw it"** → read from the `tasks_resolved` view or call `get_task_resolved()`. The view is a 4-way join (`tasks` LEFT JOIN `task_executions` self LEFT JOIN `tasks` root LEFT JOIN `task_executions` root); outcome columns are `COALESCE(self_exec.col, root_exec.col)`, intrinsic columns pass through. Adds derived `is_subordinate` and `effective_root_id`. Use this for output/diff/outcome endpoints, the Governor's recent-tasks view, and anywhere a user might click on a subordinate.
+  - **"Per-execution / per-cost"** → `tasks t JOIN task_executions te ON te.task_id = t.id WHERE t.coalesced_id IS NULL`. One row per actual run, no double-counting. Use for aggregates (`dashboard_health`, cost totals, success-rate metrics).
 
 ### Task Lifecycle (Event-Sourced)
 
@@ -74,9 +75,20 @@ Duration is computed from event pairs (`activated` → terminal), not from colum
 1. User opens a target project directory via the UI — backend initializes `<project>/.maistro/maistro.db` and installs a git post-commit hook.
 2. Jobs are configured with summary, description, subscriptions, model, and properties.
 3. Triggers (manual, watch, scheduled, dependency, agent, resume, reply) create atomic `tasks` rows. The background worker pulls one task at a time.
-4. Worker assembles the system/user prompt, spawns the Claude CLI subprocess, streams NDJSON output, and persists messages and raw events incrementally.
-5. The CLI agent commits its own changes via its tools — no auto-commit from the platform.
-6. Post-commit hook notifies backend — jobs whose subscriptions match the changed files get auto-enqueued; coalescing links the new task to a pending root via the `coalesced_id` FK.
+4. On activation, the worker creates a per-task git worktree at `.maistro/worktrees/task-<id>/` on branch `<job-slug>/task-<id>` from the current main HEAD. The CLI subprocess runs with `cwd=<worktree>`; the MCP server resolves writes against `MAISTRO_WORKSPACE_DIR` which points at the same path.
+5. Worker assembles the system/user prompt, spawns the Claude CLI subprocess, streams NDJSON output, and persists messages and raw events incrementally.
+6. The CLI agent commits its own changes via its tools to the task branch — no auto-commit from the platform.
+7. On `completed`, the worker integrates the task branch by merging into main (`--ff-only`, falling back to `--no-ff` if main moved). Operator-dirty working tree is transparently stashed and re-applied; conflict policy is **operator wins** (any merge or stash-replay conflict transitions the task to `failed` and preserves the worktree). Successful integration removes the worktree and branch. Non-success terminals preserve the worktree+branch for operator inspection / discard.
+8. Post-commit hook notifies backend — `is_ancestor(commit, HEAD)` filters out task-branch commits so watch fires only on integrations into main. Subscribed jobs auto-enqueue; coalescing links new tasks to a pending root via `coalesced_id`.
+
+### Task Workspace Isolation
+
+Each task executes in its own git worktree, so the operator's main checkout is structurally untouchable by agents. See [architecture/git-integration.md](architecture/git-integration.md) for full lifecycle, helpers (`worktree_add`, `worktree_remove`, `merge_branch`, `merge_abort`, `is_ancestor`, etc.), and recovery (`_sweep_stale` + `_sweep_orphan_worktrees` reconcile crashes on startup). Key invariants:
+
+- **Integration is the gate to `completed`.** A task is only `completed` after its branch successfully merges into main. Merge failure → `failed` with the conflict captured in `error`; worktree+branch preserved.
+- **No commits → `failed`.** If `worktree_head == start_commit`, the worker fails the task ("agent finished without committing").
+- **Non-success terminals preserve the workspace.** `exhausted`, `failed`, `timed_out`, `cancelled`, `interrupted` all leave the worktree and branch in place. The detail-drawer `WorkspaceBanner` exposes path, branch, a manual-merge command, and a confirm-gated `POST /api/tasks/{id}/workspace/discard`.
+- **Disk pressure is real.** Worktrees from non-success terminals accumulate until the operator discards them. There's no auto-prune yet (see [git-integration.md — Disk Pressure](architecture/git-integration.md)).
 
 ### MCP Server & Tool Governance
 
@@ -109,7 +121,7 @@ Real implementation lives in:
 | `db_core` | Connection lifecycle, `SCHEMA_SQL` / `SEED_SQL`, `init_db`, project-switch readers-draining (`db_read_guard`, `close_db`) |
 | `db_migrations` | Isolated legacy-DB migration runner (run on startup; **do not add new entries** — edit `SCHEMA_SQL` and recreate the dev DB) |
 | `db_jobs` | Job CRUD, EAV property registry, `slugify`, cascade lookup |
-| `db_tasks` | Task CRUD, state machine, event log, coalescing (`transition_task`, `coalesce_under`, `cascade_completion`, `merge_tasks`, `split_task`, `transfer_task`) |
+| `db_tasks` | Task CRUD, state machine, event log, coalescing (`transition_task`, `coalesce_under`, `cascade_completion`, `merge_tasks`, `split_task`, `transfer_task`). Routes outcome fields to `task_executions` via `upsert_execution` so callers don't have to know about the split. |
 | `db_chat` | Chat sessions, messages, raw event audit log |
 | `db_config` | Key-value config + external MCP server registration and cascade delete |
 | `db_dashboard` | Read-only operational analytics queries |

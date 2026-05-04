@@ -259,8 +259,11 @@ async def _resolve_workspace_for_action(task_id: int) -> tuple[str, str, int]:
     return wt_path, branch, owner_id
 
 
+_VALID_INTEGRATE_STRATEGIES = {"default", "theirs", "ours"}
+
+
 @router.post("/api/tasks/{task_id}/workspace/integrate")
-async def integrate_task_workspace(task_id: int):
+async def integrate_task_workspace(task_id: int, strategy: str = "default"):
     """Manually retry the merge of a preserved task branch into main.
 
     Same logic as the worker's automatic integration on `completed`:
@@ -278,7 +281,19 @@ async def integrate_task_workspace(task_id: int):
     Useful when the original auto-integration failed because of a
     transient state the operator has since resolved (cleaned their
     dirty main, manually rebased the task branch, etc.).
+
+    `strategy`:
+      - "default" (worker-equivalent, conflicts → failed integrate)
+      - "theirs"  (use task branch's version on conflict — "Take task's version")
+      - "ours"    (keep main's version on conflict, take any non-conflicting
+                  new files — "Keep mine")
     """
+    if strategy not in _VALID_INTEGRATE_STRATEGIES:
+        raise HTTPException(
+            400,
+            f"Invalid strategy {strategy!r}. Expected one of: "
+            f"{sorted(_VALID_INTEGRATE_STRATEGIES)}",
+        )
     project_dir = require_project()
     wt_path, branch, owner_id = await _resolve_workspace_for_action(task_id)
     if not branch:
@@ -287,6 +302,8 @@ async def integrate_task_workspace(task_id: int):
     ok, err = git.integrate_branch(
         project_dir, branch,
         stash_label=f"maistro pre-integrate task-{task_id} (manual)",
+        strategy=strategy,
+        dedup_label=f"pre-integrate task-{task_id}",
     )
     if not ok:
         raise HTTPException(409, err)
@@ -348,8 +365,10 @@ async def restore_orphan_stash(task_id: int):
     sha = task.get("orphan_stash_ref")
     if not sha:
         raise HTTPException(404, "No orphan stash for this task")
-    if not git.stash_apply(project_dir, sha):
-        raise HTTPException(500, "git stash apply failed (conflicts? stash pruned?)")
+    ok_apply, apply_err = git.stash_apply(project_dir, sha)
+    if not ok_apply:
+        detail = apply_err or "no detail from git"
+        raise HTTPException(500, f"git stash apply failed:\n{detail}")
     # Stash column lives on the executing row (the root for coalesced groups);
     # update there so the view's fall-through stops surfacing the ref.
     owner_id = task.get("effective_root_id") or task["id"]

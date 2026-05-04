@@ -15,6 +15,7 @@ const TIPS = {
   coalesceTasks: 'When enabled, the job will never have more than one pending task. Any new trigger coalesces into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.',
   cascadesFrom: 'Upstream jobs that trigger this job on completion. When any selected upstream job completes successfully, a task is enqueued for this job. Timed-out, failed, or cancelled tasks do not trigger cascades.',
   timeout: 'Maximum execution time in seconds. The platform gracefully terminates the agent when reached, then force-kills if it does not exit. Timed-out tasks do not trigger downstream cascades. Set to 0 for no limit.',
+  maxTurns: 'Maximum agent reasoning turns per task. One turn is one cycle of context → reasoning → output (text or tool call). Hitting the limit transitions the task to exhausted (distinct from completed or failed). Lower = tighter scope but more exhaustions; higher = more headroom but more cost.',
   model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.',
   mcpServers: 'External MCP servers to connect to this job\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
   allowedInternalTools: 'Internal MCP tools the agent can access. When a subset is selected, only listed tools are presented by the internal server. All checked = default (no restrictions). Use this to create read-only jobs or restrict dispatch capabilities.',
@@ -392,6 +393,24 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
                   return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`
                 })()}
               </span>
+            </div>
+          </div>
+
+          <div className="field-group">
+            <div className="label-row">
+              <label>Max turns</label>
+              <HelpTip text={TIPS.maxTurns} />
+            </div>
+            <div className="field-row">
+              <input
+                type="number"
+                value={getVal('max_turns') ?? 100}
+                onChange={e => edit('max_turns', parseInt(e.target.value) || 1)}
+                min={1}
+                step={10}
+                className="timeout-input"
+              />
+              <span className="muted-text">turns</span>
             </div>
           </div>
 

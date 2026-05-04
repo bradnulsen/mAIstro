@@ -112,6 +112,7 @@ export const STATUS_LABELS = {
   timed_out: 'Timed Out',
   interrupted: 'Interrupted',
   rejected: 'Rejected',
+  resolved: 'Resolved',
 }
 
 // Terminal states where a per-task worktree is preserved for inspection.
@@ -131,13 +132,22 @@ export const TRIGGER_LABELS = {
   schedule: 'Schedule',
 }
 
+const NON_SUCCESS_TERMINAL_SET = new Set(NON_SUCCESS_TERMINAL_STATUSES)
+
 /** Get task status — uses authoritative status column from backend.
- *  The status column is materialized from the task_events log. */
+ *  The status column is materialized from the task_events log.
+ *
+ *  A non-success terminal (failed/exhausted/cancelled/interrupted/timed_out)
+ *  whose workspace pointer has been cleared — operator integrated, operator
+ *  discarded, or sweep cleared a stale pointer — renders as 'resolved'.
+ *  The original lifecycle status is unchanged in the DB; this is purely a
+ *  UI signal that there's nothing left for the operator to act on. */
 export function getTaskStatus(item) {
   const s = item.status
   if (!s) return 'pending'
   // Map backend statuses to UI statuses
   if (s === 'active') return 'running'
+  if (NON_SUCCESS_TERMINAL_SET.has(s) && !item.worktree_path) return 'resolved'
   if (s === 'failed') return 'error'
   // Check approval gate overlay (orthogonal to lifecycle status)
   if ((s === 'pending' || s === 'queued') && item.approval === 'pending') return 'pending_approval'

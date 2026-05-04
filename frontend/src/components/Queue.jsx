@@ -18,7 +18,7 @@ import {
 
 const getStatus = getTaskStatus
 
-const TERMINAL_STATES = new Set(['completed', 'exhausted', 'failed', 'error', 'cancelled', 'timed_out', 'interrupted', 'rejected'])
+const TERMINAL_STATES = new Set(['completed', 'exhausted', 'failed', 'error', 'cancelled', 'timed_out', 'interrupted', 'rejected', 'resolved'])
 
 /** Deterministic job color from CSS tokens — matches Dashboard timeline palette */
 let _jobColors = null
@@ -61,15 +61,20 @@ function execMeta(item) {
   return parts.length ? parts.join(' · ') : null
 }
 
-/** Human-readable inline reason for non-success terminal states */
+/** Human-readable inline reason for non-success terminal states.
+ * Multi-line errors (e.g. integration conflicts with path lists) are
+ * truncated to the first line — the full message lives in the detail
+ * drawer's Error section. */
 function errorSummary(item, status) {
+  const firstLine = (s) => s ? s.split('\n', 1)[0] : s
   if (status === 'completed') return null
-  if (status === 'exhausted') return item.error || 'Hit turn limit'
+  if (status === 'resolved') return firstLine(item.error) || null  // operator dealt with it; original error if any
+  if (status === 'exhausted') return firstLine(item.error) || 'Hit turn limit'
   if (status === 'cancelled') return 'Cancelled by user'
   if (status === 'timed_out') return 'Exceeded timeout limit'
   if (status === 'interrupted') return 'Process interrupted'
   if (status === 'rejected') return 'Rejected before execution'
-  return item.error || 'Unknown error'
+  return firstLine(item.error) || 'Unknown error'
 }
 
 const MIN_DRAWER_HEIGHT = 120
@@ -945,7 +950,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
           <div className="detail-section">
             <label>{status === 'timed_out' ? 'Timed Out' : status === 'exhausted' ? 'Exhausted' : 'Error'}</label>
             <div className={`detail-meta ${status === 'timed_out' || status === 'exhausted' ? 'warning-text' : 'error-text'}`}>
-              {item.error}
+              {item.error.split('\n', 1)[0]}
             </div>
           </div>
         )}
@@ -960,6 +965,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
           taskId={item.id}
           workspacePath={item.worktree_path}
           branch={item.task_branch}
+          errorDetail={item.error && item.error.includes('\n') ? item.error : null}
           onChange={onUpdate}
         />
       )}
@@ -1127,15 +1133,19 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
   )
 }
 
-function WorkspaceBanner({ taskId, workspacePath, branch, onChange }) {
-  const [confirmDiscard, setConfirmDiscard] = useState(false)
+function WorkspaceBanner({ taskId, workspacePath, branch, errorDetail, onChange }) {
+  // pending: 'discard' | 'theirs' | 'ours' — second-click confirmation gate
+  // for the destructive actions. 'integrate' (default merge) is not gated
+  // because conflicts already fail-safe via operator-wins rollback.
+  const [pending, setPending] = useState(null)
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState(null)  // 'integrate' | 'discard' | null
+  const [busy, setBusy] = useState(null)
+  const [errorOpen, setErrorOpen] = useState(false)
 
-  const handleIntegrate = async () => {
-    setError(''); setBusy('integrate')
+  const integrateWith = async (strategy, busyKey) => {
+    setError(''); setBusy(busyKey); setPending(null)
     try {
-      await integrateTaskWorkspace(taskId)
+      await integrateTaskWorkspace(taskId, strategy)
       if (onChange) await onChange()
     } catch (e) {
       setError(e.message)
@@ -1150,10 +1160,16 @@ function WorkspaceBanner({ taskId, workspacePath, branch, onChange }) {
       await discardTaskWorkspace(taskId)
       if (onChange) await onChange()
     } catch (e) {
-      setError(e.message); setConfirmDiscard(false)
+      setError(e.message); setPending(null)
     } finally {
       setBusy(null)
     }
+  }
+
+  const confirmText = {
+    discard: 'Delete workspace and branch?',
+    theirs: "Overwrite main with task's version on conflict?",
+    ours: "Keep main's version on conflict (take new files only)?",
   }
 
   return (
@@ -1168,24 +1184,69 @@ function WorkspaceBanner({ taskId, workspacePath, branch, onChange }) {
         {branch && <div><strong>Branch:</strong> <code>{branch}</code></div>}
       </div>
       <div className="action-row compact">
-        <button className="small" disabled={!!busy} onClick={handleIntegrate}>
-          {busy === 'integrate' ? 'Integrating…' : 'Integrate into main'}
-        </button>
-        {confirmDiscard ? (
+        {pending ? (
           <>
-            <span className="confirm-text">Delete workspace and branch?</span>
-            <button className="danger small" disabled={!!busy} onClick={handleDiscard}>
-              {busy === 'discard' ? 'Discarding…' : 'Confirm'}
+            <span className="confirm-text">{confirmText[pending]}</span>
+            <button
+              className={pending === 'discard' ? 'danger small' : 'small'}
+              disabled={!!busy}
+              onClick={pending === 'discard' ? handleDiscard : () => integrateWith(pending, pending)}
+            >
+              {busy ? '…' : 'Confirm'}
             </button>
-            <button className="small" disabled={!!busy} onClick={() => setConfirmDiscard(false)}>No</button>
+            <button className="small" disabled={!!busy} onClick={() => setPending(null)}>No</button>
           </>
         ) : (
-          <button className="danger small" disabled={!!busy} onClick={() => setConfirmDiscard(true)}>
-            Discard workspace
-          </button>
+          <>
+            <button
+              className="small"
+              disabled={!!busy}
+              onClick={() => integrateWith('default', 'integrate')}
+              title="Standard merge — fails on conflict, rolls back cleanly"
+            >
+              {busy === 'integrate' ? 'Integrating…' : 'Integrate into main'}
+            </button>
+            <button
+              className="small"
+              disabled={!!busy}
+              onClick={() => setPending('theirs')}
+              title="Merge using -X theirs: any conflict resolves in the task branch's favor (overwrites your version)"
+            >
+              Take task's version
+            </button>
+            <button
+              className="small"
+              disabled={!!busy}
+              onClick={() => setPending('ours')}
+              title="Merge using -X ours: any conflict resolves in main's favor (takes only the task's non-conflicting new files)"
+            >
+              Keep mine
+            </button>
+            <button
+              className="danger small"
+              disabled={!!busy}
+              onClick={() => setPending('discard')}
+            >
+              Discard workspace
+            </button>
+          </>
         )}
         {error && <span className="error-text">{error}</span>}
       </div>
+      {errorDetail && (
+        <div className="workspace-error-details">
+          <div
+            className="collapsible-label inline"
+            onClick={() => setErrorOpen(o => !o)}
+          >
+            <span className={`collapse-arrow ${errorOpen ? 'open' : ''}`}>▸</span>
+            Error details
+          </div>
+          {errorOpen && (
+            <div className="detail-meta error-text">{errorDetail}</div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
