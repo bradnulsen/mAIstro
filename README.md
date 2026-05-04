@@ -165,7 +165,7 @@ The autonomy spectrum runs from "ask me before every step" to "run while I sleep
 
 - **`require_approval`** — gate triggered runs behind manual approval
 - **Auto-queueing setting** — whether new tasks land in Pending (curate) or Queued (just run)
-- **`max_turns`** — how much agent reasoning per task (default 50). Lower = tighter scope, more failures from hitting the wall. Higher = more freedom, more cost.
+- **`max_turns`** — how much agent reasoning per task (default 100). Lower = tighter scope, more failures from hitting the wall. Higher = more freedom, more cost.
 - **`timeout`** — wall-clock kill switch (default 900s). The watchdog terminates and marks the task `timed_out`.
 - **`coalesce_tasks`** — globally collapse all triggers for a job to at most one pending task. Aggressive deduplication.
 - **`allowed_dispatch_targets`** — which other jobs an agent inside this job can call. Leave empty to disable inter-agent dispatch entirely.

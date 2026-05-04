@@ -78,7 +78,7 @@ async def run_task(
             system_prompt=system_prompt,
             cwd=workspace,
             model=props.get("model"),
-            max_turns=props.get("max_turns", 50),
+            max_turns=props.get("max_turns", 100),
             allowed_tools=allowed,
             disallowed_tools=disallowed,
             mcp_config_path=mcp_config_path,

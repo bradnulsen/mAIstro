@@ -116,7 +116,7 @@ async def invoke(
     allowed_tools: list[str] | None = None,
     disallowed_tools: list[str] | None = None,
     mcp_config_path: str | None = None,
-    max_turns: int = 50,
+    max_turns: int = 100,
     resume_session: str | None = None,
     cancel_event: asyncio.Event | None = None,
 ) -> AsyncIterator[dict]:

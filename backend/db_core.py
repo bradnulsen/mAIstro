@@ -393,7 +393,7 @@ INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
     ('sort_order', '0', 'integer'),
     ('schedule', '', 'string'),
     ('timeout', '900', 'integer'),
-    ('max_turns', '50', 'integer'),
+    ('max_turns', '100', 'integer'),
     ('cascades_from', '[]', 'json'),
     ('require_approval', 'false', 'boolean'),
     ('allowed_internal_tools', '[]', 'json'),

@@ -238,7 +238,7 @@ def _format_context(ctx: dict) -> str:
                 desc = props["description"][:500]
                 parts.append(f"Description: {desc}")
             parts.append(f"Model: {props.get('model', 'sonnet')}")
-            parts.append(f"Max turns: {props.get('max_turns', 50)}")
+            parts.append(f"Max turns: {props.get('max_turns', 100)}")
             parts.append(f"Timeout: {props.get('timeout', 900)}s")
             subs = props.get("subscriptions", [])
             if subs:
