@@ -221,7 +221,10 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     command TEXT NOT NULL,
     args TEXT DEFAULT '[]',
     env TEXT DEFAULT '{}',
-    enabled INTEGER DEFAULT 1
+    enabled INTEGER DEFAULT 1,
+    -- Set when the row was installed from a .mcpb bundle; cleanup on
+    -- delete must rm the extracted directory so disk doesn't leak.
+    bundle_dir TEXT
 );
 
 CREATE TABLE IF NOT EXISTS config (

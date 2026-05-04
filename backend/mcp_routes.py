@@ -2,18 +2,24 @@
 
 Exposes the full tool inventory (CLI native + internal MCP + external MCP),
 manages registered external MCP server records, and probes them on demand.
+Also owns the .mcpb bundle import flow: preview → install with optional
+user_config form, plus cancel/reap.
 """
 
 import json
 import logging
 import os
+import secrets
 import shutil
+import tempfile
+import time
+from threading import Lock
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from backend import database as db
-from backend import mcp_server, state
+from backend import mcp_server, mcpb_import, state
 from backend.cli import CLI_NATIVE_TOOLS
 from backend.mcp_probe import probe_server
 from backend.state import require_project
@@ -165,3 +171,177 @@ async def delete_mcp_server(name: str):
     await db.delete_mcp_server_cascade(name)
     log.info("[mcp] Deleted server '%s' (cascade)", name)
     return {"status": "deleted"}
+
+
+# ── .mcpb bundle import ──────────────────────────────────────
+#
+# Two-phase flow: preview stages and validates; install finalizes by
+# stagingId after the operator (optionally) fills in user_config. The
+# staging registry is in-memory only — abandoned imports get reaped by
+# TTL on the next request.
+
+# stagingId → {staging_dir, manifest, created_at}
+_STAGING: dict[str, dict] = {}
+_STAGING_LOCK = Lock()
+_STAGING_TTL_S = 30 * 60  # 30 minutes
+
+# Cap upload size to avoid unbounded tmp writes from a malicious or
+# accidental request body. .mcpb bundles are tiny in practice (a few MB).
+_MAX_BUNDLE_BYTES = 64 * 1024 * 1024
+
+
+def _reap_staging() -> None:
+    cutoff = time.time() - _STAGING_TTL_S
+    expired = []
+    with _STAGING_LOCK:
+        for sid, entry in list(_STAGING.items()):
+            if entry["created_at"] < cutoff:
+                expired.append((sid, entry))
+                _STAGING.pop(sid, None)
+    for _, entry in expired:
+        mcpb_import.cleanup_staging(entry["staging_dir"])
+
+
+class BundleInstallRequest(BaseModel):
+    staging_id: str
+    name: str
+    user_config: dict | None = None
+    overwrite: bool | None = False
+
+
+@router.post("/api/mcp/bundles/preview")
+async def preview_bundle(req: Request):
+    """Stream a .mcpb body to disk, extract+validate, register a staging entry.
+
+    The browser sends the file as the raw request body (Content-Type:
+    application/octet-stream). Avoids dragging in a multipart parser for
+    a single-file upload.
+    """
+    require_project()
+    _reap_staging()
+
+    project_dir = state.PROJECT_DIR
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".mcpb", prefix="maistro-bundle-")
+    total = 0
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            async for chunk in req.stream():
+                total += len(chunk)
+                if total > _MAX_BUNDLE_BYTES:
+                    raise HTTPException(413, f"Bundle exceeds size limit ({_MAX_BUNDLE_BYTES} bytes)")
+                f.write(chunk)
+
+        if total == 0:
+            raise HTTPException(400, "Empty request body")
+
+        try:
+            staging_dir, manifest = mcpb_import.extract_to_staging(tmp_path, project_dir)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        staging_id = secrets.token_hex(8)
+        with _STAGING_LOCK:
+            _STAGING[staging_id] = {
+                "staging_dir": staging_dir,
+                "manifest": manifest,
+                "created_at": time.time(),
+            }
+
+        log.info("[mcpb] Staged bundle '%s' v%s (id=%s)", manifest.get("name"), manifest.get("version"), staging_id)
+        return {
+            "staging_id": staging_id,
+            "manifest": {
+                "name": manifest.get("name"),
+                "display_name": manifest.get("display_name"),
+                "version": manifest.get("version"),
+                "description": manifest.get("description"),
+            },
+            "user_config_schema": mcpb_import.manifest_user_config_schema(manifest),
+        }
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+@router.post("/api/mcp/bundles/install")
+async def install_bundle(req: BundleInstallRequest):
+    """Finalize a staged bundle into a registered MCP server."""
+    require_project()
+    _reap_staging()
+
+    if not req.staging_id or not req.name:
+        raise HTTPException(400, "staging_id and name are required")
+
+    with _STAGING_LOCK:
+        entry = _STAGING.get(req.staging_id)
+    if not entry:
+        raise HTTPException(404, "Staging entry not found or expired")
+
+    # Conflict check before finalize. The frontend re-POSTs with overwrite=true
+    # after the operator confirms.
+    existing = await db.list_mcp_servers()
+    existing_by_name = {s["name"]: s for s in existing}
+    if req.name in existing_by_name and not req.overwrite:
+        raise HTTPException(
+            409,
+            f"Server '{req.name}' already exists",
+        )
+
+    # Overwrite path: delete the prior server (cascading any prior bundle dir)
+    # before claiming the name.
+    if req.name in existing_by_name and req.overwrite:
+        await db.delete_mcp_server_cascade(req.name)
+
+    try:
+        bundle_dir, server_def = mcpb_import.finalize_bundle(
+            entry["staging_dir"],
+            entry["manifest"],
+            req.user_config or {},
+            req.name,
+            state.PROJECT_DIR,
+        )
+    except Exception as e:
+        # Staging dir may be partly gone after a failed rename; cleanup is idempotent.
+        mcpb_import.cleanup_staging(entry["staging_dir"])
+        with _STAGING_LOCK:
+            _STAGING.pop(req.staging_id, None)
+        raise HTTPException(400, f"Failed to finalize bundle: {e}")
+
+    try:
+        await db.create_mcp_server(
+            name=req.name,
+            command=server_def["command"],
+            args=server_def["args"],
+            env=server_def["env"],
+            bundle_dir=bundle_dir,
+        )
+    except Exception as e:
+        # DB write failed after we already finalized the dir — roll it back so
+        # we don't leak an installed bundle without a registry row.
+        mcpb_import.remove_bundle(bundle_dir)
+        with _STAGING_LOCK:
+            _STAGING.pop(req.staging_id, None)
+        raise HTTPException(500, f"Failed to register server: {e}")
+
+    with _STAGING_LOCK:
+        _STAGING.pop(req.staging_id, None)
+
+    log.info("[mcpb] Installed bundle as server '%s' at %s", req.name, bundle_dir)
+    return {
+        "name": req.name,
+        "command": server_def["command"],
+        "bundle_dir": bundle_dir,
+    }
+
+
+@router.delete("/api/mcp/bundles/staging/{staging_id}")
+async def cancel_bundle_staging(staging_id: str):
+    """Drop a staging entry and clean up its on-disk directory."""
+    require_project()
+    with _STAGING_LOCK:
+        entry = _STAGING.pop(staging_id, None)
+    if entry:
+        mcpb_import.cleanup_staging(entry["staging_dir"])
+    return {"status": "cancelled"}

@@ -11,7 +11,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend import appstate, database as db, git, worker
+from backend import appstate, database as db, git, mcpb_import, worker
 from backend import state
 
 log = logging.getLogger("maistro.project_routes")
@@ -61,6 +61,11 @@ async def open_project(req: OpenProjectRequest):
     git.ensure_gitignore(path)
     appstate.touch_project(path)
     worker.notify()
+
+    # Reap orphan staging dirs left from prior crashed bundle imports.
+    reaped = mcpb_import.reap_staging(path)
+    if reaped:
+        log.info("[project] Reaped %d orphan bundle staging dir(s)", reaped)
 
     log.info("[project] Opened %s", path)
     return {"status": "ok", "path": path}

@@ -226,6 +226,58 @@ export const probeMcpServer = (name) =>
 export const getMcpServerJobs = (name) =>
   fetchJSON(`/api/mcp/servers/${encodeURIComponent(name)}/jobs`)
 
+// ── MCP Bundles (.mcpb import) ──
+
+/** Stream a .mcpb file to the preview endpoint. Returns staging metadata. */
+export async function previewMcpBundle(file) {
+  const res = await fetch('/api/mcp/bundles/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  })
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`${res.status}: ${err}`)
+  }
+  return res.json()
+}
+
+/** Finalize a staged bundle. On 409 returns {conflict: true} so caller can prompt overwrite. */
+export async function installMcpBundle({ stagingId, name, userConfig, overwrite }) {
+  const res = await fetch('/api/mcp/bundles/install', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      staging_id: stagingId,
+      name,
+      user_config: userConfig || {},
+      overwrite: !!overwrite,
+    }),
+  })
+  if (res.status === 409) {
+    return { conflict: true }
+  }
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`${res.status}: ${err}`)
+  }
+  return res.json()
+}
+
+export const cancelMcpBundleStaging = (stagingId) =>
+  fetch(`/api/mcp/bundles/staging/${encodeURIComponent(stagingId)}`, { method: 'DELETE' })
+
+/** Best-effort cancel for tab-close. Sync, no await. */
+export function beaconCancelStaging(stagingId) {
+  if (!stagingId || !navigator.sendBeacon) return
+  try {
+    navigator.sendBeacon(
+      `/api/mcp/bundles/staging/${encodeURIComponent(stagingId)}`,
+      new Blob([], { type: 'application/json' })
+    )
+  } catch {}
+}
+
 // ── Files ──
 
 export const searchFiles = (pattern) =>

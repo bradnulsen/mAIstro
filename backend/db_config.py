@@ -8,8 +8,12 @@ server name out of any job that referenced it.
 """
 
 import json
+import logging
+import shutil
 
 from backend.db_core import get_db
+
+log = logging.getLogger("maistro.db_config")
 
 
 # ── MCP Servers ────────────────────────────────────────────
@@ -20,11 +24,17 @@ async def list_mcp_servers() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def create_mcp_server(name: str, command: str, args: list | None = None, env: dict | None = None):
+async def create_mcp_server(
+    name: str,
+    command: str,
+    args: list | None = None,
+    env: dict | None = None,
+    bundle_dir: str | None = None,
+):
     db = await get_db()
     await db.execute(
-        "INSERT INTO mcp_servers (name, command, args, env) VALUES (?, ?, ?, ?)",
-        (name, command, json.dumps(args or []), json.dumps(env or {}))
+        "INSERT INTO mcp_servers (name, command, args, env, bundle_dir) VALUES (?, ?, ?, ?, ?)",
+        (name, command, json.dumps(args or []), json.dumps(env or {}), bundle_dir),
     )
     await db.commit()
 
@@ -81,8 +91,20 @@ async def get_jobs_referencing_mcp_server(server_name: str) -> list[dict]:
 
 
 async def delete_mcp_server_cascade(name: str):
-    """Delete an MCP server and remove it from all jobs' mcp_servers properties."""
+    """Delete an MCP server and remove it from all jobs' mcp_servers properties.
+
+    If the server was installed from a bundle, also removes the extracted
+    bundle directory. Disk cleanup failures are logged but don't fail the
+    delete — the row is gone, only orphan disk state remains.
+    """
     conn = await get_db()
+
+    # Capture bundle_dir before we drop the row so we can rm it after commit.
+    bundle_rows = await conn.execute_fetchall(
+        "SELECT bundle_dir FROM mcp_servers WHERE name = ?", (name,),
+    )
+    bundle_dir = bundle_rows[0]["bundle_dir"] if bundle_rows else None
+
     # Find and update all jobs referencing this server
     rows = await conn.execute_fetchall(
         "SELECT job_id, value FROM job_properties WHERE key = 'mcp_servers'",
@@ -100,6 +122,12 @@ async def delete_mcp_server_cascade(name: str):
             )
     await conn.execute("DELETE FROM mcp_servers WHERE name = ?", (name,))
     await conn.commit()
+
+    if bundle_dir:
+        try:
+            shutil.rmtree(bundle_dir, ignore_errors=False)
+        except Exception as e:
+            log.warning("[mcp] bundle dir cleanup failed for '%s' at %s: %s", name, bundle_dir, e)
 
 
 # ── Config ──────────────────────────────────────────────────
