@@ -19,6 +19,16 @@ A job is a template. A task is an instance. One job produces many tasks over tim
 
 ## Requirements
 
+### Distribution
+
+mAistro ships as an installable end-user application, not as a developer setup. The deployment shape is single-user, single-tenant, single-active-project, running locally on the operator's machine. The audience extends beyond developers to non-developer subject-matter experts coordinating with autonomous agents.
+
+- **One-click installation.** The platform installs via a standard installer for the host operating system. The installer drops the application, registers a launch entry, and sets up per-user data storage in the operating system's conventional location for application data. The user does not run package managers, edit configuration files, or operate from a terminal to get the platform running.
+- **Per-user data separation.** Application-level state (the recent-projects list, cross-project job templates) lives in the user's standard application data directory, distinct from the install location. Project-level state (job configuration, task records, worktrees, output sessions) stays inside each project's directory. The installation itself is read-only; user data is writable and never inside the install location.
+- **Claude CLI dependency.** The Claude CLI is a runtime requirement that the installer cannot embed — it requires the user's own authentication. On startup, the platform detects whether the CLI is present and authenticated. If it is missing or unauthenticated, the platform surfaces a setup screen explaining what is needed. A CLI status indicator in the application header reflects the current state — present and authenticated, missing, or unauthenticated — alongside MCP server health.
+- **Single-instance behavior.** Launching the application a second time while it is already running does not start a second instance. The second launch detects the running instance and brings its surface to focus. Concurrent instances are not a supported deployment shape — they would compete for project locks and produce undefined behavior.
+- **Localhost-only.** The platform binds only to the local loopback interface. There is no remote access, no team sharing, no hosted-service mode. Multi-user, multi-tenant, and remote-access deployments are out of scope.
+
 ### Projects
 
 - The user opens a project directory. The platform initializes it for use: ensures a git repository exists, installs the post-commit hook, manages gitignore entries, creates the `.maistro/` directory (gitignored) with an operational database inside it.
@@ -37,7 +47,7 @@ A job is a template. A task is an instance. One job produces many tasks over tim
 
 - Properties follow an entity-attribute-value pattern: a registry of property definitions (with types and defaults) and per-job overrides.
 - Property types: `string`, `json`, `integer`, `boolean`. The platform casts stored strings to the declared type on read.
-- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `max_turns`, `require_approval`, `coalesce_tasks`, `allowed_tools`, `allowed_internal_tools`, `allowed_dispatch_targets`, `mcp_servers`, `sort_order`, `color`.
+- Core properties: `description`, `instructions`, `model`, `subscriptions`, `depends_on`, `schedule`, `timeout`, `max_turns`, `require_approval`, `coalesce_tasks`, `allow_learning_self_modification`, `allowed_tools`, `allowed_internal_tools`, `allowed_dispatch_targets`, `mcp_servers`, `sort_order`, `color`.
 
 ### Dispatch
 
@@ -162,6 +172,36 @@ A job with non-empty subscriptions is watch-active. There is no separate toggle.
 
 A job can use subscriptions purely for context (by gating automatic triggers with `require_approval`) or purely for triggering (by not referencing the file list in its instructions).
 
+### Job Learnings
+
+A job's instructional surface has two complementary forms: the prose **description** (cohesive narrative — mission, scope, voice) and **learnings** (discrete, individually-addressable rules, examples, and constraints). Both flow into every dispatch's prompt; both shape what the agent does. The distinction is structural — prose reads worse when fragmented, and learnings benefit from individual toggle, reorder, source provenance, and agent write-back.
+
+A learning is a single piece of guidance attached to a job. Each learning has:
+
+- **Body** — the guidance itself, free-form text, typically a sentence to a paragraph.
+- **Enabled flag** — disabled learnings are stored but excluded from prompt assembly. Disabled learnings cost nothing at dispatch time. Useful for muting stale guidance without losing the artifact, or for A/B-style behavior tweaks.
+- **Position** — ordering within the job's learning list, set by drag-reorder.
+- **Source** — `human` (operator-authored) or `agent` (agent-authored). Provenance is preserved for the lifetime of the learning.
+- **Created and updated timestamps** — for visibility into recency.
+
+Learnings are append-only in spirit but mutable: edits update the timestamp, deletions are hard deletes. There is no soft-delete state; the disabled flag covers "I want it gone but might want it back."
+
+#### Prompt Effect
+
+Enabled learnings are concatenated into the dispatch prompt as a `## Learnings` section appended after the description. Disabled learnings are omitted entirely. A job with no enabled learnings produces a prompt byte-identical to a job that has the feature unused — the section header is not emitted unless there is content. New jobs ship with an empty learnings list; existing jobs gain the surface without any prompt change. Learnings accumulate when the operator (or, where permitted, the agent) has a discrete rule worth pinning.
+
+#### Agent Self-Modification
+
+The per-job property `allow_learning_self_modification` (boolean, default off) controls whether the agent can write to its own learnings. When off, the agent has read-only access — it can introspect "what guidance shapes my behavior?" but cannot change anything. When on, the agent can add, update, and delete learnings, but only those it itself authored.
+
+The write surface is **asymmetric**. An agent can manage its own (`source='agent'`) learnings but cannot edit or delete operator-authored (`source='human'`) ones. Operator authority over operator-authored guidance is structural, not policy. The reasoning: agents may discover and pin self-applicable rules from their own work; they should not retract or rewrite the operator's directives.
+
+The platform's internal MCP tool surface includes a read tool (`list_learnings`, always available) and write tools (`add_learning`, `update_learning`, `delete_learning`, gated by the property). All four are audit-logged like every other MCP tool call.
+
+#### Operator UI
+
+Job configuration shows the learnings list below the description. Each row exposes the body (truncated, click to expand and edit), an enabled toggle, a source badge (`human` / `agent`), a drag handle for reorder, and a delete button. An "Add learning" affordance creates a new row inline. The operator can do anything in the UI — add, edit, delete, toggle, reorder — regardless of source. The asymmetric restriction applies only to agents.
+
 ### Dependencies
 
 - Jobs declare upstream dependencies via `depends_on` (a list of job IDs). When an upstream job's task completes successfully, dependent jobs are auto-enqueued.
@@ -189,9 +229,9 @@ A job can use subscriptions purely for context (by gating automatic triggers wit
 
 ### Prompt Assembly
 
-- The platform builds two prompts per task: a **system prompt** (execution mode, documentation principles, git workflow, working directory) and a **user prompt** (job identity, instructions, invocation context, job registry, subscribed files, action directive).
+- The platform builds two prompts per task: a **system prompt** (execution mode, documentation principles, git workflow, working directory) and a **user prompt** (job identity, instructions, enabled learnings, invocation context, job registry, subscribed files, action directive).
 - The system prompt establishes headless autonomous behavior: no questions, no clarification requests, commit-based workflow.
-- The user prompt layers job-specific instructions with runtime context (why this task was triggered, what other jobs exist, which files are subscribed).
+- The user prompt layers job-specific instructions with runtime context: why this task was triggered, what other jobs exist, which files are subscribed, and the job's enabled learnings (when any exist).
 - The job registry — a manifest of all jobs with their names, descriptions, and subscriptions — is included in every task prompt. Agents know what other agents exist.
 - Agents commit their own changes. The platform does not auto-commit.
 
@@ -202,105 +242,89 @@ A job can use subscriptions purely for context (by gating automatic triggers wit
 
 ### Task Session Interrogation
 
-Completed tasks produce outcome summaries and diffs, but the user needs to ask follow-up questions: "Why did you change this file?" "What alternatives did you consider?" This requires conversational access to the agent's session — the same context, the same reasoning chain.
+Completed and other terminal tasks produce outcome summaries and diffs, but the user needs to ask follow-up questions: "Why did you change this file?" "What alternatives did you consider?" "What did you see that you didn't act on?" This requires conversational access to the agent's session — the same context, the same reasoning chain.
 
-- **Session resume from Resolved** — resolved tasks in the Dispatch view's Resolved column provide a "Chat" action that opens the task's session in a conversational interface. The agent resumes with its full prior context intact via the CLI's `--resume` capability.
-- **Read-only tool restriction** — the resumed session is dispatched with write tools removed. No `Edit`, `Write`, `Bash` (or Bash restricted to read-only mode), no `git_commit`. The agent can read files, search code, and reason about its prior work, but cannot modify the project. Interrogation does not produce side effects.
-- **Work flows through tasks** — if the conversation reveals work that should be done, the user dispatches a new task. The read-only session is an investigation tool, not an execution channel. This preserves the queue-first invariant: all modifications flow through the task queue where they are visible, auditable, and controllable.
+- **Session resume from Resolved** — resolved tasks in the Dispatch view's Resolved column provide a "Chat" action that opens the task's session in a conversational interface. The agent resumes with its full prior context intact via the CLI's `--resume` capability. The resumed session runs against the workspace the task produced — the preserved task worktree for non-success terminals, or a fresh read-only workspace at the integrated `result_commit` for completed tasks. The agent inspects exactly the state it produced.
+- **Read-only tool restriction** — the resumed session is dispatched with write tools removed. No `Edit`, no `Write`, no `git_commit`, no branch operations, no inter-agent dispatch. The agent can read files, search code, and reason about its prior work, but cannot modify the project. Interrogation does not produce side effects.
+- **Work flows through tasks** — if the conversation reveals work that should be done, the user dispatches a new task. The interrogation surface offers a "convert to task" affordance that pre-populates a task draft from the conversation context. The read-only session is an investigation tool, not an execution channel. This preserves the queue-first invariant: all modifications flow through the task queue where they are visible, auditable, and controllable.
+- **Optional thread linking** — insights surfaced during interrogation can be promoted to a Governor thread. The user marks a span of the conversation and posts it as the opening message of a new thread, closing the loop between micro-investigation (this specific task) and macro-oversight (the Governor's pattern view).
 
 ### Governor
 
-The Governor is an internal autonomous agent that monitors the health and effectiveness of the maistro system within a project. It is entirely meta-scoped — it observes how jobs and tasks are performing, identifies friction and opportunities for improvement, and surfaces findings to the operator. The Governor does not touch project code, does not participate in task dispatch, and does not interact with the user conversationally. It runs, analyzes, writes up its findings, and exits.
+The Governor is an internal autonomous agent that monitors the health and effectiveness of the mAistro system within a project. It is entirely meta-scoped — it observes how jobs and tasks are performing, identifies friction and opportunities for improvement, and corresponds with the operator about them. The Governor does not touch project code, does not participate in task dispatch, and does not modify a job's prose description directly.
 
-The Governor replaces the standalone chat interface. Interactive conversation with the platform was the wrong abstraction — the user's relationship with the system is through jobs and tasks, not chat. The Governor preserves the meta-awareness that chat provided (knowledge of jobs, tasks, git activity) but redirects it from reactive Q&A to proactive analysis.
+The Governor's relationship with the operator is a **two-way conversation organized into threads**. A thread is a persistent meta-management discussion about a single concern — a friction the Governor noticed, a question the operator wants answered, a configuration change one of them is proposing. The operator and the Governor exchange messages within a thread; either may propose a change; either may push back or refine. This is not a chat agent — every Governor message is the output of a discrete, fresh invocation. Continuity comes from the thread record, not from a long-running session.
 
-#### Trigger
+This replaces an earlier one-way model in which the Governor produced "findings" that the operator could only approve or decline. One-way findings could not absorb operator pushback, could not be refined, could not be questioned. The thread shape preserves the meta-awareness the findings model had while opening the channel both directions.
 
-The Governor runs automatically after every 10 executed terminal tasks (counted project-wide, not per-job). "Executed" means the task actually consumed agent turns: `completed`, `exhausted`, `failed`, and `timed_out` all count. `cancelled` and `rejected` are excluded — those reflect user intent, not system behavior, and contain no signal about agent or platform health. The counter resets after each Governor invocation. The user can also trigger the Governor manually from the Governor view.
+#### Threads and Messages
 
-Counting failures is deliberate. A job that consistently fails or exhausts its turn limit is exactly what the Governor should be reviewing. Counting only successes would mean a broken job that never completes also never triggers a review — the opposite of what proactive oversight requires. A project running 10 max-turns exhaustions in a row should produce a Governor run that flags the pattern, not silence.
+A **thread** is the persistent unit of Governor↔Operator exchange. Each thread has a title, an opener (Governor or operator), an ordered append-only list of messages, and a status (open or closed). A **message** is one post within a thread, authored by either the Governor or the operator. Messages are append-only — no edits, no deletions.
 
-The trigger is execution-based, not time-based. A project with no activity produces no Governor runs. A project with heavy activity gets proportionally more oversight. The cadence is fixed — the user does not configure the trigger interval. The Governor's personality and behavior are not user-configurable.
+A Governor message may carry a structured **proposal** — a precise, machine-readable action the Governor wants the system to take (modify job properties, create a new job, change queue settings). The proposal renders alongside the message as a structured card, but it carries no buttons. The operator's response is the thread's normal compose box. The operator writes back "yes, do it" or "I disagree because..." or "what about doing X instead?" The proposal's fate is decided by the next Governor invocation, which reads the conversation, interprets the operator's intent, and acts (or refuses to act) accordingly.
 
-#### Findings
+Approvals are not a separate UI surface. There are no Approve/Decline buttons. Assent is prose. Refusal is prose. Refinement is prose. The two-way conversation absorbs everything the one-way feed could not.
 
-The Governor produces **findings** — discrete, structured records that surface on the Governor view. Each finding has a hard type:
+**Closed threads are muted.** Closing a thread is operator-only — the Governor cannot close threads, structurally. A closed thread is invisible to the Governor: excluded from every invocation's context, even its title. The thread remains visible to the operator for reading, and the operator can reopen it at any time. The Governor cannot reopen a closed thread; closure is the operator's mute control over the Governor's awareness.
 
-- **Suggestion** — an actionable recommendation. The Governor identifies something specific that could be improved and describes both the problem and the proposed change. Suggestions are approve/decline. Approving a suggestion triggers the Governor to execute the change (modifying job configuration, properties, queue settings, or creating/deleting jobs). Declining dismisses the suggestion.
-- **Observation** — an important pattern or insight that does not yet warrant action. The Governor notices something the operator should be aware of — a trend, a correlation, a potential issue — but does not propose a specific change. Observations are informational. The operator reads them and may act on them through normal job/queue management, or may simply note them.
+#### Invocations
 
-The distinction is hard, not a spectrum. An observation does not "become" a suggestion. If the Governor later identifies an actionable change related to a prior observation, it creates a new suggestion that may reference the observation contextually — but the two are separate records. Each Governor invocation is a fresh analysis; findings reference prior findings only through the Governor's awareness of its own history, not through record-level linking.
+Every Governor activity is one of two invocation types. Each is a fresh, isolated invocation with its own context packet. None resume a session. At most one Governor invocation runs at a time across the platform.
 
-#### Context
+- **Survey** — the autonomous trigger. Runs after every 10 executed terminal tasks (counted project-wide, not per-job). "Executed" means the task actually consumed agent turns: `completed`, `exhausted`, `failed`, and `timed_out` all count. `cancelled` and `rejected` are excluded because they reflect operator intent, not system behavior, and contain no signal about agent or platform health. The counter resets after each survey. A survey reviews project state and the list of currently open threads, then either posts updates in existing open threads or opens new threads for new concerns. Surveys are read-only — the Governor cannot modify the project, jobs, or queue settings during a survey. A survey may produce zero operations; silent surveys are allowed.
 
-Each Governor invocation receives a fresh context window containing:
+- **Reply** — triggered by any operator action inside a thread (creating the thread, posting in it). The Governor reads the thread's full history along with the current project state and produces exactly one response message in that thread. Reply invocations are uniformly write-capable: the Governor's discretion, informed by the conversation, decides whether to invoke a write tool. If the conversation contains an unexecuted proposal that the operator has clearly assented to, the Governor applies the change and posts a result message describing what was done. If intent is unclear, ambivalent, or contradicted, the Governor does not write — it posts a clarifying response instead. Before applying a stale proposal, the Governor verifies the current state of the target — if the world has moved on since the proposal was made (the property already changed, the job no longer exists), it does not blindly apply.
 
-- **All jobs** with their full configuration (properties, subscriptions, descriptions, model, schedule, tool config)
-- **Recent tasks** (since last Governor run, or last N tasks) with outcomes, terminal states, execution metadata (turns, cost, duration, stop reason), trigger types, and error context for non-success tasks
-- **Git history** — recent commits with authorship, showing which jobs produced which changes
-- **Dashboard-level aggregates** — per-job success rates, failure patterns, timeout frequency, turn consumption relative to limits
-- **Prior Governor findings** — the Governor's own previous suggestions and observations (with their approval/decline status for suggestions), providing continuity across invocations without requiring session persistence
+There is no manual trigger. The operator initiates Governor conversation by creating a thread, not by pinging the analysis engine. The Governor's cadence, scope, model, and personality are not user-configurable.
 
-The Governor has no persistent session. Each run is a fresh context window with all relevant state injected. Continuity comes from including prior findings in the context, not from resuming a conversation.
+Counting failures in the survey trigger is deliberate. A job that consistently fails or exhausts its turn limit is exactly what the Governor should be reviewing. Counting only successes would mean a broken job that never completes also never triggers oversight — the opposite of what proactive review requires.
+
+#### Reply Coalescing
+
+Reply invocations are per-thread coalesced. If a reply for thread X is already queued or in flight and the operator posts again in thread X, the new message merges into that pending invocation instead of enqueueing a second one. The Governor produces one response that addresses everything; the latest operator message is operative when interpreting intent. The operator never sees queue state — only that a Governor message eventually appears in the thread.
 
 #### What the Governor Analyzes
 
-The Governor's concern is the effectiveness of the maistro system, not the quality of the project's code. It looks at:
+The Governor's concern is the effectiveness of the mAistro system, not the quality of the project's code:
 
-- **Job effectiveness** — are jobs completing successfully? What's the success rate? Are certain jobs consistently failing, exhausting turns, or timing out? Is a job's description too vague or too broad for reliable execution?
-- **Scope drift** — have job descriptions or subscription patterns grown stale relative to actual project activity? Is a job watching files that no longer change? Is it missing files that are now central?
-- **Configuration friction** — are turn limits too low (frequent exhaustion)? Too high (wasted budget on stuck agents)? Are timeouts calibrated? Are subscription patterns too broad (noisy triggers) or too narrow (missing relevant changes)?
-- **Implied user intent** — based on manual dispatch patterns, approval decisions, reply/resume frequency, and which suggestions were approved/declined, what does the operator seem to want from the system? Is there a pattern in how the operator uses mAistro that suggests missing jobs, misconfigured triggers, or underutilized capabilities?
-- **Inter-agent coordination** — are agent dispatch chains healthy? Are there jobs that should have dependencies but don't? Are there redundant jobs doing overlapping work?
+- **Job effectiveness** — success rates, recurring failures, turn-limit exhaustions, timeouts. Whether descriptions or learnings are too vague or too broad for reliable execution.
+- **Scope drift** — whether subscription patterns and instructions have grown stale relative to actual project activity.
+- **Configuration friction** — turn limits, timeouts, subscription patterns, and approval gates calibrated against observed behavior.
+- **Implied operator intent** — patterns in manual dispatch, approval decisions, reply/resume frequency, and prior thread responses that suggest unmet needs or misconfiguration.
+- **Inter-agent coordination** — health of agent dispatch chains, missing dependencies, redundant overlapping jobs.
 
-#### Governor Tools (MCP)
+The Governor may propose a learning as part of a thread proposal — a discrete rule it believes belongs on a specific job. The operator assents in prose; the next reply invocation, if it interprets assent, writes the learning via the same write surface that reaches every other configuration change.
 
-The Governor connects to a dedicated internal MCP server (or a dedicated tool surface on the existing internal MCP server) with tools scoped to meta-operations:
+#### The Governor's Tool Surface
+
+The Governor connects to a dedicated MCP tool surface scoped to meta-operations.
 
 **Read tools** (always available):
-- `list_jobs` — all jobs with full properties, subscriptions, descriptions, and configuration
-- `get_recent_tasks` — tasks since last Governor run (or last N), with outcomes, metadata, trigger info, and error context
+- `list_jobs` — all jobs with their full configuration
+- `get_recent_tasks` — recent terminal tasks with outcomes, metadata, trigger info, and error context
 - `get_git_log` — recent commit history with authorship attribution
-- `get_job_health` — per-job aggregates: success rate, failure count, timeout count, exhaustion count, average turns, average cost, over a configurable window
-- `get_prior_findings` — the Governor's own previous findings with status (pending/approved/declined/dismissed for suggestions, read/unread for observations)
+- `get_job_health` — per-job aggregates: success rate, failure count, timeout count, exhaustion count, average turns, average cost
+- `list_open_threads` — thin list of open threads (id, title, opener, last activity)
+- `get_thread` — full message history of a specific thread
 
-**Write tools** (used only when executing an approved suggestion):
-- `update_job_properties` — modify any job property (description, subscriptions, model, max_turns, timeout, schedule, coalesce_tasks, require_approval, allowed_tools, allowed_internal_tools, allowed_dispatch_targets, mcp_servers)
+The Governor has no read access to closed threads. Closed threads are invisible at the tool surface, not just by convention.
+
+**Write tools** (available only on reply invocations):
+- `update_job_properties` — modify any job property
 - `create_job` — create a new job with specified properties
-- `delete_job` — remove a job and cascade its data
-- `update_queue_settings` — modify global queue settings (auto_dispatch)
+- `update_queue_settings` — modify global queue settings
 
-Write tools are available to the Governor only during suggestion execution — when the operator has approved a specific suggestion and the Governor runs to implement it. During analysis runs (the regular every-10-tasks invocation), only read tools are available. This ensures the Governor cannot unilaterally modify the system.
+The write surface is **constructive only**. There is no `delete_job`, no `disable_job`, no `close_thread`. Removing or pausing a job is an operator-only action performed in the Jobs view. Closing a thread is an operator-only UI action. The Governor can flag a job as low-value or recommend that a thread be closed in prose, but it cannot itself remove, disable, or mute.
 
-#### Suggestion Execution
-
-When the operator approves a suggestion, the platform triggers a focused Governor run with:
-- The approved suggestion as the primary directive
-- The current state of whatever the suggestion targets (job config, queue settings, etc.)
-- Write tools enabled
-
-The Governor reads the current state, applies the change described in the suggestion, and exits. The finding record is updated to reflect execution (approved → executed, with a timestamp and a brief description of what was changed). If execution fails, the finding records the error.
-
-This is not a general-purpose execution channel. The Governor executes the specific change it proposed — nothing more. The write tools are scoped to meta-operations (job config, queue settings). The Governor cannot modify project files, commit code, or dispatch tasks.
-
-#### Governor View
-
-The Governor view is a dedicated surface accessible from the left navigation rail. It replaces the Chat view.
-
-The view displays:
-- **Findings feed** — all Governor findings, ordered by recency. Each finding shows its type (suggestion/observation), timestamp, title, and body. Suggestions show their status: pending (awaiting decision), approved (executing or executed), declined. Observations show read/unread state.
-- **Suggestion actions** — pending suggestions have approve/decline buttons. The approve action triggers Governor execution. The decline action dismisses the suggestion with no side effect.
-- **Manual trigger** — a button to invoke the Governor on demand, independent of the 10-task cadence.
-- **Run history** — when the Governor last ran, how many findings it produced, and the task count that triggered it (or "manual" for manual invocations).
-
-The Governor view does not provide a text input. The operator does not converse with the Governor. The relationship is: the Governor analyzes and proposes; the operator reviews and decides. Communication flows one direction (Governor → operator) with binary responses (approve/decline for suggestions, read/dismiss for observations).
+The Governor never sees write tools during a survey; it always has them on a reply (whether to use them is its judgment). This is structurally enforced, not policy.
 
 #### What the Governor Is Not
 
-- **Not a chat agent.** The operator does not ask the Governor questions or give it instructions. The Governor's analysis is self-directed based on system state.
-- **Not a notification system.** The Governor does not fire alerts for individual task events (failures, timeouts, approvals). It synthesizes patterns across multiple tasks and surfaces higher-order insights. A single task failure is a queue event; a pattern of failures across a job is a Governor finding.
-- **Not configurable.** The Governor's personality, analysis scope, trigger cadence, and model are not user-configurable properties. The Governor is a platform feature, not a user-defined agent. Its behavior evolves through platform development, not per-project tuning.
-- **Not a task dispatcher.** The Governor cannot create tasks or dispatch work. Its write scope is limited to job configuration and queue settings — the meta layer. All project-level work flows through the normal task queue.
+- **Not a chat agent.** Each Governor invocation is discrete and isolated, with its own fresh context packet. The thread record provides continuity across invocations; no long-running session exists.
+- **Not a notification system.** The Governor does not fire alerts for individual task events. It synthesizes patterns across multiple tasks. A single task failure is a queue event; a pattern of failures is a thread.
+- **Not configurable.** The Governor's personality, analysis scope, trigger cadence, and model are not user-configurable. The Governor is a platform feature, not a user-defined agent.
+- **Not a task dispatcher.** The Governor cannot create tasks or dispatch work. Its write scope is the meta layer — job configuration and queue settings. Project work flows through the normal task queue.
+- **Not destructive.** The Governor can create and modify configuration but cannot delete jobs, disable jobs, or close threads. The destructive surface is operator-only.
 
 ### Streaming
 
@@ -334,6 +358,7 @@ The platform hosts an internal MCP server that dispatched agents connect to. Thi
 - **Git branch operations** — `git_branch_create` (create a new branch from a specified base, with enforced naming conventions such as `<job-id>/<description>`), `git_branch_switch` (switch the working directory to a named branch, with the platform tracking which branch a task operates on for audit purposes), and `git_branch_merge` (merge a source branch into the current branch, surfacing merge conflicts as structured tool output rather than silent failures).
 - **Read-only project context tools** — file listing, file reading, and job information retrieval, scoped by the job's subscriptions and configuration.
 - **Inter-agent coordination tools** — `dispatch_task` (enqueue a task for another job with a message, creating an `agent` trigger attributed to the dispatching task) and `get_queue_status` (read-only view of queue state — what's pending, running, and backed up). These give agents situational awareness and imperative coordination beyond the declarative trigger system.
+- **Learning self-management tools** — `list_learnings` (always available) lets the agent introspect the rules attached to its job; `add_learning`, `update_learning`, and `delete_learning` (gated by `allow_learning_self_modification`) let the agent pin discrete rules to its own job. Write access is asymmetric: the agent can manage learnings it authored, but cannot modify or delete operator-authored ones. This is the only platform-mediated path by which an agent edits its own instructions.
 - **Tool invocation logging** — every MCP tool call is recorded as a structured event in the task session, creating an audit trail richer than NDJSON stream parsing. Branch operations are logged identically — the platform can reconstruct which branches a task created, switched to, and merged.
 - Agents retain access to native CLI tools (including Bash) alongside MCP tools. MCP tools are structured alternatives, not an exclusive replacement.
 
@@ -358,7 +383,7 @@ The platform must make the available tool inventory visible and selectable. A us
 Three tool sources exist, each requiring discovery:
 
 - **Built-in CLI tools** — the default tools provided by the Claude CLI (e.g. `Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Agent`, `NotebookEdit`). The platform queries the CLI for its available tool list and presents them. These are the tools that `allowed_tools` selects from.
-- **Internal MCP tools** — the tools hosted by the platform's own MCP server (`git_commit`, `git_diff`, `git_log`, `git_status`, `git_branch_create`, `git_branch_switch`, `git_branch_merge`, `list_files`, `read_file`, `list_tasks`, `dispatch_task`, `get_queue_status`). The platform knows these directly — it defines them. The internal server is always connected, but individual internal tools are subject to per-job selection via `allowed_internal_tools`. When no selection is made, all internal tools are available.
+- **Internal MCP tools** — the tools hosted by the platform's own MCP server (`git_commit`, `git_diff`, `git_log`, `git_status`, `git_branch_create`, `git_branch_switch`, `git_branch_merge`, `list_files`, `read_file`, `list_tasks`, `dispatch_task`, `get_queue_status`, `list_learnings`, `add_learning`, `update_learning`, `delete_learning`). The platform knows these directly — it defines them. The internal server is always connected, but individual internal tools are subject to per-job selection via `allowed_internal_tools`. When no selection is made, all internal tools are available. The learning write tools (`add_learning`, `update_learning`, `delete_learning`) are additionally gated by the per-job `allow_learning_self_modification` property — a job that does not opt in does not see them regardless of `allowed_internal_tools`.
 - **External MCP server tools** — tools provided by registered external servers. When a server is registered and enabled, the platform connects to it and discovers its tool list. These tools become visible in the per-job configuration surface alongside built-in tools.
 
 The configuration surface for `allowed_tools` presents the full inventory of available tools as a selectable list — checkboxes, multi-select, or equivalent. The user selects from available options.
@@ -429,7 +454,7 @@ The command bar's design rationale: the user's primary interaction with mAistro 
 - **MCP Servers** — tool server management as a dedicated surface. See MCP Servers View below.
 - **Dashboard** — aggregated operational visibility. Answers "how are my agents doing?" without requiring the user to inspect individual tasks. Shows job health, task timing, and coordination patterns across configurable time windows. Read-only — no actions, no state changes. See Activity Dashboard below.
 - **Settings** — platform configuration: default model, default timeout.
-- **Governor** — findings feed from the autonomous Governor agent. Displays suggestions (approve/decline) and observations (informational). Manual trigger button. See Governor section for full specification.
+- **Governor** — the thread-based correspondence surface with the autonomous Governor agent. A two-pane layout: a thread list on the left (open threads with unread/proposal indicators, closed threads collapsed into a separate disclosure), and the selected thread's message history on the right with a compose box at the bottom. Governor messages that carry a proposal render the proposal as a structured card alongside the message body — there are no Approve/Decline buttons; the operator's response is the compose box. The operator can create new threads, post in open threads, close open threads, and reopen closed ones. The view shows no queue state and no diagnostic plumbing in its primary surface — those live in a collapsed-by-default debug drawer for operators who need to verify the engine is running. There is no manual "trigger Governor" button; conversations are initiated by creating threads. See the Governor section for full specification.
 
 ### Contextual Help (Tooltips)
 
@@ -447,6 +472,7 @@ Required tooltip surfaces:
 - **MCP Servers (per-job)** — select which registered external MCP servers this job's agent can connect to. Only checked servers are available during dispatch. The platform's internal server (git operations, file access) is always connected. Each server in the selection list shows its current health status (healthy, unreachable, disabled) — the user sees problems before dispatching, not after. Register servers in the MCP Servers view first, then enable them here per-job.
 - **Require Approval** — when enabled, automated triggers (commit-watch, schedule, dependency) produce tasks that wait for manual approval before executing. Manual dispatches bypass this gate.
 - **Coalesce Tasks** — when enabled, the job will never have more than one pending task. Any new trigger merges into the existing pending task instead of creating a new queue entry. Useful for jobs that should catch up in one run rather than queuing redundant work.
+- **Allow Learning Self-Modification** — when enabled, the agent can add, update, and delete its own learnings (those it authored). When disabled (the default), the agent has read-only access to its learnings — it can introspect what guidance shapes its behavior but cannot change anything. Operator-authored learnings are never writable by the agent regardless of this setting. Use this when you want the agent to record discrete rules it learned from its own work that should shape next dispatch.
 - **Dependencies** — the job auto-dispatches when *any* selected upstream job completes successfully. Circular chains are allowed — coalescing prevents runaway queuing. Timed-out, failed, or cancelled tasks do not trigger dependents.
 - **Timeout** — maximum execution time in seconds. When reached, the platform gracefully terminates the agent, then force-kills if it does not exit. Timed-out tasks do not trigger downstream dependencies. Set to 0 for no limit.
 - **Max Turns** — maximum number of agent turns before the session is stopped. A turn is one cycle of reasoning and output. Most tasks complete in well under the limit. When reached, the task is marked as exhausted (not completed) — the agent was cut off, not done. Exhausted tasks do not trigger downstream dependencies. Increase the limit if a job consistently needs more interaction, or tighten the instructions if the agent is doing unnecessary work.
@@ -601,5 +627,10 @@ Tool patterns are secondary to health and timing — they support investigation,
 - **Session interrogation is read-only**: resumed task sessions for interrogation strip all write tools. The agent can read and reason but cannot modify the project. This preserves the queue-first invariant — all modifications flow through the task queue.
 - **Agent dispatch is governed**: an agent can only dispatch tasks for jobs listed in its `allowed_dispatch_targets`. No self-dispatch. A depth limit on agent-initiated dispatch chains prevents runaway cascades. Coalescing absorbs redundant agent-triggered enqueues.
 - **Branch operations are explicit**: branch creation, switching, and merging are structured tool calls — not unmediated shell commands. Merge conflicts surface as structured output, not silent failures. Naming conventions on branch creation prevent namespace collisions between jobs.
-- **Governor is meta-scoped**: the Governor agent observes and modifies only the meta layer — job configuration, properties, queue settings. It cannot modify project files, commit code, or dispatch tasks. Write tools are available only during approved suggestion execution, never during analysis runs.
-- **Governor findings are structured records**: each finding has a hard type (suggestion or observation) set at creation. The Governor does not converse with the operator — it produces findings, the operator reviews them. Suggestion approval triggers a focused write-enabled run; all other Governor runs are read-only.
+- **Governor is meta-scoped**: the Governor agent observes and modifies only the meta layer — job configuration, learnings, properties, queue settings. It cannot modify project files, commit code, or dispatch tasks. Write tools are available only on reply invocations (responding to operator action in a thread), never on surveys.
+- **Governor write surface is constructive only**: the Governor can update job properties, create jobs, and update queue settings. It cannot delete jobs, disable jobs, or close threads. Destruction and muting are operator-only actions — there is no MCP write tool that reaches them. The Governor may recommend deletion or closure in prose; the operator is the only one who can act on it.
+- **Closed threads are invisible to the Governor**: closing a thread is operator-only and removes the thread entirely from every subsequent Governor invocation's context — title and content alike. The Governor cannot read closed threads, cannot post in them, and cannot reopen them. Reopening is operator-only. Closure is the operator's mute control over the Governor's awareness.
+- **Approval is prose, not buttons**: the Governor's proposals carry no Approve/Decline affordances. The operator's response is a thread reply. The next reply invocation reads the conversation, interprets intent, and writes only when assent is clear. Stale proposals are verified against current state before execution — if the world moved, the Governor does not blindly apply.
+- **Reply invocations coalesce per-thread**: if a reply for a given thread is already queued or in flight when the operator posts again in that thread, the new message merges into the pending invocation rather than enqueueing a second one. The Governor produces one response covering everything; the latest operator message is operative when interpreting intent.
+- **Learning self-modification is asymmetric**: an agent with `allow_learning_self_modification` enabled can add, update, and delete only the learnings it itself authored (`source='agent'`). Operator-authored learnings (`source='human'`) are never writable by the agent regardless of the property. This is enforced at the tool surface, not by prompt instruction. The operator UI permits anything on either source — operator authority is absolute on operator-authored content.
+- **Learnings preserve provenance**: every learning is stamped at creation with its source (`human` or `agent`) and that source is immutable. The platform can always tell who authored a piece of guidance.
