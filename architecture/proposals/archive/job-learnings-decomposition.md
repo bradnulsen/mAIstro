@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft.
+**Shipped.** Schema + read path in commit `d54116a`, operator UI in `66a6fa3`, agent self-modification surface (read tool + gated write tools + the `allow_learning_self_modification` property) in `7c291d0`, and a dedicated Learnings tab in `843a721`. The shipped surface lives in `db_learnings.py`, `learning_routes.py`, the `list_learnings` / `add_learning` / `update_learning` / `delete_learning` tools in `mcp_server.py`, and the Learnings tab in `Tasks.jsx`. See [storage.md](../../storage.md#entity-attribute-value-property-system) (closed-loop paragraph), [job-configuration.md](../../job-configuration.md) (`allow_learning_self_modification`), [prompt-assembly.md](../../prompt-assembly.md) (`## Learnings` section), [tool-mediation.md](../../tool-mediation.md) (the four learning tools), and [frontend.md](../../frontend.md#jobs-tasksjsx) (Learnings tab) for the as-built description.
 
 ## Summary
 
