@@ -612,7 +612,15 @@ async def _process_task(task: dict):
                 full_response.append(event.get("content", ""))
                 continue
 
-            if etype == "result_meta":
+            if etype == "session_id":
+                # Persist as soon as the CLI announces it (system/init event),
+                # not just at the final `result` event. Otherwise a timeout,
+                # cancellation, or crash before `result` loses the session ID
+                # and Resume becomes impossible.
+                cli_sid = event.get("cli_session_id")
+                if cli_sid:
+                    await db.update_chat_session(session_id, cli_session_id=cli_sid)
+            elif etype == "result_meta":
                 cli_sid = event.get("cli_session_id")
                 if cli_sid:
                     await db.update_chat_session(session_id, cli_session_id=cli_sid)
