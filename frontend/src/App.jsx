@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTask, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus } from './api'
-import Feed from './components/Feed'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
 import Governor from './components/Governor'
@@ -9,7 +8,7 @@ import Settings from './components/Settings'
 import McpServers from './components/McpServers'
 import Dashboard from './components/Dashboard'
 
-const VIEWS = { feed: 'feed', tasks: 'tasks', queue: 'queue', files: 'files', mcp: 'mcp', dashboard: 'dashboard', governor: 'governor', settings: 'settings' }
+const VIEWS = { tasks: 'tasks', queue: 'queue', files: 'files', mcp: 'mcp', dashboard: 'dashboard', governor: 'governor', settings: 'settings' }
 
 export default function App() {
   const [project, setProject] = useState(null)
@@ -76,13 +75,8 @@ export default function App() {
         <button
           className={`rail-icon ${view === VIEWS.dashboard ? 'active' : ''}`}
           onClick={() => setView(VIEWS.dashboard)}
-          title="Dashboard"
-        >⊞</button>
-        <button
-          className={`rail-icon ${view === VIEWS.feed ? 'active' : ''}`}
-          onClick={() => setView(VIEWS.feed)}
           title="Activity"
-        >☰</button>
+        >⊞</button>
         <button
           className={`rail-icon ${view === VIEWS.tasks ? 'active' : ''}`}
           onClick={() => setView(VIEWS.tasks)}
@@ -117,7 +111,6 @@ export default function App() {
       <div className="main-area">
         <CommandBar project={project} jobs={jobs} onNavigate={setView} refreshJobs={refreshJobs} autoQueue={autoQueue} setAutoQueue={setAutoQueue} />
 
-        {view === VIEWS.feed && <Feed />}
         {view === VIEWS.tasks && <Tasks jobs={jobs} onRefresh={refreshJobs} />}
         {view === VIEWS.queue && <Queue />}
         {view === VIEWS.files && <Files />}

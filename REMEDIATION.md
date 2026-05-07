@@ -39,38 +39,11 @@ Architectural debt and remediation plan for the mAistro backend. Live items are 
 
 ---
 
-## R5 residual: subordinate task cards render null metrics
-
-**Problem:** `Queue.jsx` and `Tasks.jsx` render task cards by reading `task.num_turns`, `task.cost_usd`, etc. directly. For coalesced subordinates, those columns are null on the row (the actual outcome lives on the root's `task_executions`). The user sees blank cells instead of "inherits from root."
-
-**Remediation:** Two paths:
-- Render `coalesced→#N (inherits #N's metrics)` for subordinates and skip the metric cells entirely.
-- Or read through `tasks_resolved` so subordinate cards inherit root values and look indistinguishable.
-
-The structural fix shipped — `tasks_resolved` view, `get_task_resolved` helper, output/diff/outcome endpoints, dashboard, governor all switched. This is the last consumer not yet migrated, and it's cosmetic rather than correctness. Touch when those surfaces are reworked for any other reason.
-
-**Scope:** Tiny. Two frontend components, one helper.
-
----
-
-## R13 residual: dashboard cost / turns aggregation
-
-**Problem:** Per-task execution metadata (`stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`) is now captured on `task_executions` and rendered on Queue cards. The dashboard does not aggregate any of it — there is no per-job cost-over-time, no turns-vs-limit chart, no efficiency view.
-
-**Remediation:** Add a `dashboard_cost_efficiency(window_days)` query to `db_dashboard.py` that joins `tasks t JOIN task_executions te WHERE t.coalesced_id IS NULL` (the per-execution profile) and aggregates by `job_id`. Render in the Dashboard alongside Job Health and Job Impact (the latter coming from the dashboard reorientation proposal).
-
-**Scope:** One backend query + one frontend panel. Fits naturally into the dashboard reorientation work — recommend bundling them.
-
----
-
 ## Sequencing
 
 Live work, ordered by leverage:
 
-1. **R7 async git** — touches everything else. Doing this first means subsequent work doesn't bake in more sync git calls.
-2. **R8 glob matching** — trivial; reduces module mis-attribution. Pair with R7 if convenient.
-3. **R6 EAV** — minimal helper extraction is one PR; structural flatten is a separate decision point.
-4. **R5 residual + R13 residual** — bundle into the [dashboard reorientation](architecture/proposals/dashboard-commits-reorientation.md) work, since that's already touching the affected surfaces.
+1. **R6 EAV** — minimal helper extraction is one PR; structural flatten is a separate decision point.
 
 Bigger structural items (Governor Threads, Job Learnings, Installer) live as proposals in `architecture/proposals/` rather than remediation — they're new capability, not debt repayment.
 
@@ -87,9 +60,11 @@ For continuity. Each was originally tracked here as architectural debt; resolved
 | R3 DB connection coordination | Shipped | Readers-draining protocol in `db_core` (`db_read_guard`, `close_db`); `state._switching` flag; HTTP layer rejects switch with 409 if a task is active. |
 | R4 worker/chat CLI duplication | Obsolete | The standalone chat surface was removed when the Governor replaced it. Nothing left to dedupe. |
 | R5 coalescing dispersal (write side) | Shipped | Depth-1 SQLite triggers (`tasks_depth1_*`); `cascade_completion` extracted; lock-at-terminal as emergent policy from pending-only guards. |
-| R5 coalescing dispersal (read side) | Mostly shipped | `tasks_resolved` view, `get_task_resolved` helper, all endpoints (output/diff/outcome/stream), `get_recent_tasks_for_governor`, `dashboard_health` migrated. Frontend cosmetic residual tracked above. |
+| R5 coalescing dispersal (read side) | Shipped | `tasks_resolved` view, `get_task_resolved` helper, all endpoints (output/diff/outcome/stream), `get_recent_tasks_for_governor`, `dashboard_health` migrated. Frontend "residual" turned out to be moot — `get_task_queue` already filters `coalesced_id IS NULL`, so subordinates never render as standalone cards in `Queue.jsx`/`Tasks.jsx`. |
+| R7 async git operations | Shipped | All subprocess-running helpers in `git.py` are async via `asyncio.to_thread`. 60 callsites across worker/scheduler/dispatch/governor/route modules await them. |
+| R8 glob matching mis-filed | Shipped | `_any_file_matches` and `_glob_to_regex` extracted to `backend/matching.py` as `any_file_matches` / `glob_to_regex`. |
 | R9 main.py route extraction | Shipped | All `*_routes.py` modules extracted; `main.py` is a thin shell (lifespan, CORS, `include_router`). |
 | R10 single-tenant project state | Policy, not debt | Locked in by [installer-distribution.md](architecture/proposals/installer-distribution.md) — single-user single-tenant is the deployment shape, not technical debt. |
 | R11 chat events lost on batch failure | Shipped | Worker writes each raw NDJSON event incrementally via `add_chat_event`, with per-event try/except. The original "giant batch dump at end" path is gone. |
 | R12 thinking blocks not surfaced | Shipped | `_translate_event` in `cli.py` emits `thinking` events from both `thinking_delta` (streaming) and full-block paths. |
-| R13 task execution metadata | Mostly shipped | `task_executions` columns (`stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`), `result_meta` event, `max_turns` as EAV property (default 100), Queue.jsx renders turns + cost. Dashboard aggregation residual tracked above. |
+| R13 task execution metadata | Shipped | `task_executions` columns (`stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`), `result_meta` event, `max_turns` as EAV property (default 100), Queue.jsx renders turns + cost. Dashboard aggregation lands in `dashboard_job_impact` alongside per-job commit stats. |

@@ -1,14 +1,13 @@
 """Aggregation queries for the operational dashboard.
 
-Each function answers one panel of the dashboard view: per-job health, run
-timeline, agent dispatch chains, and tool-usage stats. All take a window in
-days and return rows shaped for direct JSON serialization.
+Each function answers one panel of the dashboard view: per-job task health,
+per-job impact (commits + execution cost), and the run timeline.  All take
+a window in days and return rows shaped for direct JSON serialization.
 """
 
-import json
-from collections import defaultdict
-
+from backend import git
 from backend.db_core import get_db
+from backend.db_jobs import list_jobs
 from backend.db_tasks import TERMINAL_STATUSES_SQL
 
 
@@ -111,61 +110,131 @@ async def dashboard_timeline(window_days: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def dashboard_chains(window_days: int) -> list[dict]:
-    """Agent-triggered tasks for dispatch chain visualization."""
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        """SELECT t.id, t.job_id, j.name AS job_name,
-                  t.trigger_detail, te.error, te.completed_at
-           FROM tasks t
-           JOIN jobs j ON j.id = t.job_id
-           LEFT JOIN task_executions te ON te.task_id = t.id
-           WHERE t.trigger = 'agent'
-             AND te.completed_at IS NOT NULL
-             AND te.completed_at >= datetime('now', ?)""",
-        (f"-{window_days} days",)
-    )
-    return [dict(r) for r in rows]
+async def dashboard_job_impact(window_days: int, project_dir: str) -> list[dict]:
+    """Per-job impact summary: what landed in main + what executions cost.
 
+    Two sources, joined on `job_id`:
+      - Git side: parses `git log --numstat --since=<window>` for commits
+        in the window; attributes by author email (`<slug>@maistro.local`
+        for jobs, anything else lumped under the `Operator` pseudo-row).
+        Yields commit count, additions, deletions, files-touched.
+      - Execution side: aggregates `task_executions` over the same window
+        (one row per real execution; subordinates filtered via coalesced_id
+        IS NULL on the parent task). Yields total cost_usd, total turns,
+        and counts of completed / non-success terminals.
 
-async def dashboard_tool_usage(window_days: int) -> list[dict]:
-    """Per-job tool frequency and error rates from MCP tool use events."""
-    db = await get_db()
-    rows = await db.execute_fetchall(
-        """SELECT t.job_id, j.name AS job_name, ce.raw_json
-           FROM chat_events ce
-           JOIN chat_sessions cs ON cs.id = ce.session_id
-           JOIN tasks t ON t.id = cs.task_id
-           JOIN jobs j ON j.id = t.job_id
-           WHERE ce.event_type = 'mcp_tool_use'
-             AND ce.created_at >= datetime('now', ?)""",
-        (f"-{window_days} days",)
-    )
+    Returns one row per job (plus the Operator pseudo-row if any operator
+    commits exist in the window). Jobs with neither commits nor executions
+    in the window are omitted.
+    """
+    # ── Git side ───────────────────────────────────────────────
+    git_log = await git.log(project_dir, limit=10000, with_stats=True)
+    cutoff_iso = None
+    if window_days:
+        # git.log doesn't take --since; do the cutoff client-side from the
+        # parsed `date` field (ISO-ish). Convert to a comparable Y-m-d slice.
+        from datetime import datetime, timezone, timedelta
+        cutoff_dt = datetime.now(tz=timezone.utc) - timedelta(days=window_days)
+        cutoff_iso = cutoff_dt.isoformat()
 
-    # Aggregate: per-job tool counts and error counts
-    job_tools: dict[int, dict] = {}  # job_id -> {job_name, tools: {tool -> {count, errors}}}
-    for r in rows:
-        jid = r["job_id"]
-        if jid not in job_tools:
-            job_tools[jid] = {"job_id": jid, "job_name": r["job_name"], "tools": defaultdict(lambda: {"count": 0, "errors": 0})}
-        try:
-            data = json.loads(r["raw_json"])
-        except (json.JSONDecodeError, TypeError):
+    jobs = await list_jobs()
+    slug_to_job = {j["slug"]: j for j in jobs if j.get("slug")}
+
+    # job_id (or "operator") → impact dict
+    impact: dict[str | int, dict] = {}
+
+    def _ensure(key, name):
+        if key not in impact:
+            impact[key] = {
+                "job_id": key if isinstance(key, int) else None,
+                "job_name": name,
+                "is_operator": key == "operator",
+                "commits": 0,
+                "insertions": 0,
+                "deletions": 0,
+                "files_changed": 0,
+                "_files_set": set(),
+            }
+        return impact[key]
+
+    for entry in git_log:
+        date_str = entry.get("date") or ""
+        if cutoff_iso and date_str < cutoff_iso:
             continue
-        tool_name = data.get("tool", "unknown")
-        job_tools[jid]["tools"][tool_name]["count"] += 1
-        result = data.get("result")
-        if isinstance(result, str) and ("error" in result.lower() or "Error" in result):
-            job_tools[jid]["tools"][tool_name]["errors"] += 1
-        elif isinstance(result, dict) and result.get("isError"):
-            job_tools[jid]["tools"][tool_name]["errors"] += 1
+        email = (entry.get("email") or "").strip()
+        # Match the `<slug>@maistro.local` convention from CLAUDE.md
+        if email.endswith("@maistro.local"):
+            slug = email[: -len("@maistro.local")]
+            job = slug_to_job.get(slug)
+            if job:
+                row = _ensure(job["id"], job["name"])
+            else:
+                # Stale job slug — operator may have deleted the job after it
+                # committed. Bucket under a synthetic "removed-job" name so
+                # the commits don't silently disappear.
+                row = _ensure(f"removed:{slug}", f"(removed) {slug}")
+        else:
+            row = _ensure("operator", "Operator")
 
-    # Convert defaultdicts to plain dicts for JSON serialization
-    return [
-        {
-            "job_id": v["job_id"],
-            "job_name": v["job_name"],
-            "tools": {k: dict(c) for k, c in v["tools"].items()},
-        }
-        for v in job_tools.values()
-    ]
+        row["commits"] += 1
+        row["insertions"] += entry.get("insertions", 0)
+        row["deletions"] += entry.get("deletions", 0)
+        for f in entry.get("files") or []:
+            row["_files_set"].add(f)
+
+    # ── Execution side ─────────────────────────────────────────
+    db = await get_db()
+    exec_rows = await db.execute_fetchall(
+        f"""SELECT t.job_id,
+                   COUNT(*) AS executions,
+                   SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                   SUM(CASE WHEN t.status IN ('failed','exhausted','timed_out','interrupted','cancelled') THEN 1 ELSE 0 END) AS non_success,
+                   SUM(COALESCE(te.num_turns, 0)) AS total_turns,
+                   SUM(COALESCE(te.cost_usd, 0)) AS total_cost_usd
+            FROM tasks t
+            JOIN task_executions te ON te.task_id = t.id
+            WHERE t.coalesced_id IS NULL
+              AND t.status IN {TERMINAL_STATUSES_SQL}
+              AND te.completed_at >= datetime('now', ?)
+            GROUP BY t.job_id""",
+        (f"-{window_days} days",),
+    )
+    exec_by_job = {r["job_id"]: dict(r) for r in exec_rows}
+
+    # Make sure every job with executions appears in `impact` even with zero commits
+    # (failed runs leave no commits but still cost real money).
+    for job_id, ex in exec_by_job.items():
+        job = next((j for j in jobs if j["id"] == job_id), None)
+        if not job:
+            continue
+        _ensure(job_id, job["name"])
+
+    # ── Stitch and finalize ────────────────────────────────────
+    results: list[dict] = []
+    for key, row in impact.items():
+        row["files_changed"] = len(row.pop("_files_set"))
+        ex = exec_by_job.get(row["job_id"]) if row["job_id"] is not None else None
+        if ex:
+            row["executions"] = ex["executions"]
+            row["completed"] = ex["completed"]
+            row["non_success"] = ex["non_success"]
+            row["total_turns"] = ex["total_turns"] or 0
+            row["total_cost_usd"] = round(float(ex["total_cost_usd"] or 0), 4)
+        else:
+            row["executions"] = 0
+            row["completed"] = 0
+            row["non_success"] = 0
+            row["total_turns"] = 0
+            row["total_cost_usd"] = 0.0
+        results.append(row)
+
+    # Sort: real jobs first (by commits desc), then operator, then removed-job rows
+    def _sort_key(r):
+        if r.get("is_operator"):
+            return (1, 0, 0)
+        if r.get("job_id") is None:
+            return (2, -r["commits"], 0)
+        return (0, -r["commits"], -r["total_cost_usd"])
+
+    results.sort(key=_sort_key)
+    return results

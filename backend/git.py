@@ -193,14 +193,17 @@ def parse_log_output(output: str) -> list[dict]:
 
 
 def parse_log_with_files(output: str) -> list[dict]:
-    """Parse git log --numstat output (format lines interleaved with file stats)."""
+    """Parse git log --numstat output (format lines interleaved with file stats).
+
+    `git log --numstat --format=...` separates each entry's header from its
+    numstat block with a blank line. We can't flush on blank — that would
+    drop every entry's stats. Instead, treat blank lines as no-ops; flush
+    only when a *new* header appears (or at the end).
+    """
     entries = []
     current = None
     for line in output.strip().split("\n"):
         if not line:
-            if current:
-                entries.append(current)
-                current = None
             continue
         parsed = parse_log_line(line)
         if parsed:

@@ -1814,122 +1814,135 @@ label.muted-text {
   opacity: 1;
 }
 
-/* ── Dispatch Chains ── */
+/* ── Job Impact ── */
 
-.chains-stats {
-  display: flex;
-  gap: var(--space-7);
-  margin-bottom: var(--space-4);
-}
-
-.chains-stat {
-  display: flex;
-  flex-direction: column;
-}
-
-.chains-stat-value {
-  font-size: var(--text-xl);
-  font-weight: bold;
-}
-
-.chains-stat-label {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
-
-.chains-flows {
-  margin-top: var(--space-3);
-}
-
-.chains-flow-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-  padding: var(--space-1) 0;
-}
-
-.chains-flow-source,
-.chains-flow-target {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-
-.chains-flow-arrow {
-  color: var(--text-muted);
-}
-
-.chains-flow-count {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  margin-left: auto;
-}
-
-/* ── Tool Usage ── */
-
-.tool-usage-grid {
+.impact-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: var(--space-4);
 }
 
-.tool-usage-card {
+.impact-card {
   background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   padding: var(--space-4) var(--space-5);
 }
 
-.tool-usage-header {
+.impact-card.impact-operator {
+  background: transparent;
+  border-style: dashed;
+}
+
+.impact-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
 
-.tool-usage-job-name {
+.impact-name {
   font-size: var(--text-md);
   font-weight: bold;
-}
-
-.tool-usage-summary {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  margin-left: auto;
-}
-
-.tool-usage-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.tool-usage-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-}
-
-.tool-usage-name {
   flex: 1;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tool-usage-count {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  min-width: 28px;
-  text-align: right;
+.impact-metrics {
+  display: flex;
+  gap: var(--space-5);
+  margin-bottom: var(--space-3);
 }
 
-.tool-usage-errors {
-  color: var(--danger);
+.impact-metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.impact-value {
+  font-size: var(--text-xl);
+  font-weight: bold;
+}
+
+.impact-label {
   font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.impact-lines {
+  font-size: var(--text-md);
+  font-weight: bold;
+  display: inline-flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+}
+
+.impact-add {
+  color: var(--success);
+}
+
+.impact-del {
+  color: var(--danger);
+}
+
+.impact-exec {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-light);
+}
+
+.impact-cost {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/* ── Commit History (absorbed Feed) ── */
+
+.dashboard-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: var(--space-2);
+}
+
+.dashboard-section-header h3 {
+  font-size: var(--text-md);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-normal);
+  color: var(--text-muted);
+  margin: 0;
+  border: none;
+  padding: 0;
+}
+
+.commit-history {
+  display: flex;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.commit-history .feed-list {
+  flex: 1;
+  min-width: 0;
+}
+
+.commit-history .detail-panel {
+  flex: 1;
+  min-width: 0;
+  max-height: 600px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: var(--space-4) var(--space-5);
 }
 
 /* ── Contextual Help Tooltip ── */

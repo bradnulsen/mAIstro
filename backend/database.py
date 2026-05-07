@@ -107,10 +107,9 @@ from backend.db_config import (
 
 # ── Dashboard ──────────────────────────────────────────────
 from backend.db_dashboard import (
-    dashboard_chains,
     dashboard_health,
+    dashboard_job_impact,
     dashboard_timeline,
-    dashboard_tool_usage,
 )
 
 # ── Governor ───────────────────────────────────────────────

@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
-import { getDashboard } from '../api'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { getDashboard, getFeed, getGitDiff } from '../api'
+import { formatDate, TRIGGER_ICONS } from '../util'
 
 const WINDOWS = [
   { label: 'Today', days: 1 },
@@ -66,7 +67,7 @@ export default function Dashboard() {
   return (
     <div className="dashboard">
       <div className="dashboard-header">
-        <h2>Dashboard</h2>
+        <h2>Activity</h2>
         <div className="dashboard-window-selector">
           {WINDOWS.map(w => (
             <button
@@ -80,9 +81,9 @@ export default function Dashboard() {
 
       <div className="dashboard-sections">
         <HealthSummary health={data.health} jobColorMap={jobColorMap} />
+        <JobImpact impact={data.job_impact} jobColorMap={jobColorMap} />
         <Timeline timeline={data.timeline} windowDays={data.window_days} jobColorMap={jobColorMap} />
-        <DispatchChains chains={data.chains} jobColorMap={jobColorMap} />
-        <ToolUsage tools={data.tools} jobColorMap={jobColorMap} />
+        <CommitHistory windowDays={data.window_days} />
       </div>
     </div>
   )
@@ -123,7 +124,7 @@ function HealthSummary({ health, jobColorMap }) {
               <div className="health-card-header">
                 <span className="health-job-dot" style={{ background: color }} />
                 <span className="health-job-name">{g.job_name}</span>
-                <span className={`health-trend ${trend}`}>{trend === 'up' ? '\u2191' : trend === 'down' ? '\u2193' : '\u2013'}</span>
+                <span className={`health-trend ${trend}`}>{trend === 'up' ? '↑' : trend === 'down' ? '↓' : '–'}</span>
               </div>
               <div className="health-rate">{pct}%</div>
               <div className="health-bar">
@@ -152,6 +153,69 @@ function getTrend(currentRate, prevRate) {
   if (diff > 0.05) return 'up'
   if (diff < -0.05) return 'down'
   return 'flat'
+}
+
+/* ── Job Impact ── */
+
+function JobImpact({ impact, jobColorMap }) {
+  if (!impact || impact.length === 0) {
+    return (
+      <section className="dashboard-section">
+        <h3>Job Impact</h3>
+        <p className="muted-text">No commits or executions in this window</p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="dashboard-section">
+      <h3>Job Impact</h3>
+      <div className="impact-grid">
+        {impact.map((g, i) => {
+          const key = g.job_id ?? `pseudo:${i}`
+          const dotColor = g.is_operator ? 'var(--text-muted)'
+            : (g.job_id != null ? jobColor(g.job_id, jobColorMap) : 'var(--text-muted)')
+          return (
+            <div key={key} className={`impact-card ${g.is_operator ? 'impact-operator' : ''}`}>
+              <div className="impact-header">
+                <span className="health-job-dot" style={{ background: dotColor }} />
+                <span className="impact-name">{g.job_name}</span>
+              </div>
+              <div className="impact-metrics">
+                <div className="impact-metric">
+                  <span className="impact-value">{g.commits}</span>
+                  <span className="impact-label">commit{g.commits === 1 ? '' : 's'}</span>
+                </div>
+                {(g.insertions > 0 || g.deletions > 0) && (
+                  <div className="impact-metric">
+                    <span className="impact-lines">
+                      {g.insertions > 0 && <span className="impact-add">+{g.insertions}</span>}
+                      {g.deletions > 0 && <span className="impact-del">-{g.deletions}</span>}
+                    </span>
+                    <span className="impact-label">{g.files_changed} file{g.files_changed === 1 ? '' : 's'}</span>
+                  </div>
+                )}
+              </div>
+              {!g.is_operator && (g.executions > 0 || g.total_cost_usd > 0) && (
+                <div className="impact-exec">
+                  <span title="Successful executions">{g.completed}/{g.executions} run{g.executions === 1 ? '' : 's'}</span>
+                  {g.non_success > 0 && <span className="health-bad" title="Non-success terminals">{g.non_success} fail</span>}
+                  {g.total_turns > 0 && <span title="Total agent turns">{g.total_turns} turn{g.total_turns === 1 ? '' : 's'}</span>}
+                  {g.total_cost_usd > 0 && <span className="impact-cost" title="Total execution cost">{formatCost(g.total_cost_usd)}</span>}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function formatCost(usd) {
+  if (usd >= 1) return `$${usd.toFixed(2)}`
+  if (usd >= 0.01) return `$${usd.toFixed(2)}`
+  return `$${usd.toFixed(4)}`
 }
 
 /* ── Timeline ── */
@@ -271,158 +335,154 @@ function formatMs(ms) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`
 }
 
-/* ── Agent Dispatch Chains ── */
+/* ── Commit History (absorbed from Feed.jsx) ── */
 
-function DispatchChains({ chains, jobColorMap }) {
-  if (!chains || chains.length === 0) {
-    return (
-      <section className="dashboard-section">
-        <h3>Agent Dispatch Chains</h3>
-        <p className="muted-text">No agent-dispatched tasks in this window</p>
-      </section>
-    )
+function CommitHistory({ windowDays }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [selected, setSelected] = useState(null)
+  const [diff, setDiff] = useState('')
+  const [loadingDiff, setLoadingDiff] = useState(false)
+
+  // Close detail on Escape
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === 'Escape' && selected) setSelected(null)
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [selected])
+
+  const refresh = useCallback(async () => {
+    try {
+      const feed = await getFeed({ limit: 100 })
+      setItems(feed)
+    } catch {}
+    setLoading(false)
+  }, [])
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    await refresh()
+    setRefreshing(false)
+  }, [refresh])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  // Auto-refresh every 30s (matches surrounding dashboard cadence)
+  useEffect(() => {
+    const interval = setInterval(refresh, 30000)
+    return () => clearInterval(interval)
+  }, [refresh])
+
+  const selectItem = async (item) => {
+    setSelected(item)
+    setDiff('')
+    setLoadingDiff(true)
+    try {
+      const d = await getGitDiff(item.hash)
+      setDiff(d.diff || '')
+    } catch {
+      setDiff('')
+    }
+    setLoadingDiff(false)
   }
 
-  // Build dispatch pattern: which jobs dispatch which
-  // trigger_detail for agent tasks is "source_job_id#source_task_id"
-  const patterns = {}  // "source -> target" -> count
-  const taskJobMap = {}  // task_id -> job_id (from the chains data)
-  const jobNameMap = {}  // job_id -> job_name
-  chains.forEach(t => {
-    taskJobMap[t.id] = t.job_id
-    jobNameMap[t.job_id] = t.job_name
-  })
-
-  /** Parse agent trigger_detail ("jobId#taskId") → { jobId, taskId } or null */
-  function parseAgentDetail(detail) {
-    if (!detail) return null
-    const idx = detail.lastIndexOf('#')
-    if (idx < 1) return null
-    const jobId = parseInt(detail.slice(0, idx))
-    const taskId = parseInt(detail.slice(idx + 1))
-    if (isNaN(jobId) || isNaN(taskId)) return null
-    return { jobId, taskId }
-  }
-
-  // For chain depth, trace back through trigger_detail
-  const depths = {}  // task_id -> depth
-  const maxDepthByJob = {}
-
-  chains.forEach(t => {
-    const parsed = parseAgentDetail(t.trigger_detail)
-    // Source job: prefer the explicit job ID from trigger_detail, fall back to task map
-    const sourceJob = parsed ? parsed.jobId : null
-    const sourceName = (sourceJob != null && jobNameMap[sourceJob]) || sourceJob || '?'
-    const targetName = jobNameMap[t.job_id] || t.job_id
-    const key = `${sourceName} -> ${targetName}`
-    patterns[key] = (patterns[key] || 0) + 1
-
-    // Estimate depth by tracing the dispatch chain
-    let depth = 1
-    let curTaskId = parsed ? parsed.taskId : null
-    const visited = new Set()
-    while (curTaskId && !visited.has(curTaskId)) {
-      visited.add(curTaskId)
-      if (taskJobMap[curTaskId]) {
-        depth++
-        const parent = chains.find(c => c.id === curTaskId)
-        const parentParsed = parent ? parseAgentDetail(parent.trigger_detail) : null
-        curTaskId = parentParsed ? parentParsed.taskId : null
-      } else {
-        break
-      }
-    }
-    depths[t.id] = depth
-    if (!maxDepthByJob[t.job_id] || depth > maxDepthByJob[t.job_id]) {
-      maxDepthByJob[t.job_id] = depth
-    }
-  })
-
-  // Aggregate job-to-job flows
-  const flows = Object.entries(patterns)
-    .map(([key, count]) => {
-      const [source, target] = key.split(' -> ')
-      return { source, target, count }
-    })
-    .sort((a, b) => b.count - a.count)
-
-  const maxDepth = Math.max(...Object.values(depths), 1)
+  // Client-side window filter — keeps the table aligned with the
+  // window selector that drives the rest of the dashboard.
+  const cutoffMs = windowDays ? Date.now() - windowDays * 86400000 : null
+  const filtered = cutoffMs
+    ? items.filter(i => i.date && new Date(i.date.replace(' ', 'T')).getTime() >= cutoffMs)
+    : items
 
   return (
     <section className="dashboard-section">
-      <h3>Agent Dispatch Chains</h3>
-      <div className="chains-stats">
-        <div className="chains-stat">
-          <span className="chains-stat-value">{chains.length}</span>
-          <span className="chains-stat-label">agent tasks</span>
-        </div>
-        <div className="chains-stat">
-          <span className="chains-stat-value">{maxDepth}</span>
-          <span className="chains-stat-label">max depth</span>
-        </div>
+      <div className="dashboard-section-header">
+        <h3>Commits</h3>
+        <button className="small" onClick={handleRefresh} disabled={refreshing}>
+          {refreshing ? <span className="tool-spinner" /> : '↻'}
+        </button>
       </div>
-      {flows.length > 0 && (
-        <div className="chains-flows">
-          <h4>Dispatch Patterns</h4>
-          {flows.map((f, i) => (
-            <div key={i} className="chains-flow-row">
-              <span className="chains-flow-source">{f.source}</span>
-              <span className="chains-flow-arrow">&rarr;</span>
-              <span className="chains-flow-target">{f.target}</span>
-              <span className="chains-flow-count">&times;{f.count}</span>
+      <div className="commit-history">
+        <div className="feed-list">
+          {loading && <div className="loading">Loading commits...</div>}
+          {!loading && filtered.length === 0 && (
+            <div className="empty-state">No commits in this window</div>
+          )}
+          {filtered.map(item => (
+            <div
+              key={item.hash}
+              className={`feed-item ${selected?.hash === item.hash ? 'active' : ''}`}
+              onClick={() => selectItem(item)}
+            >
+              <div className="feed-avatar">
+                {(item.author || '?')[0].toUpperCase()}
+              </div>
+              <div className="feed-body">
+                <div className="feed-meta">
+                  <span className="feed-author">{item.author}</span>
+                  <span className="feed-trigger">
+                    {TRIGGER_ICONS[item.trigger] || ''}
+                  </span>
+                  <span>{formatDate(item.date)}</span>
+                </div>
+                <div className="feed-message">{item.message}</div>
+              </div>
+              {(item.files?.length > 0 || item.insertions > 0 || item.deletions > 0) && (
+                <div className="feed-stats">
+                  <span className="feed-stat-files">{item.files?.length || 0} {item.files?.length === 1 ? 'file' : 'files'}</span>
+                  {(item.insertions > 0 || item.deletions > 0) && (
+                    <span className="feed-stat-lines">
+                      {item.insertions > 0 && <span className="feed-stat-add">+{item.insertions}</span>}
+                      {item.deletions > 0 && <span className="feed-stat-del">-{item.deletions}</span>}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
-      )}
-    </section>
-  )
-}
 
-/* ── Tool Usage Patterns ── */
-
-function ToolUsage({ tools, jobColorMap }) {
-  if (!tools || tools.length === 0) {
-    return (
-      <section className="dashboard-section">
-        <h3>Tool Usage</h3>
-        <p className="muted-text">No tool usage data in this window</p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="dashboard-section">
-      <h3>Tool Usage</h3>
-      <div className="tool-usage-grid">
-        {tools.map(g => {
-          const color = jobColor(g.job_id, jobColorMap)
-          const toolEntries = Object.entries(g.tools)
-            .sort((a, b) => b[1].count - a[1].count)
-          const totalCalls = toolEntries.reduce((s, [, v]) => s + v.count, 0)
-          const totalErrors = toolEntries.reduce((s, [, v]) => s + v.errors, 0)
-
-          return (
-            <div key={g.job_id} className="tool-usage-card">
-              <div className="tool-usage-header">
-                <span className="health-job-dot" style={{ background: color }} />
-                <span className="tool-usage-job-name">{g.job_name}</span>
-                <span className="tool-usage-summary">{totalCalls} calls{totalErrors > 0 && <span className="health-bad">, {totalErrors} errors</span>}</span>
-              </div>
-              <div className="tool-usage-list">
-                {toolEntries.slice(0, 10).map(([name, stats]) => (
-                  <div key={name} className="tool-usage-row">
-                    <span className="tool-usage-name">{name}</span>
-                    <span className="tool-usage-count">{stats.count}</span>
-                    {stats.errors > 0 && <span className="tool-usage-errors">{stats.errors} err</span>}
-                  </div>
-                ))}
-                {toolEntries.length > 10 && (
-                  <div className="tool-usage-row muted-text">+{toolEntries.length - 10} more</div>
-                )}
-              </div>
+        {selected && (
+          <div className="detail-panel">
+            <div className="detail-panel-header">
+              <h3>Commit Detail</h3>
+              <button className="small" onClick={() => setSelected(null)}>✕</button>
             </div>
-          )
-        })}
+            <div className="commit-meta">
+              {selected.hash?.slice(0, 8)} by {selected.author}
+            </div>
+            <div className="commit-headline">
+              {selected.message}
+            </div>
+            {selected.files && (
+              <div className="detail-section commit-files-section">
+                <label>Changed Files</label>
+                {selected.files.map(f => (
+                  <div key={f} className="commit-changed-file">{f}</div>
+                ))}
+              </div>
+            )}
+            {loadingDiff && (
+              <div className="diff-status-note">Loading diff...</div>
+            )}
+            {diff && (
+              <div className="diff-wrapper">
+                <label>Diff</label>
+                <pre className="diff-view">
+                  {diff.split('\n').map((line, i) => (
+                    <div key={i} className={
+                      line.startsWith('+') ? 'diff-add' :
+                      line.startsWith('-') ? 'diff-del' :
+                      line.startsWith('@@') ? 'diff-hunk' : ''
+                    }>{line}</div>
+                  ))}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </section>
   )
