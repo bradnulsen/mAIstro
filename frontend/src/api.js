@@ -47,6 +47,28 @@ export const getJobSubscriptions = (id) => fetchJSON(`/api/jobs/${id}/subscripti
 export const reorderJobs = (jobIds) =>
   fetchJSON('/api/jobs/reorder', { method: 'POST', body: JSON.stringify({ job_ids: jobIds }) })
 
+// ── Learnings (per-job structured guidance) ──
+
+export const listLearnings = (jobId) => fetchJSON(`/api/jobs/${jobId}/learnings`)
+
+export const createLearning = (jobId, body) =>
+  fetchJSON(`/api/jobs/${jobId}/learnings`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  })
+
+export const updateLearning = (id, updates) =>
+  fetchJSON(`/api/learnings/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
+
+export const deleteLearning = (id) =>
+  fetchJSON(`/api/learnings/${id}`, { method: 'DELETE' })
+
+export const reorderLearnings = (jobId, learningIds) =>
+  fetchJSON(`/api/jobs/${jobId}/learnings/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ learning_ids: learningIds }),
+  })
+
 // ── Tasks (atomic work items) ──
 
 export const enqueueTask = (jobId, context) =>

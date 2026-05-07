@@ -4,6 +4,7 @@ import {
   createJob, updateJob, deleteJob, getJobSubscriptions,
   listMcpServers, getToolInventory, reorderJobs,
   listTemplates, saveTemplate, updateTemplate,
+  listLearnings, createLearning, updateLearning, deleteLearning, reorderLearnings,
 } from '../api'
 import HelpTip from './HelpTip'
 
@@ -20,6 +21,7 @@ const TIPS = {
   mcpServers: 'External MCP servers to connect to this job\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
   allowedInternalTools: 'Internal MCP tools the agent can access. When a subset is selected, only listed tools are presented by the internal server. All checked = default (no restrictions). Use this to create read-only jobs or restrict dispatch capabilities.',
   allowedDispatchTargets: 'Jobs this agent can dispatch via the dispatch_task tool. When none are selected, the agent cannot dispatch other jobs. Self-dispatch is always prohibited.',
+  learnings: 'Discrete, individually-toggleable rules and notes the agent sees alongside the description. Use for guidance worth muting/reordering on its own. Disabled rows are stored but excluded from the prompt.',
 }
 
 export default function Tasks({ jobs, onRefresh }) {
@@ -365,6 +367,8 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
               )}
             </div>
           </div>
+
+          <LearningsList jobId={job.id} />
         </div>
       )}
 
@@ -690,6 +694,151 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
         )}
         {deleteError && <div className="error-text">{deleteError}</div>}
       </div>
+    </div>
+  )
+}
+
+function LearningsList({ jobId }) {
+  const [items, setItems] = useState(null)
+  const [error, setError] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [newBody, setNewBody] = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [editBody, setEditBody] = useState('')
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dragOverIdx, setDragOverIdx] = useState(null)
+
+  const reload = useCallback(() => {
+    listLearnings(jobId).then(setItems).catch(e => setError(e.message))
+  }, [jobId])
+  useEffect(() => { reload() }, [reload])
+
+  const handleAdd = async () => {
+    const body = newBody.trim()
+    if (!body) return
+    try {
+      await createLearning(jobId, body)
+      setNewBody('')
+      setAdding(false)
+      reload()
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleSaveEdit = async (id) => {
+    const body = editBody.trim()
+    if (!body) { setEditingId(null); return }
+    try {
+      await updateLearning(id, { body })
+      setEditingId(null)
+      reload()
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleToggle = async (item) => {
+    try {
+      await updateLearning(item.id, { enabled: !item.enabled })
+      reload()
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleDelete = async (id) => {
+    try {
+      await deleteLearning(id)
+      reload()
+    } catch (e) { setError(e.message) }
+  }
+
+  const handleDragEnd = async () => {
+    if (dragIdx !== null && dragOverIdx !== null && dragIdx !== dragOverIdx && items) {
+      const ids = items.map(l => l.id)
+      const [moved] = ids.splice(dragIdx, 1)
+      ids.splice(dragOverIdx, 0, moved)
+      try { await reorderLearnings(jobId, ids); reload() } catch (e) { setError(e.message) }
+    }
+    setDragIdx(null)
+    setDragOverIdx(null)
+  }
+
+  return (
+    <div className="field-group learnings-section">
+      <div className="label-row">
+        <label>Learnings</label>
+        <HelpTip text={TIPS.learnings} />
+      </div>
+      {error && <div className="error-text">{error}</div>}
+      <div className="learnings-list">
+        {items === null && <span className="muted-text">Loading...</span>}
+        {items && items.length === 0 && !adding && (
+          <span className="muted-text">No learnings. Add a rule, example, or constraint worth toggling on its own.</span>
+        )}
+        {items && items.map((l, i) => (
+          <div
+            key={l.id}
+            className={`learning-item${l.enabled ? '' : ' disabled'}${dragOverIdx === i && dragIdx !== i ? ' drag-over' : ''}${dragIdx === i ? ' dragging' : ''}`}
+            draggable={editingId !== l.id}
+            onDragStart={e => { setDragIdx(i); e.dataTransfer.effectAllowed = 'move' }}
+            onDragOver={e => { e.preventDefault(); setDragOverIdx(i) }}
+            onDragEnd={handleDragEnd}
+          >
+            <span className="learning-handle" title="Drag to reorder">⋮⋮</span>
+            <input
+              type="checkbox"
+              checked={l.enabled}
+              onChange={() => handleToggle(l)}
+              title={l.enabled ? 'Enabled — included in prompt' : 'Disabled — excluded from prompt'}
+            />
+            {editingId === l.id ? (
+              <textarea
+                className="learning-body learning-body-edit"
+                value={editBody}
+                onChange={e => setEditBody(e.target.value)}
+                onBlur={() => handleSaveEdit(l.id)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') setEditingId(null)
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSaveEdit(l.id) }
+                }}
+                rows={Math.max(2, editBody.split('\n').length)}
+                autoFocus
+              />
+            ) : (
+              <div
+                className="learning-body"
+                onClick={() => { setEditingId(l.id); setEditBody(l.body) }}
+                title="Click to edit"
+              >{l.body}</div>
+            )}
+            <span className={`learning-source learning-source-${l.source}`}>{l.source}</span>
+            <button
+              className="small learning-delete"
+              onClick={() => handleDelete(l.id)}
+              title="Delete learning"
+            >✕</button>
+          </div>
+        ))}
+        {adding && (
+          <div className="learning-item learning-item-new">
+            <textarea
+              className="learning-body learning-body-edit"
+              value={newBody}
+              onChange={e => setNewBody(e.target.value)}
+              placeholder="A rule, example, or constraint..."
+              rows={Math.max(2, newBody.split('\n').length)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { setAdding(false); setNewBody('') }
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleAdd() }
+              }}
+              autoFocus
+            />
+            <div className="learning-new-actions">
+              <button className="small primary" onClick={handleAdd} disabled={!newBody.trim()}>Add</button>
+              <button className="small" onClick={() => { setAdding(false); setNewBody('') }}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+      {!adding && (
+        <button className="small" onClick={() => setAdding(true)}>+ Add learning</button>
+      )}
     </div>
   )
 }

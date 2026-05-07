@@ -32,6 +32,7 @@ from backend.feed_routes import router as feed_router
 from backend.git_routes import router as git_router
 from backend.governor_routes import router as governor_router
 from backend.job_routes import router as job_router
+from backend.learnings_routes import router as learnings_router
 from backend.mcp_routes import router as mcp_router
 from backend.project_routes import router as project_router
 from backend.queue_routes import router as queue_router
@@ -63,6 +64,7 @@ app.add_middleware(
 app.include_router(governor_router)
 app.include_router(queue_router)
 app.include_router(job_router)
+app.include_router(learnings_router)
 app.include_router(project_router)
 app.include_router(feed_router)
 app.include_router(git_router)
