@@ -379,6 +379,25 @@ CREATE INDEX IF NOT EXISTS idx_governor_findings_status
 CREATE INDEX IF NOT EXISTS idx_governor_runs_started
     ON governor_runs (started_at DESC);
 
+-- Per-job learnings: discrete, addressable, individually-toggleable rules
+-- that complement the prose `description`. Empty for every existing job
+-- post-schema-change; jobs accumulate rows as operators (or, when the
+-- self-modification permission is enabled, agents) pin guidance worth
+-- toggling. See architecture/proposals/job-learnings-decomposition.md.
+CREATE TABLE IF NOT EXISTS job_learnings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    position INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'human' CHECK (source IN ('human','agent')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_learnings_job
+    ON job_learnings (job_id, position);
+
 """
 
 SEED_SQL = """
