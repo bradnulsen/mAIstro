@@ -16,11 +16,11 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 
 | Property | Type | Default | Purpose |
 |----------|------|---------|---------|
-| `description` | string | `""` | Short reference label shown in UI and job manifests |
-| `instructions` | string | `""` | Detailed prompt body — the job's behavioral specification |
+| `summary` | string | `""` | Short reference blurb — feeds the job manifest line and the job list UI |
+| `description` | string | `""` | Long-form prose body — mission, scope, voice. The "north star" of what good output looks like. Concatenated into every dispatch prompt |
 | `model` | string | `"sonnet"` | Claude model identifier for CLI invocation |
 | `subscriptions` | json | `[]` | Glob patterns for watch triggers and context injection |
-| `depends_on` | json | `[]` | List of upstream job IDs for dependency triggers |
+| `cascades_from` | json | `[]` | List of upstream job IDs for dependency triggers (DESIGN refers to this property as `depends_on` — the on-disk key is `cascades_from`) |
 | `schedule` | string | `""` | Cron expression for scheduled dispatch |
 | `timeout` | integer | `900` | Maximum execution time in seconds |
 | `max_turns` | integer | `100` | Maximum agent turns per task — safety bound, not a target |
@@ -33,6 +33,13 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `sort_order` | integer | `0` | Explicit ordering in the job list |
 
 Properties are read with defaults applied — a job with no overrides gets all default values. The update path (`update_job`) accepts a partial set of properties and writes only the provided keys as overrides.
+
+### Pending Properties (DESIGN reset)
+
+DESIGN's reset around closed-loop learning adds two structural surfaces that are not yet in the property registry. The shape of each is specified in the corresponding proposal; both flow through the same EAV mechanism when they ship.
+
+- **`color`** (string) — visual identifier assigned at creation from a curated palette. No behavioral semantics; renders the job's identity color across every surface (command bar indicator, queue cards, status pills). Operator-changeable via a hue picker. The 10 default palette tokens (`--job-color-0` … `--job-color-9`) already exist in [App.css](frontend/src/App.css) — adding the property is what wires the value into job records.
+- **`allow_learning_self_modification`** (boolean, default `false`) — gates the agent's write access to its own job's learnings. When `false`, the agent has read-only access to the learning list. When `true`, the agent can `add_learning`, `update_learning`, and `delete_learning` — but only on learnings it itself authored (`source='agent'`); operator-authored learnings (`source='human'`) are never agent-writable regardless of this property. Plumbing parallels `allowed_internal_tools` — the property selects which write tools are listed in `MAISTRO_ALLOWED_INTERNAL_TOOLS` for that job's dispatches. See [proposals/job-learnings-decomposition.md](proposals/job-learnings-decomposition.md).
 
 ## Ordering
 
@@ -57,7 +64,7 @@ Circular dependency chains are permitted. When job A depends on job B and vice v
 ## Relationship to Other Systems
 
 - [Dispatch Engine](dispatch-engine.md) reads job properties at dispatch time to determine model, timeout, tools, and approval requirements
-- [Trigger System](trigger-system.md) reads `subscriptions`, `schedule`, `depends_on`, and `coalesce_tasks` to determine when and how to enqueue tasks
-- [Prompt Assembly](prompt-assembly.md) reads `instructions`, `description`, and `subscriptions` to build the agent's prompt
-- [Tool Mediation](tool-mediation.md) uses `allowed_tools`, `allowed_internal_tools`, and `mcp_servers` to compose each job's tool surface at dispatch time
-- The job registry (manifest) is built from all jobs' names, descriptions, and subscriptions — injected into every task prompt so agents know their neighbors
+- [Trigger System](trigger-system.md) reads `subscriptions`, `schedule`, `cascades_from`, and `coalesce_tasks` to determine when and how to enqueue tasks
+- [Prompt Assembly](prompt-assembly.md) reads `summary`, `description`, and `subscriptions` to build the agent's prompt; will additionally read enabled `job_learnings` rows once the learnings surface ships
+- [Tool Mediation](tool-mediation.md) uses `allowed_tools`, `allowed_internal_tools`, and `mcp_servers` to compose each job's tool surface at dispatch time. `allow_learning_self_modification` extends this composition to gate learning write tools
+- The job registry (manifest) is built from all jobs' names, summaries, and subscriptions — injected into every task prompt so agents know their neighbors

@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft.
+**Shipped** in commit `e7c58ce` ([Engineering] Dashboard reorientation: Job Impact + commit history). The shipped surface lives in `db_dashboard.dashboard_job_impact()`, `dashboard_routes`, and `Dashboard.jsx`; `Feed.jsx` was deleted and the rail entry collapsed into "Activity." See [architecture/frontend.md — Activity](../../frontend.md#activity-dashboardjsx) and [architecture/storage.md — Dashboard Aggregation Queries](../../storage.md#dashboard-aggregation-queries) for the as-built description.
 
 ## Summary
 

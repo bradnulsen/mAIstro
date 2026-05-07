@@ -76,6 +76,10 @@ Tools for cross-agent awareness and imperative dispatch:
 
 These tools give agents imperative coordination beyond the declarative trigger system (dependencies, subscriptions). Agent dispatch is the only mechanism where one agent can directly cause another to run — all other cross-agent triggers flow through git commits or configuration.
 
+### Learning Self-Management (pending)
+
+> **Direction**: DESIGN's job-learnings reset adds an asymmetric write surface for the agent's own job-learnings list. The internal MCP server gets four new tools — `list_learnings` (read; always available, surfaces enabled + disabled rows with id/body/enabled/position/source so the agent can introspect "what guidance shapes my behavior?"), `add_learning(body)`, `update_learning(id, body)`, and `delete_learning(id)` (writes; gated by the per-job `allow_learning_self_modification` boolean). The asymmetry is structural and enforced at the tool surface, not by prompt instruction: the agent can manage learnings it itself authored (`source='agent'`) but cannot edit or delete operator-authored ones (`source='human'`). Operators retain full authority over both sources via the UI. Plumbing parallels every other internal tool — gating flows through `MAISTRO_ALLOWED_INTERNAL_TOOLS`, audit logging is identical. See [proposals/job-learnings-decomposition.md](proposals/job-learnings-decomposition.md) and [Job Configuration — Pending Properties](job-configuration.md#pending-properties-design-reset).
+
 ## Tool Invocation Logging
 
 Every MCP tool call is recorded as a structured event in the task's chat session. This creates an audit trail that captures:
@@ -94,7 +98,7 @@ The platform makes the full tool inventory visible and selectable so users confi
 Three tool sources, each with a discovery mechanism:
 
 - **Built-in CLI tools** — the platform maintains a canonical set of CLI tool names (`CLI_NATIVE_TOOLS` in `cli.py`). These are the tools that `allowed_tools` selects from. The configuration surface presents them as a selectable inventory — the user picks from what exists rather than typing free-text names.
-- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_jobs`, `dispatch_task`, `get_queue_status`). The internal server is always connected, but individual internal tools are subject to per-job selection via `allowed_internal_tools`. When no selection is made, all internal tools are available. The configuration surface presents these as a selectable inventory.
+- **Internal MCP tools** — the platform defines these directly (`git_commit`, `git_diff`, `git_log`, `git_status`, `list_files`, `read_file`, `list_jobs`, `dispatch_task`, `get_queue_status`; the learning self-management tools `list_learnings`/`add_learning`/`update_learning`/`delete_learning` join this list once the learnings reset ships). The internal server is always connected, but individual internal tools are subject to per-job selection via `allowed_internal_tools`. When no selection is made, all internal tools are available. The configuration surface presents these as a selectable inventory.
 - **External MCP server tools** — when a registered external server is connected, the platform can discover its tool list via the MCP protocol. Discovered tools become visible alongside built-in tools in the per-job configuration surface.
 
 The configuration surfaces for `allowed_tools` and `mcp_servers` present selectable options drawn from these inventories. Users select from what exists; they do not enter arbitrary text that may not correspond to real tools.

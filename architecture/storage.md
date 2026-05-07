@@ -94,6 +94,8 @@ On read, `get_job()` loads all defs, applies defaults, then overlays job-specifi
 
 This design means adding a new property requires only a `SEED_SQL` insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
+> **Direction**: DESIGN's job-learnings reset adds a sibling structured surface that does *not* fit the EAV pattern — learnings need per-row identity (toggle, reorder, source provenance, agent write-back), which an EAV property cannot express. The proposal at [proposals/job-learnings-decomposition.md](proposals/job-learnings-decomposition.md) introduces a new `job_learnings` table (id, job_id FK CASCADE, body, enabled, position, source `human|agent`, timestamps) alongside the EAV registry, plus a single new EAV property `allow_learning_self_modification` (boolean, default false) gating agent write access. The two surfaces compose: prose lives in the EAV `description`, structured rules live in `job_learnings`. Prompt assembly concatenates enabled rows after the description block (zero rows = byte-identical prompt; jobs that don't use the surface are unaffected).
+
 ### Task Record
 
 Task data is split across three tables, each owning one concern:
@@ -165,16 +167,20 @@ Key properties:
 
 The `governor_task_counter` config key drives the every-10-tasks autotrigger. See [Governor](governor.md) for the full specification.
 
+> **Direction**: DESIGN's reset to a thread-based Governor replaces `governor_findings` with two new tables — `governor_threads` (id, title, status open|closed, opener governor|human, unread_for_human, created/last-activity/closed timestamps) and `governor_messages` (id, thread_id FK CASCADE, author governor|human, body, optional `action_payload` JSON for typed structured proposals, optional run_id FK, created_at). `governor_runs` keeps its shape but the `trigger` value set narrows to `auto` (survey) and `reply`. The schema and indexes are spelled out in [proposals/governor-threads.md](proposals/governor-threads.md). Per the no-migration-system policy, the dev DB is recreated when the proposal ships; an optional one-shot conversion goes in `migrate_db.py`, not in `db_migrations.py`.
+
 ### Dashboard Aggregation Queries
 
-The Activity Dashboard (see [Frontend — Dashboard](frontend.md#dashboard)) introduces a read-only aggregation workload over existing tables. Unlike queue operations which filter on lifecycle state (pending, queued, active), dashboard queries filter on terminal events and aggregate across jobs. Key patterns:
+The Activity dashboard (see [Frontend — Activity](frontend.md#activity-dashboardjsx)) introduces a read-only aggregation workload over existing tables and over `git log --numstat` parsed in-process. Unlike queue operations which filter on lifecycle state (pending, queued, active), dashboard queries filter on terminal events and aggregate across jobs. Key patterns:
 
-- **Health**: `tasks WHERE coalesced_id IS NULL` grouped by `job_id`, classified by `status`, filtered by time range — subordinates excluded so a coalesce group counts as one outcome
+- **Health**: `tasks JOIN task_executions WHERE coalesced_id IS NULL` grouped by `job_id`, classified by `status`, filtered by `task_executions.completed_at` within the window — subordinates excluded so a coalesce group counts as one outcome
+- **Job Impact**: `git log --numstat` parsed by `git.parse_log_with_files`, attributed by author email (`<slug>@maistro.local` matches a job; anything else is the Operator pseudo-row; slugs no longer present in `jobs` surface as `(removed) <slug>`). The same query path also rolls up per-job `cost_usd`, `num_turns`, completed/non-success counts from `task_executions` for the execution-summary half of the panel
 - **Timeline**: `task_events` pairs of `activated` and terminal events, computing duration from their timestamps
-- **Dispatch chains**: `tasks` filtered on `trigger = 'agent'`, following `trigger_detail` references
-- **Tool usage**: `chat_events` (where `event_type = 'mcp_tool_use'`) joined through `chat_sessions.task_id` → `tasks.job_id`
+- **Commit History**: the same parsed `git log --numstat` output drives the bottom-half scrollable list and its diff drawer (the diff itself comes from `git show` on demand)
 
 The primary worker index is on `(status, approval, coalesced_id)` — covers the worker's queued-task lookup. `idx_task_executions_completed_at` supports time-windowed dashboard queries (the index moved with the column when outcome data was split out of `tasks`).
+
+The dashboard no longer queries `chat_events` for tool-usage analytics or reconstructs dispatch chains from `trigger_detail`. Both panels were dropped in the reorientation — see [proposals/archive/dashboard-commits-reorientation.md](proposals/archive/dashboard-commits-reorientation.md) for the rationale.
 
 ### Key Invariants
 

@@ -8,12 +8,11 @@ The frontend is a single-page React application that provides the operator inter
 
 `App.jsx` provides the outer layout:
 
-- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity (Feed), Jobs, Files, MCP Servers, Dashboard, Settings
+- **Rail navigation**: vertical icon bar on the left — Dispatch, Activity, Jobs, Files, MCP Servers, Settings, Governor
 - **Command bar**: persistent operational control surface pinned to the top of every view, containing job indicators, dispatch popouts, auto-queue toggle, and batch queue actions (see below)
 - **Main area**: renders the active view
-- **Chat tray**: a resizable side panel (drag-to-resize, click-to-toggle) housing the interactive chat
 
-The app polls job status every 5 seconds to keep the command bar current.
+The app polls job status every 5 seconds to keep the command bar current. There is no global chat tray — the standalone chat surface was removed when the Governor replaced reactive Q&A with proactive analysis. Task-scoped output is exposed only inside the Dispatch view's detail drawer.
 
 ## Command Bar
 
@@ -48,9 +47,6 @@ Tasks flow left to right through their lifecycle: Upcoming → Active → Resolv
 
 Each column has one primary drag operation plus transfer. Upcoming owns coalescing (merge); Active owns sorting (reorder). Cross-column drag is exclusively a transfer — it changes state without merging or reordering within the target column. The Resolved column does not participate in drag operations.
 
-### Activity Feed (`Feed.jsx`)
-Git-centric view showing commit history enriched with task metadata. Each commit shows author, message, file stats, and — if the commit came from a task — the linked job and trigger type.
-
 ### Jobs (`Tasks.jsx`)
 The job configuration surface. Job configuration: create, edit, delete. Drag-to-reorder sets default execution priority for new tasks. Each job expands to show all configurable properties: instructions, model, subscriptions, schedule, dependencies, timeout, approval, tools, and MCP servers. Manual dispatch is not on this view — it lives on the command bar, where operational actions belong. The Jobs view is purely for defining what jobs are, not for triggering them.
 
@@ -66,35 +62,43 @@ Each registered server displays: name, command, arguments, environment variable 
 
 Error messages are inline and actionable: "command not found" means the executable is missing or not on PATH; "connection refused" means the server started but isn't responding; "handshake failed" means the process started but didn't complete the MCP protocol exchange.
 
-### Dashboard
+### Activity (`Dashboard.jsx`)
 
-Aggregated operational visibility — a read-only surface that answers "how are my agents doing?" without inspecting individual tasks. All data derives from existing tables (`tasks` lifecycle columns, `chat_events` with `mcp_tool_use` event type, `chat_sessions` linking sessions to tasks). No new data collection, no write operations.
+Aggregated operational visibility — a read-only surface that answers "how are my agents doing?" and "what have they actually done?" without inspecting individual tasks. The view absorbed the standalone Feed surface in the dashboard reorientation: there is no separate `Feed.jsx`, no separate rail entry. The single Activity surface combines per-job aggregates (top half) with a concrete commit history (bottom half).
 
-**Time window selector** — a global control (today, 7 days, 30 days) that scopes all dashboard sections to the same window. All queries filter on `completed_at` (or `started_at` for the timeline) within the selected range.
+**Time window selector** — a global control (today, 7 days, 30 days) that scopes all sections to the same window.
 
-**Four sections:**
+**Three top-half panels:**
 
-- **Job Health Summary** — per-job task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Jobs are ordered by health — low success rates and degrading trends are visually prominent. Terminal state breakdown uses the `status` column directly — each terminal status (`completed`, `failed`, `cancelled`, `timed_out`, `interrupted`, `rejected`) maps to a health category (see [Dispatch Engine — Task Status](dispatch-engine.md#task-status)).
+- **Job Health Summary** — per-job task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Terminal state breakdown uses the `status` column directly. Jobs are ordered by health — low success rates and degrading trends are visually prominent.
 
-- **Timeline** — horizontal bars per task positioned by `started_at` and sized by duration (`completed_at - started_at`), color-coded by job. Rendered with positioned HTML/CSS elements — no chart library. Reveals scheduling density, idle gaps, and duration outliers. Long-running tasks (significantly above the job's median) are visually distinct.
+- **Job Impact** — per-job commit-derived metrics: commits in window, lines added, lines removed, files touched, plus the per-job execution summary (completed / total runs, non-success count, turns consumed, total cost). Authorship is parsed from git log via the `<slug>@maistro.local` convention; commits attributed to non-job authors fold into an "Operator" pseudo-row, and commits whose slug no longer exists in `jobs` surface as `(removed) <slug>`. This is the panel that answers "what did this job actually produce?" — task-outcome counts alone don't.
 
-- **Agent Dispatch Chains** — visualizes the `agent` trigger type. For agent-initiated tasks, traces the chain back to the original trigger using `trigger_detail` (which carries the originating task reference). Shows chain depth and job-to-job dispatch patterns aggregated over the time window. This makes the coordination topology legible — which jobs dispatch which, how deep chains go, where coordination breaks down.
+- **Timeline** — horizontal bars per task positioned by `started_at` and sized by duration, color-coded by job. Rendered with positioned HTML/CSS — no chart library. Reveals scheduling density, idle gaps, and duration outliers.
 
-- **Tool Usage Patterns** — per-job tool frequency and error rates derived from `chat_events` where `event_type = 'mcp_tool_use'`. Joins through `chat_sessions` (session → task → job) to attribute tool calls to jobs. Surfaces persistent tool errors that indicate configuration or instruction problems. Secondary to health and timing — supports investigation after triage.
+**Bottom half — Commit History:**
 
-**Data access pattern**: the dashboard introduces a new query surface over existing tables but requires no schema changes. The key queries are time-windowed aggregations:
-- `tasks` grouped by `job_id` (job) with terminal state classification (from `status` column), filtered by time range
-- `task_events` pairs of `active` and terminal events for timeline positioning, with duration computed from event timestamps
-- `tasks` filtered by `trigger = 'agent'` with `trigger_detail` for dispatch chain reconstruction
-- `chat_events` joined through `chat_sessions` → `tasks` for per-job tool attribution, filtered by event timestamp
+A scrollable list of commits in the window, with author/job attribution, message, file count, and ±line counts. Clicking a commit opens a diff drawer (the same one the standalone Feed used to provide). This is the concrete companion to Job Impact's aggregates — the user sees per-job sums up top, then drills into specific commits to inspect what was actually changed.
 
-The `idx_task_events_task` and `idx_task_events_type` indexes support the timeline's event-pair lookups. The worker index `idx_tasks_status_worker` on `(status, approval, coalesced_id)` and `idx_tasks_job_status` on `(job_id, status)` cover queue and health queries.
+**What the dashboard no longer does:**
+
+- Earlier iterations had Agent Dispatch Chains and Tool Usage Patterns panels. Both were dropped: dispatch-chain reconstruction relied on fragile `trigger_detail` parsing on a sample, and tool usage joined through `chat_events` in a way that returned zeros after the chat-surface removals. Removing them is structural — there is no plan to reintroduce these analytics in their previous shape; if a future need surfaces, it gets its own proposal.
+
+**Data access pattern**: the dashboard introduces a new query surface over existing tables but requires no schema changes. The key reads are:
+- `tasks` joined to `task_executions` (filtered on `coalesced_id IS NULL` so coalesce groups count as one outcome), grouped by `job_id` with terminal state classification, filtered by time range — for Job Health and the execution summary in Job Impact
+- `git log --numstat` parsed into `{author_email, files, insertions, deletions}` over the window — for the commit-derived half of Job Impact and for the Commit History panel
+- `task_events` pairs of `activated` and terminal events for timeline positioning, with duration computed from event timestamps
+
+The reorientation lives in `db_dashboard.dashboard_job_impact()` (commit-attribution and execution-cost aggregation) and `dashboard_routes` (response shape `{window_days, health, timeline, job_impact}`). The shipped reorientation is documented in [proposals/archive/dashboard-commits-reorientation.md](proposals/archive/dashboard-commits-reorientation.md).
 
 ### Settings (`Settings.jsx`)
 Platform configuration: default model, default timeout. The auto-queueing toggle previously here has been elevated to the command bar for immediate access.
 
-### Chat (`Chat.jsx`)
-Interactive conversation interface in the side tray. Manages chat sessions, displays message history, and streams responses via SSE.
+### Governor (`Governor.jsx`)
+
+Today: a findings feed surface — pending suggestions and unread observations in a single scrollable list, with per-item approve/decline (suggestions) and read/dismiss (observations) buttons, plus a manual trigger button and a run history sidebar. See [Governor](governor.md) for the as-built specification.
+
+DESIGN.md has reset this surface to a thread-based, two-pane correspondence layout. The full target shape — thread list left, selected thread right, compose box, no Approve/Decline buttons (operator response is prose), proposals as structured cards under Governor messages, closed threads collapsed into a disclosure, and a collapsed-by-default debug drawer for operator-internal state — is specified in [proposals/governor-threads.md](proposals/governor-threads.md). The frontend surface will be rewritten when that proposal is engineered.
 
 ## Contextual Help
 

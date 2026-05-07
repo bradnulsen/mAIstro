@@ -4,6 +4,8 @@ The Governor is an autonomous meta-analysis agent that periodically reviews rece
 
 The Governor replaces the standalone chat interface that earlier versions of the platform exposed. The chat surface is gone; the meta-aware agent has been redirected from reactive Q&A to proactive analysis.
 
+> **Direction**: DESIGN has reset the Governor to a thread-based, two-way correspondence model — surveys (autonomous) and replies (operator-action-triggered) as the two invocation types, persistent threads with append-only messages as the unit of exchange, prose-only assent (no Approve/Decline buttons), per-thread reply coalescing, constructive-only write surface (no `delete_job`, no `disable_job`, no `close_thread`), closed threads invisible to the Governor, and operator-only thread closure/reopening. The full target shape is specified in [proposals/governor-threads.md](proposals/governor-threads.md). This document describes the current as-built findings architecture; it will be rewritten when the threads model ships. Current closed-loop-learning-then-reach priority order means this is now next-up after Job Learnings.
+
 **Modules**:
 - `backend/governor.py` — orchestration: trigger handling, prompt assembly, CLI invocation, finding parsing, suggestion execution
 - `backend/governor_mcp.py` — stdio MCP server providing read tools (and write tools in execution mode)
