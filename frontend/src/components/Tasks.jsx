@@ -320,6 +320,12 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
           Job Definition
         </button>
         <button
+          className={`task-tab-btn${activeTab === 'learnings' ? ' active' : ''}`}
+          onClick={() => setActiveTab('learnings')}
+        >
+          Learnings
+        </button>
+        <button
           className={`task-tab-btn${activeTab === 'dispatch' ? ' active' : ''}`}
           onClick={() => setActiveTab('dispatch')}
         >
@@ -368,7 +374,11 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
               )}
             </div>
           </div>
+        </div>
+      )}
 
+      {activeTab === 'learnings' && (
+        <div className="task-tab-panel">
           <LearningsList jobId={job.id} />
 
           <div className="field-group">
