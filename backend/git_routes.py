@@ -1,7 +1,7 @@
 """Git, file, and post-commit hook routes.
 
-Wraps the synchronous `git.py` subprocess layer into HTTP endpoints, exposes
-project file content for the file browser, and receives the post-commit hook
+Wraps the `git.py` subprocess layer into HTTP endpoints, exposes project
+file content for the file browser, and receives the post-commit hook
 callback that drives watch-trigger evaluation.
 """
 
@@ -34,19 +34,19 @@ class PostCommitRequest(BaseModel):
 @router.get("/api/git/log")
 async def git_log_route(limit: int = 50, path: str | None = None):
     project_dir = require_project()
-    return git.log(project_dir, limit=limit, path=path)
+    return await git.log(project_dir, limit=limit, path=path)
 
 
 @router.get("/api/git/diff/{commit_hash}")
 async def git_diff_route(commit_hash: str):
     project_dir = require_project()
-    return {"diff": git.diff(project_dir, commit_hash)}
+    return {"diff": await git.diff(project_dir, commit_hash)}
 
 
 @router.get("/api/git/status")
 async def git_status_route():
     project_dir = require_project()
-    return {"status": git.status(project_dir)}
+    return {"status": await git.status(project_dir)}
 
 
 @router.get("/api/git/file/{path:path}")
@@ -63,7 +63,7 @@ async def write_git_file(path: str, req: FileWriteRequest):
     project_dir = require_project()
     git.write_file(project_dir, path, req.content)
     message = req.message or f"Update {path}"
-    commit_hash = git.commit_file(project_dir, path, message)
+    commit_hash = await git.commit_file(project_dir, path, message)
     return {"path": path, "commit": commit_hash}
 
 
@@ -88,7 +88,7 @@ async def post_commit_hook(req: PostCommitRequest):
     # Worktrees share the same .git, so a commit on a per-task branch will
     # also fire this hook from the worktree's cwd. Watch should only fire
     # on commits reachable from the operator's main HEAD; ignore others.
-    ancestor = git.is_ancestor(project_dir, req.commit_hash, "HEAD")
+    ancestor = await git.is_ancestor(project_dir, req.commit_hash, "HEAD")
     if ancestor is None:
         log.warning("[hook] is_ancestor failed for commit %s — skipping watch evaluation "
                     "(detached HEAD or git error?)", req.commit_hash[:8])

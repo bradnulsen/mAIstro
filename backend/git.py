@@ -1,13 +1,20 @@
-"""Git operations — single abstraction over git subprocess calls."""
+"""Git operations — single abstraction over git subprocess calls.
 
+All public helpers are async: each `git` invocation is a `subprocess.run`
+hop dispatched via `asyncio.to_thread` so the event loop stays free during
+shell-out. Filesystem helpers (`os.makedirs`, `open`) stay synchronous —
+they're cheap enough that the to_thread overhead would dwarf the benefit.
+"""
+
+import asyncio
 import glob as globmod
 import os
 import subprocess
 from datetime import datetime, timezone
 
 
-def run_git(*args, cwd: str) -> subprocess.CompletedProcess:
-    """Run a git command and return the result.
+def _run_git_sync(*args, cwd: str) -> subprocess.CompletedProcess:
+    """Run a git command synchronously.
 
     Explicit encoding="utf-8" is required — on Windows, text=True without it
     uses the system codepage (cp1252), which fails on non-ASCII content in
@@ -19,16 +26,22 @@ def run_git(*args, cwd: str) -> subprocess.CompletedProcess:
     )
 
 
+async def run_git(*args, cwd: str) -> subprocess.CompletedProcess:
+    """Async wrapper around `_run_git_sync`. Dispatches via `asyncio.to_thread`
+    so callers can `await` git operations without blocking the event loop."""
+    return await asyncio.to_thread(_run_git_sync, *args, cwd=cwd)
+
+
 # ── Repo setup ──────────────────────────────────────────────
 
-def ensure_repo(project_dir: str):
+async def ensure_repo(project_dir: str):
     """Initialize a git repo if one doesn't exist."""
     git_dir = os.path.join(project_dir, ".git")
     if not os.path.isdir(git_dir):
-        run_git("init", cwd=project_dir)
+        await run_git("init", cwd=project_dir)
 
 
-def ensure_initial_commit(project_dir: str) -> str | None:
+async def ensure_initial_commit(project_dir: str) -> str | None:
     """Bootstrap an initial commit on a fresh repo so HEAD is non-null.
 
     The worktree-based dispatch path branches every task off the project's
@@ -40,21 +53,21 @@ def ensure_initial_commit(project_dir: str) -> str | None:
 
     Idempotent: returns None if HEAD already exists.
     """
-    if head_hash(project_dir) is not None:
+    if await head_hash(project_dir) is not None:
         return None
     gitignore = os.path.join(project_dir, ".gitignore")
     base = ["-c", "user.name=mAistro", "-c", "user.email=maistro@local"]
     if os.path.isfile(gitignore):
-        run_git("add", ".gitignore", cwd=project_dir)
-        result = run_git(*base, "commit", "-m", "Initialize mAistro project", cwd=project_dir)
+        await run_git("add", ".gitignore", cwd=project_dir)
+        result = await run_git(*base, "commit", "-m", "Initialize mAistro project", cwd=project_dir)
     else:
-        result = run_git(*base, "commit", "--allow-empty", "-m", "Initialize mAistro project", cwd=project_dir)
+        result = await run_git(*base, "commit", "--allow-empty", "-m", "Initialize mAistro project", cwd=project_dir)
     if result.returncode != 0:
         return None
-    return head_hash(project_dir)
+    return await head_hash(project_dir)
 
 
-def commit_gitignore_additions_if_safe(project_dir: str, entries: list[str]) -> bool:
+async def commit_gitignore_additions_if_safe(project_dir: str, entries: list[str]) -> bool:
     """Commit `.gitignore` if (and only if) we just appended `entries` to it
     and that's the *only* change in the working tree.
 
@@ -68,12 +81,12 @@ def commit_gitignore_additions_if_safe(project_dir: str, entries: list[str]) -> 
 
     Returns True if a commit was made.
     """
-    head = head_hash(project_dir)
+    head = await head_hash(project_dir)
     if head is None:
         return False  # ensure_initial_commit handles the no-HEAD case
     # Inspect the working tree. We only auto-commit when .gitignore is the
     # one and only dirty path — anything else is operator-owned.
-    full_status = run_git("status", "--porcelain", cwd=project_dir).stdout
+    full_status = (await run_git("status", "--porcelain", cwd=project_dir)).stdout
     dirty_lines = [l for l in full_status.splitlines() if l.strip()]
     if len(dirty_lines) != 1:
         if dirty_lines:
@@ -90,7 +103,7 @@ def commit_gitignore_additions_if_safe(project_dir: str, entries: list[str]) -> 
     # Verify the only diff is appending the entries we just added —
     # if the operator was simultaneously editing .gitignore for their
     # own reasons, refuse to commit on their behalf.
-    diff = run_git("diff", "--", ".gitignore", cwd=project_dir).stdout
+    diff = (await run_git("diff", "--", ".gitignore", cwd=project_dir)).stdout
     added_lines = [
         l[1:].strip() for l in diff.splitlines()
         if l.startswith("+") and not l.startswith("+++")
@@ -102,9 +115,9 @@ def commit_gitignore_additions_if_safe(project_dir: str, entries: list[str]) -> 
     if not actual_added.issubset(expected):
         return False  # Operator is also editing .gitignore — don't touch it
     base = ["-c", "user.name=mAistro", "-c", "user.email=maistro@local"]
-    run_git("add", ".gitignore", cwd=project_dir)
-    result = run_git(*base, "commit", "-m",
-                     "Add mAistro entries to .gitignore", cwd=project_dir)
+    await run_git("add", ".gitignore", cwd=project_dir)
+    result = await run_git(*base, "commit", "-m",
+                           "Add mAistro entries to .gitignore", cwd=project_dir)
     return result.returncode == 0
 
 
@@ -212,8 +225,8 @@ def parse_log_with_files(output: str) -> list[dict]:
 
 # ── Query operations ────────────────────────────────────────
 
-def log(cwd: str, limit: int = 50, skip: int = 0, path: str | None = None,
-        with_stats: bool = False) -> list[dict]:
+async def log(cwd: str, limit: int = 50, skip: int = 0, path: str | None = None,
+              with_stats: bool = False) -> list[dict]:
     """Get git log entries as structured dicts."""
     args = ["log", f"--max-count={limit}", f"--skip={skip}", f"--format={LOG_FORMAT}"]
     if with_stats:
@@ -221,7 +234,7 @@ def log(cwd: str, limit: int = 50, skip: int = 0, path: str | None = None,
     if path:
         args.extend(["--", path])
 
-    result = run_git(*args, cwd=cwd)
+    result = await run_git(*args, cwd=cwd)
     if result.returncode != 0:
         return []
 
@@ -230,22 +243,22 @@ def log(cwd: str, limit: int = 50, skip: int = 0, path: str | None = None,
     return parse_log_output(result.stdout)
 
 
-def log_oneline(cwd: str, limit: int = 20) -> str:
+async def log_oneline(cwd: str, limit: int = 20) -> str:
     """Get recent git log as a compact string (for agent context)."""
-    result = run_git("log", f"--max-count={limit}", "--oneline", "--no-decorate", cwd=cwd)
+    result = await run_git("log", f"--max-count={limit}", "--oneline", "--no-decorate", cwd=cwd)
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def diff(cwd: str, commit_hash: str) -> str:
+async def diff(cwd: str, commit_hash: str) -> str:
     """Get diff for a specific commit."""
-    result = run_git("diff", f"{commit_hash}~1", commit_hash, cwd=cwd)
+    result = await run_git("diff", f"{commit_hash}~1", commit_hash, cwd=cwd)
     return result.stdout if result.returncode == 0 else ""
 
 
-def diff_range(cwd: str, from_hash: str, to_hash: str) -> dict:
+async def diff_range(cwd: str, from_hash: str, to_hash: str) -> dict:
     """Get diff between two commits with file-level stats and raw diff."""
     # File stats via --numstat
-    stat_result = run_git("diff", "--numstat", f"{from_hash}..{to_hash}", cwd=cwd)
+    stat_result = await run_git("diff", "--numstat", f"{from_hash}..{to_hash}", cwd=cwd)
     files = []
     total_add = 0
     total_del = 0
@@ -263,7 +276,7 @@ def diff_range(cwd: str, from_hash: str, to_hash: str) -> dict:
                 total_del += dels
 
     # Raw diff
-    diff_result = run_git("diff", f"{from_hash}..{to_hash}", cwd=cwd)
+    diff_result = await run_git("diff", f"{from_hash}..{to_hash}", cwd=cwd)
     raw = diff_result.stdout if diff_result.returncode == 0 else ""
 
     return {
@@ -274,30 +287,30 @@ def diff_range(cwd: str, from_hash: str, to_hash: str) -> dict:
     }
 
 
-def show(cwd: str, commit_hash: str, stat: bool = False) -> str:
+async def show(cwd: str, commit_hash: str, stat: bool = False) -> str:
     """Show a commit. If stat=True, includes --stat."""
     args = ["show", commit_hash, f"--format={LOG_FORMAT}"]
     if stat:
         args.append("--stat")
-    result = run_git(*args, cwd=cwd)
+    result = await run_git(*args, cwd=cwd)
     return result.stdout if result.returncode == 0 else ""
 
 
-def status(cwd: str) -> str:
+async def status(cwd: str) -> str:
     """Get working tree status (porcelain format)."""
-    result = run_git("status", "--porcelain", cwd=cwd)
+    result = await run_git("status", "--porcelain", cwd=cwd)
     return result.stdout if result.returncode == 0 else ""
 
 
-def is_dirty(cwd: str) -> bool:
+async def is_dirty(cwd: str) -> bool:
     """Return True if the working tree has uncommitted or untracked changes."""
-    return bool(status(cwd).strip())
+    return bool((await status(cwd)).strip())
 
 
 # ── Worktree operations (per-task workspace isolation) ────
 
-def worktree_add(project_dir: str, path: str, branch: str,
-                 base_commit: str) -> tuple[bool, str]:
+async def worktree_add(project_dir: str, path: str, branch: str,
+                       base_commit: str) -> tuple[bool, str]:
     """Create a new worktree on a fresh branch from base_commit.
 
     Returns (ok, error_message). The branch is created (-b) so this fails
@@ -306,13 +319,13 @@ def worktree_add(project_dir: str, path: str, branch: str,
     attention, not silent reuse.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    result = run_git("worktree", "add", "-b", branch, path, base_commit, cwd=project_dir)
+    result = await run_git("worktree", "add", "-b", branch, path, base_commit, cwd=project_dir)
     if result.returncode != 0:
         return False, (result.stderr or result.stdout).strip()
     return True, ""
 
 
-def worktree_remove(project_dir: str, path: str, force: bool = False) -> bool:
+async def worktree_remove(project_dir: str, path: str, force: bool = False) -> bool:
     """Remove a worktree (does not delete the underlying branch).
 
     `force=True` allows removing a worktree that has uncommitted changes
@@ -322,13 +335,13 @@ def worktree_remove(project_dir: str, path: str, force: bool = False) -> bool:
     if force:
         args.append("--force")
     args.append(path)
-    result = run_git(*args, cwd=project_dir)
+    result = await run_git(*args, cwd=project_dir)
     return result.returncode == 0
 
 
-def worktree_list(project_dir: str) -> list[dict]:
+async def worktree_list(project_dir: str) -> list[dict]:
     """List all worktrees registered with this repo."""
-    result = run_git("worktree", "list", "--porcelain", cwd=project_dir)
+    result = await run_git("worktree", "list", "--porcelain", cwd=project_dir)
     if result.returncode != 0:
         return []
     entries: list[dict] = []
@@ -354,26 +367,26 @@ def worktree_list(project_dir: str) -> list[dict]:
     return entries
 
 
-def worktree_prune(project_dir: str):
+async def worktree_prune(project_dir: str):
     """Clean up registry entries for worktrees whose directories were removed."""
-    run_git("worktree", "prune", cwd=project_dir)
+    await run_git("worktree", "prune", cwd=project_dir)
 
 
-def branch_delete(project_dir: str, branch: str, force: bool = False) -> bool:
+async def branch_delete(project_dir: str, branch: str, force: bool = False) -> bool:
     """Delete a branch by name."""
     flag = "-D" if force else "-d"
-    result = run_git("branch", flag, branch, cwd=project_dir)
+    result = await run_git("branch", flag, branch, cwd=project_dir)
     return result.returncode == 0
 
 
-def branch_exists(project_dir: str, branch: str) -> bool:
+async def branch_exists(project_dir: str, branch: str) -> bool:
     """Return True if a local branch by this name exists."""
-    result = run_git("show-ref", "--verify", "--quiet",
-                     f"refs/heads/{branch}", cwd=project_dir)
+    result = await run_git("show-ref", "--verify", "--quiet",
+                           f"refs/heads/{branch}", cwd=project_dir)
     return result.returncode == 0
 
 
-def is_ancestor(cwd: str, commit: str, ref: str) -> bool | None:
+async def is_ancestor(cwd: str, commit: str, ref: str) -> bool | None:
     """Return True if `commit` is an ancestor of (or equal to) `ref`.
 
     Returns False if `commit` is definitively not an ancestor (git exit 1),
@@ -382,7 +395,7 @@ def is_ancestor(cwd: str, commit: str, ref: str) -> bool | None:
     silently dropping commits the hook should have processed; check
     explicitly when the distinction matters.
     """
-    result = run_git("merge-base", "--is-ancestor", commit, ref, cwd=cwd)
+    result = await run_git("merge-base", "--is-ancestor", commit, ref, cwd=cwd)
     if result.returncode == 0:
         return True
     if result.returncode == 1:
@@ -390,10 +403,10 @@ def is_ancestor(cwd: str, commit: str, ref: str) -> bool | None:
     return None
 
 
-def merge_branch(project_dir: str, source_branch: str,
-                 ff_only: bool = False, no_ff: bool = False,
-                 message: str | None = None,
-                 strategy_option: str | None = None) -> tuple[bool, str]:
+async def merge_branch(project_dir: str, source_branch: str,
+                       ff_only: bool = False, no_ff: bool = False,
+                       message: str | None = None,
+                       strategy_option: str | None = None) -> tuple[bool, str]:
     """Merge source_branch into the current branch of project_dir.
 
     Returns (ok, output_or_error). The caller is expected to have ensured
@@ -414,35 +427,35 @@ def merge_branch(project_dir: str, source_branch: str,
     if message:
         args.extend(["-m", message])
     args.append(source_branch)
-    result = run_git(*args, cwd=project_dir)
+    result = await run_git(*args, cwd=project_dir)
     if result.returncode != 0:
         return False, (result.stderr or result.stdout).strip()
     return True, result.stdout.strip()
 
 
-def merge_abort(project_dir: str):
+async def merge_abort(project_dir: str):
     """Abort an in-progress merge and reset the working tree."""
-    run_git("merge", "--abort", cwd=project_dir)
+    await run_git("merge", "--abort", cwd=project_dir)
 
 
-def reset_hard(cwd: str, target: str) -> bool:
+async def reset_hard(cwd: str, target: str) -> bool:
     """Reset the index and working tree to `target`, discarding all local changes.
 
     Destructive — used by the integration path to roll back a merge or
     clear a partial stash apply. Caller is responsible for ensuring any
     state that needs to survive the reset has been stashed first.
     """
-    result = run_git("reset", "--hard", target, cwd=cwd)
+    result = await run_git("reset", "--hard", target, cwd=cwd)
     return result.returncode == 0
 
 
-def current_branch_name(cwd: str) -> str:
+async def current_branch_name(cwd: str) -> str:
     """Return the current branch name, or 'main' if HEAD is detached/unknown.
 
     Used to label merge commits and to identify the operator's
     integration branch when integrating a task branch.
     """
-    result = run_git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd)
+    result = await run_git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd)
     if result.returncode == 0:
         name = result.stdout.strip()
         if name and name != "HEAD":
@@ -496,10 +509,10 @@ def _format_path_list(paths: list[str], limit: int = 12) -> str:
     return f"{shown}\n  …and {len(paths) - limit} more"
 
 
-def integrate_branch(project_dir: str, branch: str, stash_label: str,
-                     merge_message: str | None = None,
-                     strategy: str = "default",
-                     dedup_label: str | None = None) -> tuple[bool, str]:
+async def integrate_branch(project_dir: str, branch: str, stash_label: str,
+                           merge_message: str | None = None,
+                           strategy: str = "default",
+                           dedup_label: str | None = None) -> tuple[bool, str]:
     """Merge `branch` into project_dir's HEAD, transparently handling operator-dirty state.
 
     Stashes any operator-dirty working tree before the merge and re-applies
@@ -532,26 +545,26 @@ def integrate_branch(project_dir: str, branch: str, stash_label: str,
     # before creating a new one. Keeps `git stash list` from accumulating
     # N copies of identical operator state across retry attempts.
     if dedup_label:
-        stash_drop_matching(project_dir, dedup_label)
+        await stash_drop_matching(project_dir, dedup_label)
 
-    pre_merge_head = head_hash(project_dir)
+    pre_merge_head = await head_hash(project_dir)
 
     pre_stash_ref = None
-    if is_dirty(project_dir):
-        pre_stash_ref = stash_push_orphan(project_dir, stash_label)
+    if await is_dirty(project_dir):
+        pre_stash_ref = await stash_push_orphan(project_dir, stash_label)
         if not pre_stash_ref:
             return False, ("could not stash operator's dirty working tree "
                            "before merge")
 
-    def _rollback_and_restore() -> None:
+    async def _rollback_and_restore() -> None:
         if pre_merge_head:
-            current = head_hash(project_dir)
+            current = await head_hash(project_dir)
             if current and current != pre_merge_head:
-                reset_hard(project_dir, pre_merge_head)
+                await reset_hard(project_dir, pre_merge_head)
         if pre_stash_ref:
-            ok_apply, _ = stash_apply(project_dir, pre_stash_ref)
+            ok_apply, _ = await stash_apply(project_dir, pre_stash_ref)
             if ok_apply:
-                stash_drop(project_dir, pre_stash_ref)
+                await stash_drop(project_dir, pre_stash_ref)
             # On apply failure, the stash entry stays in `git stash list`
             # for manual recovery. Caller can surface a warning.
 
@@ -563,24 +576,24 @@ def integrate_branch(project_dir: str, branch: str, stash_label: str,
     elif strategy != "default":
         return False, f"unknown integration strategy {strategy!r}"
 
-    main_branch = current_branch_name(project_dir)
+    main_branch = await current_branch_name(project_dir)
     # FF merge ignores -X (no conflict possible); attempt it first only
     # when strategy is default. With theirs/ours the operator is asking
     # for a specific conflict-resolution behaviour, so always go through
     # the no-FF path even if FF would have worked — the resulting merge
     # commit makes the operator's choice explicit in history.
     if strategy_opt is None:
-        ok, out = merge_branch(project_dir, branch, ff_only=True)
+        ok, out = await merge_branch(project_dir, branch, ff_only=True)
     else:
         ok = False
         out = ""
     if not ok:
         msg = merge_message or f"Merge {branch} into {main_branch}"
-        ok, out = merge_branch(project_dir, branch, no_ff=True, message=msg,
-                               strategy_option=strategy_opt)
+        ok, out = await merge_branch(project_dir, branch, no_ff=True, message=msg,
+                                     strategy_option=strategy_opt)
         if not ok:
-            merge_abort(project_dir)
-            _rollback_and_restore()
+            await merge_abort(project_dir)
+            await _rollback_and_restore()
             paths, other = _format_git_conflict_paths(out)
             sections: list[str] = [
                 f"Merge of '{branch}' into {main_branch} hit conflicts. "
@@ -597,17 +610,17 @@ def integrate_branch(project_dir: str, branch: str, stash_label: str,
 
     # Merge succeeded. Restore the operator's stash on top of integrated main.
     if pre_stash_ref:
-        ok_apply, apply_err = stash_apply(project_dir, pre_stash_ref)
+        ok_apply, apply_err = await stash_apply(project_dir, pre_stash_ref)
         if ok_apply:
-            stash_drop(project_dir, pre_stash_ref)
+            await stash_drop(project_dir, pre_stash_ref)
         else:
             # Stash re-apply failed — could be content overlap, untracked-
             # overwrite, missing stash, anything. Clear the partial apply,
             # roll the merge back, restore the stash on the original main.
-            integrated_head = head_hash(project_dir)
+            integrated_head = await head_hash(project_dir)
             if integrated_head:
-                reset_hard(project_dir, integrated_head)
-            _rollback_and_restore()
+                await reset_hard(project_dir, integrated_head)
+            await _rollback_and_restore()
             paths, other = _format_git_conflict_paths(apply_err)
             sections: list[str] = [
                 f"Your dirty working-tree changes overlap with files the "
@@ -629,14 +642,14 @@ def integrate_branch(project_dir: str, branch: str, stash_label: str,
     # Success cleanup: any remaining stashes for this task are now
     # subsumed by main's history.
     if dedup_label:
-        stash_drop_matching(project_dir, dedup_label)
+        await stash_drop_matching(project_dir, dedup_label)
 
     return True, ""
 
 
 # ── Stash operations (orphan-changes safety net) ───────────
 
-def stash_push_orphan(cwd: str, message: str) -> str | None:
+async def stash_push_orphan(cwd: str, message: str) -> str | None:
     """Stash all working-tree changes (including untracked) and return the stash commit SHA.
 
     The SHA is captured immediately after the push so subsequent stashes
@@ -644,20 +657,20 @@ def stash_push_orphan(cwd: str, message: str) -> str | None:
     are pushed; the commit SHA is stable). Returns None on failure or if
     nothing was stashed.
     """
-    push = run_git("stash", "push", "-u", "-m", message, cwd=cwd)
+    push = await run_git("stash", "push", "-u", "-m", message, cwd=cwd)
     if push.returncode != 0:
         return None
     if "No local changes to save" in push.stdout:
         return None
-    sha = run_git("rev-parse", "stash@{0}", cwd=cwd)
+    sha = await run_git("rev-parse", "stash@{0}", cwd=cwd)
     if sha.returncode != 0:
         return None
     return sha.stdout.strip() or None
 
 
-def _find_stash_index(cwd: str, sha: str) -> str | None:
+async def _find_stash_index(cwd: str, sha: str) -> str | None:
     """Locate a stash entry's current `stash@{N}` ref by its commit SHA."""
-    listing = run_git("stash", "list", "--format=%H %gd", cwd=cwd)
+    listing = await run_git("stash", "list", "--format=%H %gd", cwd=cwd)
     if listing.returncode != 0:
         return None
     for line in listing.stdout.splitlines():
@@ -667,40 +680,40 @@ def _find_stash_index(cwd: str, sha: str) -> str | None:
     return None
 
 
-def stash_show(cwd: str, sha: str) -> str:
+async def stash_show(cwd: str, sha: str) -> str:
     """Return the patch for a stashed commit (works whether or not it's still in `stash list`)."""
-    result = run_git("show", sha, cwd=cwd)
+    result = await run_git("show", sha, cwd=cwd)
     return result.stdout if result.returncode == 0 else ""
 
 
-def stash_apply(cwd: str, sha: str) -> tuple[bool, str]:
+async def stash_apply(cwd: str, sha: str) -> tuple[bool, str]:
     """Re-apply a stash to the working tree. Leaves the stash entry intact.
 
     Returns (ok, error). On failure `error` carries git's stderr (or stdout
     if stderr is empty) so callers can distinguish content conflicts from
     untracked-overwrite, missing-stash, or lock errors.
     """
-    result = run_git("stash", "apply", sha, cwd=cwd)
+    result = await run_git("stash", "apply", sha, cwd=cwd)
     if result.returncode == 0:
         return True, ""
     return False, (result.stderr or result.stdout).strip()
 
 
-def stash_drop(cwd: str, sha: str) -> bool:
+async def stash_drop(cwd: str, sha: str) -> bool:
     """Remove a stash entry from `stash list` by its commit SHA.
 
     Returns True if dropped, False if it could not be located (already
     pruned, expired from reflog, etc.). The underlying commit object may
     still be recoverable via `git fsck --lost-found` until gc runs.
     """
-    ref = _find_stash_index(cwd, sha)
+    ref = await _find_stash_index(cwd, sha)
     if not ref:
         return False
-    result = run_git("stash", "drop", ref, cwd=cwd)
+    result = await run_git("stash", "drop", ref, cwd=cwd)
     return result.returncode == 0
 
 
-def stash_drop_matching(cwd: str, label_substring: str) -> int:
+async def stash_drop_matching(cwd: str, label_substring: str) -> int:
     """Drop every stash entry whose message contains `label_substring`.
 
     Returns the count dropped. Stable across drops by collecting commit
@@ -712,7 +725,7 @@ def stash_drop_matching(cwd: str, label_substring: str) -> int:
     creating a new pre-integrate stash without dropping the prior ones,
     yielding N copies of the same operator state in `git stash list`.
     """
-    listing = run_git("stash", "list", "--format=%H %gs", cwd=cwd)
+    listing = await run_git("stash", "list", "--format=%H %gs", cwd=cwd)
     if listing.returncode != 0:
         return 0
     targets: list[str] = []
@@ -722,22 +735,22 @@ def stash_drop_matching(cwd: str, label_substring: str) -> int:
             targets.append(parts[0])
     dropped = 0
     for sha in targets:
-        if stash_drop(cwd, sha):
+        if await stash_drop(cwd, sha):
             dropped += 1
     return dropped
 
 
-def changed_files_in_commit(cwd: str, commit_hash: str) -> list[str]:
+async def changed_files_in_commit(cwd: str, commit_hash: str) -> list[str]:
     """Get list of files changed in a commit."""
-    result = run_git("diff-tree", "--no-commit-id", "--name-only", "-r", commit_hash, cwd=cwd)
+    result = await run_git("diff-tree", "--no-commit-id", "--name-only", "-r", commit_hash, cwd=cwd)
     if result.returncode != 0:
         return []
     return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
 
 
-def commit_oneline(cwd: str, commit_hash: str) -> str | None:
+async def commit_oneline(cwd: str, commit_hash: str) -> str | None:
     """Get a one-line summary: subject + file count."""
-    result = run_git("show", commit_hash, "--format=%s", "--stat", "--stat-width=1", cwd=cwd)
+    result = await run_git("show", commit_hash, "--format=%s", "--stat", "--stat-width=1", cwd=cwd)
     if result.returncode != 0:
         return None
     lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
@@ -749,11 +762,11 @@ def commit_oneline(cwd: str, commit_hash: str) -> str | None:
     return subject
 
 
-def outcome_summary(cwd: str, from_hash: str, to_hash: str) -> str | None:
+async def outcome_summary(cwd: str, from_hash: str, to_hash: str) -> str | None:
     """Compute an outcome summary from the commit range — messages and change stats."""
     if from_hash == to_hash:
         return None
-    result = run_git("log", "--format=%s", f"{from_hash}..{to_hash}", cwd=cwd)
+    result = await run_git("log", "--format=%s", f"{from_hash}..{to_hash}", cwd=cwd)
     if result.returncode != 0 or not result.stdout.strip():
         return None
     messages = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
@@ -761,7 +774,7 @@ def outcome_summary(cwd: str, from_hash: str, to_hash: str) -> str | None:
     if len(messages) <= 1:
         return None
     # Get overall stat line
-    stat_result = run_git("diff", "--shortstat", f"{from_hash}..{to_hash}", cwd=cwd)
+    stat_result = await run_git("diff", "--shortstat", f"{from_hash}..{to_hash}", cwd=cwd)
     stat_line = stat_result.stdout.strip() if stat_result.returncode == 0 else ""
     parts = []
     for msg in messages:
@@ -771,7 +784,7 @@ def outcome_summary(cwd: str, from_hash: str, to_hash: str) -> str | None:
     return "\n".join(parts)
 
 
-def build_commit_context(cwd: str, start_commit: str | None, result_commit: str | None) -> str | None:
+async def build_commit_context(cwd: str, start_commit: str | None, result_commit: str | None) -> str | None:
     """Build a formatted git context string from a commit range.
 
     This is the singular function for describing what happened between two
@@ -785,12 +798,12 @@ def build_commit_context(cwd: str, start_commit: str | None, result_commit: str 
     if not result_commit or not start_commit or start_commit == result_commit:
         return None
 
-    log_result = run_git("log", "--format=%s", f"{start_commit}..{result_commit}", cwd=cwd)
+    log_result = await run_git("log", "--format=%s", f"{start_commit}..{result_commit}", cwd=cwd)
     if log_result.returncode != 0 or not log_result.stdout.strip():
         return None
     messages = [l.strip() for l in log_result.stdout.strip().split("\n") if l.strip()]
 
-    stat_result = run_git("diff", "--shortstat", f"{start_commit}..{result_commit}", cwd=cwd)
+    stat_result = await run_git("diff", "--shortstat", f"{start_commit}..{result_commit}", cwd=cwd)
     stat_line = stat_result.stdout.strip() if stat_result.returncode == 0 else ""
 
     if len(messages) == 1:
@@ -808,21 +821,21 @@ def build_commit_context(cwd: str, start_commit: str | None, result_commit: str 
     return "\n".join(parts)
 
 
-def head_hash(cwd: str) -> str | None:
+async def head_hash(cwd: str) -> str | None:
     """Get current HEAD commit hash."""
-    result = run_git("rev-parse", "HEAD", cwd=cwd)
+    result = await run_git("rev-parse", "HEAD", cwd=cwd)
     return result.stdout.strip() if result.returncode == 0 else None
 
 
 # ── Write operations ────────────────────────────────────────
 
-def commit_file(cwd: str, path: str, message: str) -> str | None:
+async def commit_file(cwd: str, path: str, message: str) -> str | None:
     """Stage a specific file and commit. Returns commit hash or None."""
-    run_git("add", path, cwd=cwd)
-    result = run_git("commit", "-m", message, cwd=cwd)
+    await run_git("add", path, cwd=cwd)
+    result = await run_git("commit", "-m", message, cwd=cwd)
     if result.returncode != 0:
         return None
-    return head_hash(cwd)
+    return await head_hash(cwd)
 
 
 def read_file(cwd: str, path: str) -> str | None:

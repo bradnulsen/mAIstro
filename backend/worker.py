@@ -27,20 +27,20 @@ def _task_branch_for(job_slug: str, task_id: int) -> str:
     return f"{job_slug}/task-{task_id}"
 
 
-def _force_remove_worktree(project_dir: str, path: str):
+async def _force_remove_worktree(project_dir: str, path: str):
     """Remove a worktree whether or not git tracks it cleanly.
 
     Tries the proper `git worktree remove --force` first. If git refuses
     or the directory still exists afterward (Windows file-lock weirdness,
     interrupted prior removal), falls back to rmtree + prune.
     """
-    git.worktree_remove(project_dir, path, force=True)
+    await git.worktree_remove(project_dir, path, force=True)
     if os.path.exists(path):
         try:
             shutil.rmtree(path, ignore_errors=True)
         except Exception:
             pass
-    git.worktree_prune(project_dir)
+    await git.worktree_prune(project_dir)
 
 log = logging.getLogger("maistro.worker")
 
@@ -87,7 +87,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
     #      That's a real failure — the work is at risk and the operator
     #      should see it. Mark failed, preserve the workspace.
     if not start_commit or worktree_head == start_commit:
-        if git.is_dirty(workspace_dir):
+        if await git.is_dirty(workspace_dir):
             err = "agent left uncommitted changes in the worktree"
             await db.transition_task(task_id, "failed",
                                      result_commit=worktree_head,
@@ -108,14 +108,14 @@ async def _integrate_or_fail(task_id: int, job: dict,
         await db.cascade_completion(task_id, "completed",
                                     result_commit=start_commit)
         log.info("[worker] Task #%d completed with no commits (no-op outcome, cascades suppressed)", task_id)
-        _force_remove_worktree(project_dir, workspace_dir)
-        git.branch_delete(project_dir, task_branch, force=True)
+        await _force_remove_worktree(project_dir, workspace_dir)
+        await git.branch_delete(project_dir, task_branch, force=True)
         await db.update_task(task_id, worktree_path=None, task_branch=None)
         await _check_governor_trigger(task_id)
         return
 
     merge_msg = f"Merge task #{task_id} ({job['name']}) into main"
-    ok, err = git.integrate_branch(
+    ok, err = await git.integrate_branch(
         project_dir, task_branch,
         stash_label=f"maistro pre-integrate task-{task_id}",
         merge_message=merge_msg,
@@ -132,7 +132,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
         await _check_governor_trigger(task_id)
         return
 
-    integrated_head = git.head_hash(project_dir) or worktree_head
+    integrated_head = await git.head_hash(project_dir) or worktree_head
     await db.transition_task(task_id, "completed",
                              result_commit=integrated_head,
                              **meta_fields)
@@ -142,8 +142,8 @@ async def _integrate_or_fail(task_id: int, job: dict,
              task_id, integrated_head[:8], task_branch)
 
     # Workspace + branch are no longer needed — discard them.
-    _force_remove_worktree(project_dir, workspace_dir)
-    git.branch_delete(project_dir, task_branch, force=True)
+    await _force_remove_worktree(project_dir, workspace_dir)
+    await git.branch_delete(project_dir, task_branch, force=True)
     await db.update_task(task_id, worktree_path=None, task_branch=None)
 
     await _enqueue_cascades(job_id, task_id,
@@ -169,9 +169,9 @@ async def _maybe_stash_orphan(task_id: int, start_commit: str | None,
     """
     if not start_commit or not result_commit or start_commit != result_commit:
         return None
-    if not git.is_dirty(state.PROJECT_DIR):
+    if not await git.is_dirty(state.PROJECT_DIR):
         return None
-    stash_ref = git.stash_push_orphan(
+    stash_ref = await git.stash_push_orphan(
         state.PROJECT_DIR, f"task-{task_id} orphan @ {terminal}"
     )
     if stash_ref:
@@ -272,7 +272,7 @@ async def _sweep_stale():
         log.warning("[worker] Marked stale task #%d as interrupted (workspace preserved)", tid)
     if state.PROJECT_DIR:
         try:
-            git.worktree_prune(state.PROJECT_DIR)
+            await git.worktree_prune(state.PROJECT_DIR)
         except Exception:
             log.warning("[worker] worktree prune on startup failed")
         try:
@@ -308,7 +308,7 @@ async def _sweep_stale_workspace_pointers():
         wt_path = row["worktree_path"]
         branch = row["task_branch"]
         dir_exists = bool(wt_path) and os.path.isdir(wt_path)
-        branch_present = bool(branch) and git.branch_exists(state.PROJECT_DIR, branch)
+        branch_present = bool(branch) and await git.branch_exists(state.PROJECT_DIR, branch)
         if dir_exists and branch_present:
             continue
         log.warning(
@@ -346,14 +346,14 @@ async def _sweep_orphan_worktrees():
         full_path = os.path.join(worktrees_dir, entry)
         log.warning("[worker] Sweeping orphan worktree task-%d (status=%s)",
                     task_id, task.get("status") if task else "MISSING")
-        _force_remove_worktree(state.PROJECT_DIR, full_path)
+        await _force_remove_worktree(state.PROJECT_DIR, full_path)
         # Best-effort branch cleanup if we can resolve the slug.
         if task:
             job = await db.get_job(task["job_id"])
             if job:
-                git.branch_delete(state.PROJECT_DIR,
-                                  _task_branch_for(job["slug"], task_id),
-                                  force=True)
+                await git.branch_delete(state.PROJECT_DIR,
+                                        _task_branch_for(job["slug"], task_id),
+                                        force=True)
 
 
 async def _loop():
@@ -444,14 +444,14 @@ async def _process_task(task: dict):
     global _active_task_id, _cancel_event
     _cancel_event = asyncio.Event()
     _active_task_id = task_id
-    start_commit = git.head_hash(state.PROJECT_DIR)
+    start_commit = await git.head_hash(state.PROJECT_DIR)
 
     # Self-heal projects that were opened before the bootstrap-on-open fix:
     # if HEAD is null, create the platform's bootstrap commit now so this
     # task (and every future one) has a real ref to branch off.
     if not start_commit:
         log.info("[worker] Task #%d: project has no commits — bootstrapping initial commit", task_id)
-        start_commit = git.ensure_initial_commit(state.PROJECT_DIR)
+        start_commit = await git.ensure_initial_commit(state.PROJECT_DIR)
 
     # Phase 3b: per-task worktree. The CLI subprocess and MCP server's
     # write/read tools all resolve against this path. The operator's main
@@ -521,11 +521,11 @@ async def _process_task(task: dict):
         # leftover state, never on legitimate concurrent runs.
         if os.path.exists(workspace_dir):
             log.warning("[worker] Task #%d found stale workspace at %s — removing", task_id, workspace_dir)
-            _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
+            await _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
             # Drop any leftover branch from the prior attempt too
-            git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
+            await git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
 
-        wt_ok, wt_err = git.worktree_add(state.PROJECT_DIR, workspace_dir, task_branch, start_commit)
+        wt_ok, wt_err = await git.worktree_add(state.PROJECT_DIR, workspace_dir, task_branch, start_commit)
         if not wt_ok:
             log.error("[worker] Task #%d worktree creation failed: %s", task_id, wt_err)
             await db.transition_task(task_id, "active",
@@ -557,8 +557,8 @@ async def _process_task(task: dict):
     if mcp_error:
         log.warning("[worker] Task #%d failed MCP health check: %s", task_id, mcp_error)
         # Health-check failure means the agent never ran — discard the empty worktree.
-        _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
-        git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
+        await _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
+        await git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
         await db.transition_task(task_id, "failed", error=mcp_error,
                                  worktree_path=None, task_branch=None)
         await db.cascade_completion(task_id, "failed", error=mcp_error)
@@ -636,7 +636,7 @@ async def _process_task(task: dict):
         _cancelled = local_cancel.is_set() and not _timed_out
         # Per-task workspace: result_commit reflects the agent's branch tip,
         # not the operator's main HEAD (which the agent never touches).
-        worktree_head = git.head_hash(workspace_dir) or start_commit
+        worktree_head = await git.head_hash(workspace_dir) or start_commit
 
         # Build execution metadata fields for task record
         meta_fields = {}
@@ -698,7 +698,7 @@ async def _process_task(task: dict):
             await db.add_chat_message(session_id, "system", f"Error: {e}")
         except Exception as write_err:
             log.warning("[worker] Task #%d failed to write error response: %s", task_id, write_err)
-        worktree_head = git.head_hash(workspace_dir) or start_commit
+        worktree_head = await git.head_hash(workspace_dir) or start_commit
         await db.transition_task(task_id, "failed",
                                  result_commit=worktree_head, error=str(e))
         try:
@@ -766,7 +766,7 @@ async def _enqueue_cascades(completed_job_id: int, task_id: int,
     upstream_name = job_name or completed_job_id
 
     for job in cascade_jobs:
-        context = build_trigger_context(
+        context = await build_trigger_context(
             "cascade",
             project_dir=state.PROJECT_DIR,
             upstream_name=upstream_name,

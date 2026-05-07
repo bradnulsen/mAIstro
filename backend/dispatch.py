@@ -1,12 +1,10 @@
 """Dispatch engine — prompt assembly, task lifecycle, watch triggers."""
 
-import functools
 import logging
 import os
-import re
 from typing import AsyncIterator
 
-from backend import cli, database as db, git, mcp_config as mcp_cfg
+from backend import cli, database as db, git, matching, mcp_config as mcp_cfg
 
 log = logging.getLogger("maistro.dispatch")
 
@@ -225,7 +223,7 @@ def _build_queue_context(task: dict | None, subordinates: list[dict] | None = No
 
 # ── Trigger context ─────────────────────────────────────────
 
-def build_trigger_context(
+async def build_trigger_context(
     trigger: str,
     *,
     project_dir: str | None = None,
@@ -254,7 +252,7 @@ def build_trigger_context(
     if trigger == "commit":
         summary = ""
         if project_dir and commit_hash:
-            summary = git.commit_oneline(project_dir, commit_hash) or commit_hash[:8]
+            summary = await git.commit_oneline(project_dir, commit_hash) or commit_hash[:8]
         return f"**Commit** `{commit_hash[:8]}`: {summary}"
 
     if trigger == "schedule":
@@ -265,7 +263,7 @@ def build_trigger_context(
         header = f"**Cascade** — triggered by completion of {upstream_name} (task #{upstream_task_id})"
         git_ctx = None
         if project_dir and start_commit and result_commit:
-            git_ctx = git.build_commit_context(project_dir, start_commit, result_commit)
+            git_ctx = await git.build_commit_context(project_dir, start_commit, result_commit)
         if git_ctx:
             # Indent multi-line git context under the header
             indented = git_ctx.replace("\n", "\n  ")
@@ -281,7 +279,7 @@ def build_trigger_context(
         parts = [f"**Reply** to task #{original_task_id}"]
         git_ctx = None
         if project_dir and start_commit and result_commit:
-            git_ctx = git.build_commit_context(project_dir, start_commit, result_commit)
+            git_ctx = await git.build_commit_context(project_dir, start_commit, result_commit)
         if git_ctx:
             parts[0] += f" — commits {start_commit[:8]}..{result_commit[:8]}"
         if user_context:
@@ -302,7 +300,7 @@ def build_trigger_context(
 
 async def check_watch_triggers(commit_hash: str, project_dir: str) -> list[dict]:
     """Check which watch-mode jobs should be triggered by a commit."""
-    changed_files = git.changed_files_in_commit(project_dir, commit_hash)
+    changed_files = await git.changed_files_in_commit(project_dir, commit_hash)
     if not changed_files:
         return []
 
@@ -315,40 +313,7 @@ async def check_watch_triggers(commit_hash: str, project_dir: str) -> list[dict]
         if not patterns or props.get("running"):
             continue
 
-        if _any_file_matches(changed_files, patterns):
+        if matching.any_file_matches(changed_files, patterns):
             triggered.append(job)
 
     return triggered
-
-
-def _any_file_matches(files: list[str], patterns: list[str]) -> bool:
-    """Check if any file matches any glob pattern (supports ** recursive)."""
-    for pattern in patterns:
-        regex = _glob_to_regex(pattern)
-        for f in files:
-            if regex.match(f):
-                return True
-    return False
-
-
-@functools.lru_cache(maxsize=256)
-def _glob_to_regex(pattern: str):
-    """Convert a glob pattern to a compiled regex with proper ** support."""
-    parts = []
-    i = 0
-    while i < len(pattern):
-        if pattern[i:i+2] == '**':
-            parts.append('.*')
-            i += 2
-            if i < len(pattern) and pattern[i] == '/':
-                i += 1
-        elif pattern[i] == '*':
-            parts.append('[^/]*')
-            i += 1
-        elif pattern[i] == '?':
-            parts.append('[^/]')
-            i += 1
-        else:
-            parts.append(re.escape(pattern[i]))
-            i += 1
-    return re.compile('^' + ''.join(parts) + '$')

@@ -51,7 +51,7 @@ async def open_project(req: OpenProjectRequest):
     if switching:
         state._switching = True
     try:
-        git.ensure_repo(path)
+        await git.ensure_repo(path)
 
         await db.init_db(path)
         state.PROJECT_DIR = path
@@ -63,9 +63,9 @@ async def open_project(req: OpenProjectRequest):
     # had .gitignore amended, commit that change too so project-open never
     # leaves the working tree dirty (which would trip the integration path's
     # stash flow on the next merge).
-    git.ensure_initial_commit(path)
+    await git.ensure_initial_commit(path)
     if added_ignore:
-        git.commit_gitignore_additions_if_safe(path, added_ignore)
+        await git.commit_gitignore_additions_if_safe(path, added_ignore)
     git.install_post_commit_hook(path)
     appstate.touch_project(path)
     worker.notify()

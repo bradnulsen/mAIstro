@@ -94,14 +94,14 @@ async def _loop():
                         next_fire = next_fire.replace(tzinfo=timezone.utc)
 
                     if next_fire <= now:
-                        head = git.head_hash(state.PROJECT_DIR)
+                        head = await git.head_hash(state.PROJECT_DIR)
 
                         log.info("[scheduler] Firing %s (schedule: %s)", job["id"], schedule)
                         await db.enqueue_task(
                             job["id"],
                             "schedule",
                             trigger_detail=schedule,
-                            context=build_trigger_context(
+                            context=await build_trigger_context(
                                 "schedule", schedule_expr=schedule, commit_hash=head,
                             ),
                         )

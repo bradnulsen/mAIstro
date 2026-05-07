@@ -199,7 +199,7 @@ async def get_task_outcome(task_id: int):
     end = task.get("result_commit")
     if not start or not end or start == end:
         return {"summary": None}
-    summary = git.outcome_summary(project_dir, start, end)
+    summary = await git.outcome_summary(project_dir, start, end)
     return {"summary": summary}
 
 
@@ -220,7 +220,7 @@ async def get_task_diff(task_id: int):
         return {"files": [], "insertions": 0, "deletions": 0, "diff": ""}
     if start == end:
         return {"files": [], "insertions": 0, "deletions": 0, "diff": ""}
-    return git.diff_range(project_dir, start, end)
+    return await git.diff_range(project_dir, start, end)
 
 
 async def _resolve_workspace_for_action(task_id: int) -> tuple[str, str, int]:
@@ -299,7 +299,7 @@ async def integrate_task_workspace(task_id: int, strategy: str = "default"):
     if not branch:
         raise HTTPException(404, "No task branch recorded for this workspace")
 
-    ok, err = git.integrate_branch(
+    ok, err = await git.integrate_branch(
         project_dir, branch,
         stash_label=f"maistro pre-integrate task-{task_id} (manual)",
         strategy=strategy,
@@ -308,12 +308,12 @@ async def integrate_task_workspace(task_id: int, strategy: str = "default"):
     if not ok:
         raise HTTPException(409, err)
 
-    git.worktree_remove(project_dir, wt_path, force=True)
-    git.worktree_prune(project_dir)
-    git.branch_delete(project_dir, branch, force=True)
+    await git.worktree_remove(project_dir, wt_path, force=True)
+    await git.worktree_prune(project_dir)
+    await git.branch_delete(project_dir, branch, force=True)
     await db.update_task(owner_id, worktree_path=None, task_branch=None)
     pubsub.notify_queue_changed()
-    return {"status": "integrated", "result_commit": git.head_hash(project_dir)}
+    return {"status": "integrated", "result_commit": await git.head_hash(project_dir)}
 
 
 @router.post("/api/tasks/{task_id}/workspace/discard")
@@ -328,10 +328,10 @@ async def discard_task_workspace(task_id: int):
     """
     project_dir = require_project()
     wt_path, branch, owner_id = await _resolve_workspace_for_action(task_id)
-    git.worktree_remove(project_dir, wt_path, force=True)
-    git.worktree_prune(project_dir)
+    await git.worktree_remove(project_dir, wt_path, force=True)
+    await git.worktree_prune(project_dir)
     if branch:
-        git.branch_delete(project_dir, branch, force=True)
+        await git.branch_delete(project_dir, branch, force=True)
     await db.update_task(owner_id, worktree_path=None, task_branch=None)
     pubsub.notify_queue_changed()
     return {"status": "discarded"}
@@ -347,7 +347,7 @@ async def get_orphan_stash(task_id: int):
     sha = task.get("orphan_stash_ref")
     if not sha:
         return {"diff": None, "ref": None}
-    return {"diff": git.stash_show(project_dir, sha), "ref": sha}
+    return {"diff": await git.stash_show(project_dir, sha), "ref": sha}
 
 
 @router.post("/api/tasks/{task_id}/orphan-stash/restore")
@@ -365,7 +365,7 @@ async def restore_orphan_stash(task_id: int):
     sha = task.get("orphan_stash_ref")
     if not sha:
         raise HTTPException(404, "No orphan stash for this task")
-    ok_apply, apply_err = git.stash_apply(project_dir, sha)
+    ok_apply, apply_err = await git.stash_apply(project_dir, sha)
     if not ok_apply:
         detail = apply_err or "no detail from git"
         raise HTTPException(500, f"git stash apply failed:\n{detail}")
@@ -388,7 +388,7 @@ async def discard_orphan_stash(task_id: int):
     sha = task.get("orphan_stash_ref")
     if not sha:
         raise HTTPException(404, "No orphan stash for this task")
-    git.stash_drop(project_dir, sha)
+    await git.stash_drop(project_dir, sha)
     owner_id = task.get("effective_root_id") or task["id"]
     await db.update_task(owner_id, orphan_stash_ref=None)
     pubsub.notify_queue_changed()
@@ -468,7 +468,7 @@ async def resume_task(task_id: int):
     new_id = await db.enqueue_task(
         task["job_id"], "resume",
         trigger_detail=str(task_id),
-        context=build_trigger_context("resume", original_task_id=task_id),
+        context=await build_trigger_context("resume", original_task_id=task_id),
     )
     await db.update_task(new_id, resume_session_id=cli_session_id)
     await db.coalesce_under(task_id, new_id)
@@ -491,7 +491,7 @@ async def reply_task(task_id: int, req: ReplyRequest | None = None):
     new_id = await db.enqueue_task(
         task["job_id"], "reply",
         trigger_detail=str(task_id),
-        context=build_trigger_context(
+        context=await build_trigger_context(
             "reply",
             project_dir=project_dir,
             original_task_id=task_id,
@@ -692,7 +692,7 @@ async def agent_dispatch(req: AgentDispatchRequest):
     if req.target_job_id not in allowed_targets:
         raise HTTPException(403, f"Job '{req.source_job_id}' is not allowed to dispatch '{req.target_job_id}'")
 
-    context = build_trigger_context(
+    context = await build_trigger_context(
         "agent",
         upstream_name=source_job["name"],
         upstream_task_id=req.source_task_id,
@@ -718,8 +718,8 @@ async def enqueue_job(job_id: int, req: DispatchRequest | None = None):
         raise HTTPException(404, "Job not found")
 
     user_context = req.context if req else None
-    head = git.head_hash(project_dir)
-    context = build_trigger_context(
+    head = await git.head_hash(project_dir)
+    context = await build_trigger_context(
         "manual", commit_hash=head, user_context=user_context,
     )
     task_id = await db.enqueue_task(job_id, "manual", trigger_detail=head, context=context)

@@ -15,7 +15,7 @@ router = APIRouter(tags=["feed"])
 @router.get("/api/feed/")
 async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, path: str | None = None):
     project_dir = require_project()
-    entries = git.log(project_dir, limit=limit, skip=offset, path=path, with_stats=True)
+    entries = await git.log(project_dir, limit=limit, skip=offset, path=path, with_stats=True)
 
     queue = await db.get_task_queue(limit=200)
     task_by_commit = {t["result_commit"]: t for t in queue if t.get("result_commit")}
@@ -44,10 +44,10 @@ async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, 
 @router.get("/api/feed/{commit_hash}")
 async def get_feed_item(commit_hash: str):
     project_dir = require_project()
-    details = git.show(project_dir, commit_hash, stat=True)
+    details = await git.show(project_dir, commit_hash, stat=True)
     if not details:
         raise HTTPException(404, "Commit not found")
     return {
         "details": details,
-        "diff": git.diff(project_dir, commit_hash),
+        "diff": await git.diff(project_dir, commit_hash),
     }

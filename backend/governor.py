@@ -210,7 +210,7 @@ async def _build_context() -> dict:
     git_log = ""
     if project_dir:
         try:
-            git_log = git.log_oneline(project_dir, n=30)
+            git_log = await git.log_oneline(project_dir, limit=30)
         except Exception:
             git_log = "(git log unavailable)"
 
