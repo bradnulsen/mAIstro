@@ -4,7 +4,7 @@ import logging
 import os
 from typing import AsyncIterator
 
-from backend import cli, database as db, git, matching, mcp_config as mcp_cfg
+from backend import cli, database as db, db_learnings, git, matching, mcp_config as mcp_cfg
 
 log = logging.getLogger("maistro.dispatch")
 
@@ -45,8 +45,10 @@ async def run_task(
     manifest = await build_job_manifest()
     resume_session_id = task_record.get("resume_session_id") if task_record else None
 
+    learnings = await db_learnings.list_enabled_learnings(job["id"])
+
     system_prompt = build_dispatch_system_prompt(job, workspace)
-    user_prompt = build_user_prompt(job, project_dir, queue_context, manifest)
+    user_prompt = build_user_prompt(job, project_dir, queue_context, manifest, learnings)
 
     log.info("[task:%d] System: %d chars, User: %d chars%s",
              task_id, len(system_prompt), len(user_prompt),
@@ -123,7 +125,8 @@ def build_dispatch_system_prompt(job: dict, cwd: str) -> str:
 
 
 def build_user_prompt(job: dict, project_dir: str,
-                      queue_context: str | None = None, manifest: str | None = None) -> str:
+                      queue_context: str | None = None, manifest: str | None = None,
+                      learnings: list[str] | None = None) -> str:
     props = job["properties"]
     sections = []
 
@@ -137,6 +140,10 @@ def build_user_prompt(job: dict, project_dir: str,
         sections.append(f"# {name}\n{summary}")
     else:
         sections.append(f"# {name}")
+
+    if learnings:
+        body = "\n\n".join(learnings)
+        sections.append(f"## Learnings\n{body}")
 
     if queue_context:
         sections.append(queue_context)

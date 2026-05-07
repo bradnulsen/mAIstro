@@ -65,6 +65,6 @@ Circular dependency chains are permitted. When job A depends on job B and vice v
 
 - [Dispatch Engine](dispatch-engine.md) reads job properties at dispatch time to determine model, timeout, tools, and approval requirements
 - [Trigger System](trigger-system.md) reads `subscriptions`, `schedule`, `cascades_from`, and `coalesce_tasks` to determine when and how to enqueue tasks
-- [Prompt Assembly](prompt-assembly.md) reads `summary`, `description`, and `subscriptions` to build the agent's prompt; will additionally read enabled `job_learnings` rows once the learnings surface ships
+- [Prompt Assembly](prompt-assembly.md) reads `summary`, `description`, `subscriptions`, and enabled `job_learnings` rows to build the agent's prompt
 - [Tool Mediation](tool-mediation.md) uses `allowed_tools`, `allowed_internal_tools`, and `mcp_servers` to compose each job's tool surface at dispatch time. `allow_learning_self_modification` extends this composition to gate learning write tools
 - The job registry (manifest) is built from all jobs' names, summaries, and subscriptions — injected into every task prompt so agents know their neighbors

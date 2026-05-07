@@ -67,13 +67,14 @@ The HTTP layer additionally checks `worker.get_active_task_id()` before allowing
 
 The schema is applied via `CREATE TABLE IF NOT EXISTS` on every `init_db()` call — idempotent. There is no general-purpose migration system. `SEED_SQL` populates `job_property_defs` with core property definitions and sets default config values. `db_migrations.run_migrations()` exists only for legacy table renames (goals→jobs, slug PK→INTEGER PK) and is not where new schema changes belong.
 
-Thirteen tables plus one view:
+Fourteen tables plus one view:
 
 | Table | Purpose |
 |-------|---------|
 | `jobs` | Job identity (`INTEGER PRIMARY KEY AUTOINCREMENT`, `slug` UNIQUE, name, created_at) |
 | `job_property_defs` | EAV registry — property keys, defaults, and types |
 | `job_properties` | EAV overrides — per-job property values |
+| `job_learnings` | Per-job structured guidance — discrete, addressable, individually-toggleable rules (id, body, enabled, position, source, timestamps) |
 | `tasks` | Atomic task identity + queue placement + materialized status |
 | `task_executions` | Per-execution outcome data (one row per task that ran) — keyed by `task_id` |
 | `task_events` | Immutable lifecycle event log — source of truth for when transitions happened |
@@ -94,7 +95,9 @@ On read, `get_job()` loads all defs, applies defaults, then overlays job-specifi
 
 This design means adding a new property requires only a `SEED_SQL` insert — no schema migration, no column addition. The tradeoff is no column-level constraints or indexes on property values.
 
-> **Direction**: DESIGN's job-learnings reset adds a sibling structured surface that does *not* fit the EAV pattern — learnings need per-row identity (toggle, reorder, source provenance, agent write-back), which an EAV property cannot express. The proposal at [proposals/job-learnings-decomposition.md](proposals/job-learnings-decomposition.md) introduces a new `job_learnings` table (id, job_id FK CASCADE, body, enabled, position, source `human|agent`, timestamps) alongside the EAV registry, plus a single new EAV property `allow_learning_self_modification` (boolean, default false) gating agent write access. The two surfaces compose: prose lives in the EAV `description`, structured rules live in `job_learnings`. Prompt assembly concatenates enabled rows after the description block (zero rows = byte-identical prompt; jobs that don't use the surface are unaffected).
+DESIGN's job-learnings reset adds a sibling structured surface that does *not* fit the EAV pattern — learnings need per-row identity (toggle, reorder, source provenance, agent write-back), which an EAV property cannot express. The `job_learnings` table (id, job_id FK CASCADE, body, enabled, position, source `human|agent`, timestamps) lives alongside the EAV registry. The two surfaces compose: prose lives in the EAV `description`, structured rules live in `job_learnings`. Prompt assembly concatenates enabled rows after the description block (zero rows = byte-identical prompt; jobs that don't use the surface are unaffected).
+
+> **Direction**: the read path is in place ([db_learnings.py](backend/db_learnings.py), wired through [dispatch.build_user_prompt](backend/dispatch.py)). Operator UI (CRUD), the `allow_learning_self_modification` EAV property, and the gated internal-MCP write tools (`add_learning`, `update_learning`, `delete_learning`) are still pending — see [proposals/job-learnings-decomposition.md](proposals/job-learnings-decomposition.md) for the full design.
 
 ### Task Record
 
