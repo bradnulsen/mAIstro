@@ -176,6 +176,14 @@ async def run_migrations(db: aiosqlite.Connection):
         )
         await db.commit()
 
+    # Add bundle_dir to mcp_servers if missing (needed for .mcpb bundle imports;
+    # without this column, register_mcp_server inserts fail with a 500).
+    mcp_cols = {c["name"] for c in await db.execute_fetchall("PRAGMA table_info(mcp_servers)")}
+    if mcp_cols and "bundle_dir" not in mcp_cols:
+        log.info("[database] Migration: adding bundle_dir to mcp_servers")
+        await db.execute("ALTER TABLE mcp_servers ADD COLUMN bundle_dir TEXT")
+        await db.commit()
+
     # M1: Add slug column to jobs if missing (added after INTEGER PK migration)
     cols = await db.execute_fetchall("PRAGMA table_info(jobs)")
     col_names = {c["name"] for c in cols}
