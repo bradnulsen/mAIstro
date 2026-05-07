@@ -109,6 +109,7 @@ async def update_learning(
     *,
     body: str | None = None,
     enabled: bool | None = None,
+    require_source: str | None = None,
 ) -> dict | None:
     """Update body and/or enabled flag; bumps updated_at.
 
@@ -116,7 +117,18 @@ async def update_learning(
     of the body — the operator UI can do both, but the agent MCP tools
     will only touch ``body`` (the proposal forbids agents from flipping
     ``enabled``).
+
+    ``require_source`` enforces the asymmetric agent-write rule when set:
+    the row must have a matching ``source`` or the update is rejected
+    (returns ``None``). Operator routes pass ``None``; the agent MCP
+    write path passes ``'agent'`` so agent tools can only edit
+    learnings the agent itself authored.
     """
+    if require_source is not None:
+        existing = await get_learning(learning_id)
+        if existing is None or existing["source"] != require_source:
+            return None
+
     sets = []
     params: list = []
     if body is not None:
@@ -140,7 +152,14 @@ async def update_learning(
     return await get_learning(learning_id)
 
 
-async def delete_learning(learning_id: int) -> bool:
+async def delete_learning(learning_id: int, *, require_source: str | None = None) -> bool:
+    """Hard-delete a learning. ``require_source`` mirrors ``update_learning``
+    — when set, the row must have a matching ``source`` or the delete is
+    refused (returns ``False``)."""
+    if require_source is not None:
+        existing = await get_learning(learning_id)
+        if existing is None or existing["source"] != require_source:
+            return False
     db = await get_db()
     cur = await db.execute("DELETE FROM job_learnings WHERE id = ?", (learning_id,))
     await db.commit()

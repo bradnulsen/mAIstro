@@ -416,7 +416,8 @@ INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
     ('cascades_from', '[]', 'json'),
     ('require_approval', 'false', 'boolean'),
     ('allowed_internal_tools', '[]', 'json'),
-    ('allowed_dispatch_targets', '[]', 'json');
+    ('allowed_dispatch_targets', '[]', 'json'),
+    ('allow_learning_self_modification', 'false', 'boolean');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 INSERT OR IGNORE INTO config (key, value) VALUES ('agent_dispatch_depth_limit', '5');

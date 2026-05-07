@@ -1,10 +1,16 @@
-"""Per-job learnings — operator CRUD surface.
+"""Per-job learnings — operator and agent CRUD surfaces.
 
-The UI in Tasks.jsx renders the list under each job's description; this
-module backs add / edit / toggle / delete / reorder. All writes here are
-``source='human'`` — agent-authored learnings flow through the internal
-MCP tools (gated by the ``allow_learning_self_modification`` property in
-a later step).
+The UI in Tasks.jsx renders the list under each job's description and
+calls the operator routes for add / edit / toggle / delete / reorder
+(all ``source='human'``). The internal MCP server's learning write tools
+call the ``/agent/`` routes, which stamp ``source='agent'`` on creates
+and refuse to mutate human-authored rows. Operators retain authority over
+both sources via the operator routes.
+
+The agent permission gate (``allow_learning_self_modification``) lives on
+the MCP server side: the routes here always honour the ``source='agent'``
+contract regardless of whether the job has writes enabled — the gate just
+controls whether the write tools are presented to the agent at all.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -83,3 +89,52 @@ async def reorder_job_learnings(job_id: int, req: ReorderLearningsRequest):
         raise HTTPException(404, "Job not found")
     await db_learnings.reorder_learnings(job_id, req.learning_ids)
     return {"status": "ok"}
+
+
+# ── Agent write surface ────────────────────────────────────
+# Called by the internal MCP server (mcp_server.py) when the dispatching
+# job has allow_learning_self_modification=true. All writes here stamp
+# source='agent' and are constrained to rows the agent itself authored.
+
+class AgentAddLearningRequest(BaseModel):
+    job_id: int
+    body: str
+
+
+class AgentUpdateLearningRequest(BaseModel):
+    body: str
+
+
+@router.post("/api/learnings/agent-add")
+async def agent_add_learning(req: AgentAddLearningRequest):
+    require_project()
+    body = (req.body or "").strip()
+    if not body:
+        raise HTTPException(400, "body is required")
+    job = await db.get_job(req.job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return await db_learnings.create_learning(req.job_id, body, source="agent")
+
+
+@router.patch("/api/learnings/{learning_id}/agent-update")
+async def agent_update_learning(learning_id: int, req: AgentUpdateLearningRequest):
+    require_project()
+    body = (req.body or "").strip()
+    if not body:
+        raise HTTPException(400, "body is required")
+    learning = await db_learnings.update_learning(
+        learning_id, body=body, require_source="agent",
+    )
+    if not learning:
+        raise HTTPException(404, "Learning not found, or not agent-authored")
+    return learning
+
+
+@router.delete("/api/learnings/{learning_id}/agent-delete")
+async def agent_delete_learning(learning_id: int):
+    require_project()
+    ok = await db_learnings.delete_learning(learning_id, require_source="agent")
+    if not ok:
+        raise HTTPException(404, "Learning not found, or not agent-authored")
+    return {"status": "deleted"}

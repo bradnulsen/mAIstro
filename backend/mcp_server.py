@@ -15,6 +15,9 @@ Each task gets an instance configured via environment variables:
     MAISTRO_TASK_ID                 current task ID (for provenance)
     MAISTRO_ALLOWED_INTERNAL_TOOLS  JSON list of allowed tool names (empty = all)
     MAISTRO_ALLOWED_DISPATCH_TARGETS JSON list of job IDs this agent can dispatch
+    MAISTRO_ALLOW_LEARNING_WRITES   "1" if the dispatching job has the
+                                     allow_learning_self_modification permission
+                                     enabled — gates add/update/delete_learning
 
 Communication follows the MCP stdio transport (JSON-RPC 2.0, one message per line).
 """
@@ -50,6 +53,11 @@ ALLOWED_INTERNAL_TOOLS = set(json.loads(_allowed_raw)) if _allowed_raw else set(
 
 _dispatch_raw = os.environ.get("MAISTRO_ALLOWED_DISPATCH_TARGETS", "[]")
 ALLOWED_DISPATCH_TARGETS = set(int(x) for x in json.loads(_dispatch_raw)) if _dispatch_raw else set()
+
+# Per-job permission gate for learning self-modification. Read-only
+# list_learnings is always available; the three write tools are filtered
+# out of tools/list and refused at tools/call when this flag is false.
+ALLOW_LEARNING_WRITES = os.environ.get("MAISTRO_ALLOW_LEARNING_WRITES", "0") == "1"
 
 
 
@@ -312,6 +320,114 @@ def tool_get_queue_status(args: dict) -> str:
         return f"Error fetching queue status: {e}"
 
 
+# ── Learning tools ──────────────────────────────────────────
+# The agent introspects and (when permitted) manages its own job's
+# learning list. Backed by the agent-side HTTP routes in
+# learnings_routes.py, which enforce source='agent' on writes.
+
+def _job_id_int() -> int:
+    try:
+        return int(JOB_ID)
+    except (ValueError, TypeError):
+        return 0
+
+
+def tool_list_learnings(args: dict) -> str:
+    """Read the current job's learnings (enabled and disabled)."""
+    job_id = _job_id_int()
+    if not job_id:
+        return "Error: job context unavailable"
+    try:
+        url = f"http://localhost:{BACKEND_PORT}/api/jobs/{job_id}/learnings"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            rows = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return f"Error fetching learnings: {e.code} — {body}"
+    except Exception as e:
+        return f"Error fetching learnings: {e}"
+
+    if not rows:
+        return "(no learnings)"
+    lines = []
+    for r in rows:
+        flag = "" if r["enabled"] else " [disabled]"
+        lines.append(f"#{r['id']} ({r['source']}){flag}: {r['body']}")
+    return "\n".join(lines)
+
+
+def _http_request(method: str, path: str, payload: dict | None = None) -> tuple[bool, str]:
+    try:
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            f"http://localhost:{BACKEND_PORT}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"} if data else {},
+            method=method,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return True, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return False, f"{e.code} — {body}"
+    except Exception as e:
+        return False, str(e)
+
+
+def tool_add_learning(args: dict) -> str:
+    if not ALLOW_LEARNING_WRITES:
+        return "Error: learning self-modification is not enabled for this job"
+    job_id = _job_id_int()
+    if not job_id:
+        return "Error: job context unavailable"
+    body = (args.get("body") or "").strip()
+    if not body:
+        return "Error: body is required"
+    ok, out = _http_request("POST", "/api/learnings/agent-add",
+                            {"job_id": job_id, "body": body})
+    if not ok:
+        return f"Error adding learning: {out}"
+    try:
+        learning = json.loads(out)
+        return f"Added learning #{learning['id']} (position {learning['position']})"
+    except (json.JSONDecodeError, KeyError):
+        return out
+
+
+def tool_update_learning(args: dict) -> str:
+    if not ALLOW_LEARNING_WRITES:
+        return "Error: learning self-modification is not enabled for this job"
+    learning_id = args.get("id")
+    if isinstance(learning_id, str):
+        learning_id = int(learning_id) if learning_id.isdigit() else 0
+    body = (args.get("body") or "").strip()
+    if not learning_id:
+        return "Error: id is required"
+    if not body:
+        return "Error: body is required"
+    ok, out = _http_request("PATCH",
+                            f"/api/learnings/{learning_id}/agent-update",
+                            {"body": body})
+    if not ok:
+        return f"Error updating learning: {out}"
+    return f"Updated learning #{learning_id}"
+
+
+def tool_delete_learning(args: dict) -> str:
+    if not ALLOW_LEARNING_WRITES:
+        return "Error: learning self-modification is not enabled for this job"
+    learning_id = args.get("id")
+    if isinstance(learning_id, str):
+        learning_id = int(learning_id) if learning_id.isdigit() else 0
+    if not learning_id:
+        return "Error: id is required"
+    ok, out = _http_request("DELETE",
+                            f"/api/learnings/{learning_id}/agent-delete")
+    if not ok:
+        return f"Error deleting learning: {out}"
+    return f"Deleted learning #{learning_id}"
+
+
 # ── Tool registry ────────────────────────────────────────────
 
 TOOLS = [
@@ -451,6 +567,79 @@ TOOLS = [
             "properties": {},
         },
     },
+    {
+        "name": "list_learnings",
+        "description": (
+            "Read the current job's learnings — discrete rules that complement "
+            "the prose description. Returns enabled and disabled rows with id, "
+            "body, source (human or agent), enabled flag, and position. Always "
+            "available as introspection regardless of self-modification permission."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "add_learning",
+        "description": (
+            "Append a new agent-authored learning to this job's list. "
+            "Requires the allow_learning_self_modification job permission. "
+            "The new row is stamped source='agent' and only the agent (or an "
+            "operator) can later edit or delete it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string",
+                    "description": "The learning body — one rule, example, or constraint.",
+                },
+            },
+            "required": ["body"],
+        },
+    },
+    {
+        "name": "update_learning",
+        "description": (
+            "Rewrite the body of an agent-authored learning. Requires the "
+            "allow_learning_self_modification job permission. Refuses to edit "
+            "operator-authored (source='human') rows. Toggling enabled is an "
+            "operator action and not exposed here."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Learning id (from list_learnings).",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Replacement body.",
+                },
+            },
+            "required": ["id", "body"],
+        },
+    },
+    {
+        "name": "delete_learning",
+        "description": (
+            "Hard-delete an agent-authored learning. Requires the "
+            "allow_learning_self_modification job permission. Refuses to delete "
+            "operator-authored (source='human') rows."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Learning id (from list_learnings).",
+                },
+            },
+            "required": ["id"],
+        },
+    },
 ]
 
 TOOL_HANDLERS = {
@@ -464,7 +653,16 @@ TOOL_HANDLERS = {
     "list_jobs": tool_list_jobs,
     "dispatch_task": tool_dispatch_task,
     "get_queue_status": tool_get_queue_status,
+    "list_learnings": tool_list_learnings,
+    "add_learning": tool_add_learning,
+    "update_learning": tool_update_learning,
+    "delete_learning": tool_delete_learning,
 }
+
+# Write tools that are gated by the per-job allow_learning_self_modification
+# permission. Filtered out of tools/list when the gate is closed (so the
+# agent doesn't even see them). Defense in depth at tools/call too.
+LEARNING_WRITE_TOOLS = {"add_learning", "update_learning", "delete_learning"}
 
 
 # ── Audit logging ────────────────────────────────────────────
@@ -518,15 +716,21 @@ def handle_initialize(req_id, params):
 
 
 def handle_tools_list(req_id, params):
-    """Return tools filtered by allowed_internal_tools.
+    """Return tools filtered by allowed_internal_tools and the learning-writes gate.
 
     When ALLOWED_INTERNAL_TOOLS is empty, all tools are available.
     When set, only listed tools are presented.
+
+    Learning write tools are additionally hidden when ALLOW_LEARNING_WRITES
+    is false — gating is intersected with allowed_internal_tools so a job
+    only sees a write tool if both axes permit it.
     """
     if ALLOWED_INTERNAL_TOOLS:
         filtered = [t for t in TOOLS if t["name"] in ALLOWED_INTERNAL_TOOLS]
     else:
-        filtered = TOOLS
+        filtered = list(TOOLS)
+    if not ALLOW_LEARNING_WRITES:
+        filtered = [t for t in filtered if t["name"] not in LEARNING_WRITE_TOOLS]
     _respond(req_id, {"tools": filtered})
 
 
@@ -536,6 +740,9 @@ def handle_tools_call(req_id, params):
 
     # Enforce tool filtering at call time too (defense in depth)
     if ALLOWED_INTERNAL_TOOLS and tool_name not in ALLOWED_INTERNAL_TOOLS:
+        _error(req_id, -32601, f"Tool not available: {tool_name}")
+        return
+    if tool_name in LEARNING_WRITE_TOOLS and not ALLOW_LEARNING_WRITES:
         _error(req_id, -32601, f"Tool not available: {tool_name}")
         return
 

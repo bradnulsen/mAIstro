@@ -76,9 +76,18 @@ Tools for cross-agent awareness and imperative dispatch:
 
 These tools give agents imperative coordination beyond the declarative trigger system (dependencies, subscriptions). Agent dispatch is the only mechanism where one agent can directly cause another to run — all other cross-agent triggers flow through git commits or configuration.
 
-### Learning Self-Management (pending)
+### Learning Self-Management
 
-> **Direction**: DESIGN's job-learnings reset adds an asymmetric write surface for the agent's own job-learnings list. The internal MCP server gets four new tools — `list_learnings` (read; always available, surfaces enabled + disabled rows with id/body/enabled/position/source so the agent can introspect "what guidance shapes my behavior?"), `add_learning(body)`, `update_learning(id, body)`, and `delete_learning(id)` (writes; gated by the per-job `allow_learning_self_modification` boolean). The asymmetry is structural and enforced at the tool surface, not by prompt instruction: the agent can manage learnings it itself authored (`source='agent'`) but cannot edit or delete operator-authored ones (`source='human'`). Operators retain full authority over both sources via the UI. Plumbing parallels every other internal tool — gating flows through `MAISTRO_ALLOWED_INTERNAL_TOOLS`, audit logging is identical. See [proposals/job-learnings-decomposition.md](proposals/job-learnings-decomposition.md) and [Job Configuration — Pending Properties](job-configuration.md#pending-properties-design-reset).
+The internal MCP server exposes four tools for the agent's own job-learnings list:
+
+- **`list_learnings`** — read; always available regardless of permission. Returns enabled and disabled rows with id, body, source, enabled flag, and position so the agent can introspect "what guidance shapes my behavior?"
+- **`add_learning(body)`** — write; gated. Appends an `source='agent'` row to the job's list at the end of the position order.
+- **`update_learning(id, body)`** — write; gated. Rewrites the body of an agent-authored row only. Cannot toggle `enabled` — that's an operator action.
+- **`delete_learning(id)`** — write; gated. Hard-deletes an agent-authored row only.
+
+The three write tools are gated by the per-job `allow_learning_self_modification` boolean property (default `false`). The gate is plumbed via a dedicated env var (`MAISTRO_ALLOW_LEARNING_WRITES`) — when off, the write tools are filtered out of `tools/list` *and* refused at `tools/call` (defense in depth). When on, the writes still pass through `allowed_internal_tools` filtering — both axes must permit a tool for it to surface.
+
+The asymmetry between agent-authored and operator-authored rows is structural, not prompt-instructed. `db_learnings.update_learning` and `delete_learning` accept a `require_source` parameter that the agent-side HTTP routes (`/api/learnings/agent-add`, `/api/learnings/{id}/agent-update`, `/api/learnings/{id}/agent-delete`) pass as `'agent'`. Any attempt by the agent to mutate a `source='human'` row returns 404 from the route and an error string from the tool — the row is unchanged. Operators retain full authority over both sources via the operator routes and the Job Definition tab UI. Audit logging is identical to every other internal tool.
 
 ## Tool Invocation Logging
 

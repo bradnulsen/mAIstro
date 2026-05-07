@@ -22,6 +22,7 @@ const TIPS = {
   allowedInternalTools: 'Internal MCP tools the agent can access. When a subset is selected, only listed tools are presented by the internal server. All checked = default (no restrictions). Use this to create read-only jobs or restrict dispatch capabilities.',
   allowedDispatchTargets: 'Jobs this agent can dispatch via the dispatch_task tool. When none are selected, the agent cannot dispatch other jobs. Self-dispatch is always prohibited.',
   learnings: 'Discrete, individually-toggleable rules and notes the agent sees alongside the description. Use for guidance worth muting/reordering on its own. Disabled rows are stored but excluded from the prompt.',
+  allowLearningSelfModification: 'When enabled, the agent can add, edit, and delete its own learnings via internal MCP tools — closing the feedback loop "what did I learn this run that should change me next time?". The agent can only modify learnings it itself authored (source=agent); operator-authored rows are never agent-writable. Read-only list_learnings is always available regardless of this setting.',
 }
 
 export default function Tasks({ jobs, onRefresh }) {
@@ -369,6 +370,20 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
           </div>
 
           <LearningsList jobId={job.id} />
+
+          <div className="field-group">
+            <div className="label-row">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={getVal('allow_learning_self_modification') || false}
+                  onChange={e => edit('allow_learning_self_modification', e.target.checked)}
+                />
+                Allow agent self-modification of learnings
+              </label>
+              <HelpTip text={TIPS.allowLearningSelfModification} />
+            </div>
+          </div>
         </div>
       )}
 

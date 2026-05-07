@@ -37,6 +37,7 @@ class UpdateJobRequest(BaseModel):
     sort_order: int | None = None
     allowed_internal_tools: list[str] | None = None
     allowed_dispatch_targets: list[int] | None = None
+    allow_learning_self_modification: bool | None = None
 
 class ReorderRequest(BaseModel):
     job_ids: list[int]

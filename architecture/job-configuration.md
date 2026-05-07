@@ -29,6 +29,7 @@ Job behavior is configured entirely through the EAV property system (see [Storag
 | `allowed_tools` | json | `[]` | CLI tools the agent can use, selected from the platform's discovered tool inventory. When set, the platform computes the complement and hides all other tools from the agent |
 | `allowed_internal_tools` | json | `[]` | Internal MCP tools the agent can access. When set, only listed tools are presented by the internal server. When empty, all internal tools are available. Enables read-only jobs or selective capability grants |
 | `allowed_dispatch_targets` | json | `[]` | Job IDs this agent can dispatch via `dispatch_task`. When empty, the agent cannot dispatch other jobs. Self-dispatch is always prohibited |
+| `allow_learning_self_modification` | boolean | `false` | Whether the agent's `add_learning` / `update_learning` / `delete_learning` MCP tools are exposed for this job. Read-only `list_learnings` is always available. Agents can only edit or delete rows they themselves authored (`source='agent'`); operator-authored rows are never agent-writable |
 | `mcp_servers` | json | `[]` | External MCP servers to enable, selected from registered servers |
 | `sort_order` | integer | `0` | Explicit ordering in the job list |
 
@@ -36,10 +37,9 @@ Properties are read with defaults applied — a job with no overrides gets all d
 
 ### Pending Properties (DESIGN reset)
 
-DESIGN's reset around closed-loop learning adds two structural surfaces that are not yet in the property registry. The shape of each is specified in the corresponding proposal; both flow through the same EAV mechanism when they ship.
+DESIGN's reset around closed-loop learning still has one structural surface not yet in the property registry. It will flow through the same EAV mechanism when it ships.
 
 - **`color`** (string) — visual identifier assigned at creation from a curated palette. No behavioral semantics; renders the job's identity color across every surface (command bar indicator, queue cards, status pills). Operator-changeable via a hue picker. The 10 default palette tokens (`--job-color-0` … `--job-color-9`) already exist in [App.css](frontend/src/App.css) — adding the property is what wires the value into job records.
-- **`allow_learning_self_modification`** (boolean, default `false`) — gates the agent's write access to its own job's learnings. When `false`, the agent has read-only access to the learning list. When `true`, the agent can `add_learning`, `update_learning`, and `delete_learning` — but only on learnings it itself authored (`source='agent'`); operator-authored learnings (`source='human'`) are never agent-writable regardless of this property. Plumbing parallels `allowed_internal_tools` — the property selects which write tools are listed in `MAISTRO_ALLOWED_INTERNAL_TOOLS` for that job's dispatches. See [proposals/job-learnings-decomposition.md](proposals/job-learnings-decomposition.md).
 
 ## Ordering
 
