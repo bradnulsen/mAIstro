@@ -1,57 +1,39 @@
 # Remediation
 
-Architectural debt and remediation plan for the mAistro backend. Live items are at the top with full design context. The bulk of the original list has shipped — see the Shipped appendix at the bottom for the historical record.
+Architectural debt and remediation plan for the mAistro backend. The original
+backlog has been worked through. The Shipped appendix at the bottom is the
+historical record. The one item left open is a deliberate deferral, not
+unfinished work.
 
 ---
 
-## R6: EAV property system pays ongoing tax for unused flexibility
+## R6 (deferred): structural EAV flatten
 
-**Problem:** Every `get_job` call joins three tables, builds defaults, overlays overrides, and casts types. The assembly code is copy-pasted across `get_job`, `list_jobs`, and `get_jobs_depending_on`. Property definitions are hardcoded in `SEED_SQL` — the EAV flexibility (add properties without migrations) is never actually used at runtime.
+The minimal fix shipped (see Shipped appendix) — `get_job`, `list_jobs`, and
+`get_cascade_targets` now share helpers, and the property schema is cached.
+The structural option remains open:
 
-**Remediation:** Two options depending on appetite:
-- **Minimal:** Extract a `_assemble_job_properties(job_id_or_rows, prop_rows, running_ids)` helper that all three consumers call. Eliminates the copy-paste without changing the data model.
-- **Structural:** Flatten properties into a `job_config` JSON column on `jobs`. One column, one parse, no joins. Migration script reads current EAV state and writes JSON. Property definitions become a Python-side schema (dataclass or Pydantic model) that validates and applies defaults on read.
+**Problem:** Property definitions are hardcoded in `SEED_SQL`, so the EAV
+flexibility (add properties without migrations) is never actually used at
+runtime. Three tables still get joined on every property assembly.
 
-**Scope:** Minimal fix is small (one helper in `db_jobs.py`). Structural fix is medium — migration + update all property reads/writes.
+**Remediation:** Flatten properties into a `job_config` JSON column on `jobs`.
+One column, one parse, no joins. Migration script reads current EAV state
+and writes JSON. Property definitions become a Python-side schema (dataclass
+or Pydantic model) that validates and applies defaults on read.
 
----
+**Scope:** Medium — migration + update all property reads/writes.
 
-## R7: git.py blocks the async event loop
-
-**Problem:** All git operations use synchronous `subprocess.run`, blocking the event loop. The worker calls `git.head_hash()` while holding `_lock`. The scheduler calls it every 30 seconds. Feed routes call `git.log` with `--numstat`. On large repos or slow storage, any call can block for hundreds of milliseconds.
-
-**Remediation:**
-- Wrap `run_git` in `asyncio.to_thread` (or `loop.run_in_executor`) and make all callers `await` it.
-- Alternative: provide an `async_run_git` alongside the sync version for the transition period.
-- The `cli.py` module already handles this correctly with `Popen` + thread readers — `git.py` should follow the same pattern or use the simpler `to_thread` wrapper.
-
-**Scope:** `git.py` (add async wrappers), all callers in `dispatch.py`, `worker.py`, `scheduler.py`, `feed_routes.py`, `git_routes.py`. Mechanical but wide-reaching — every `git.foo()` becomes `await git.foo()`.
-
----
-
-## R8: Subscription glob matching lives in the prompt assembly module
-
-**Problem:** `_any_file_matches` and `_glob_to_regex` in `dispatch.py` are the core watch-trigger mechanism — they determine which jobs fire on commits. This is a triggering/matching concern, not a prompt assembly concern.
-
-**Remediation:** Move glob matching to `git.py` (which already has `resolve_glob_files`) or a dedicated `matching.py`. The `check_watch_triggers` function that calls it should move to wherever trigger evaluation lives.
-
-**Scope:** Small. Move two functions + one caller. No behavior change.
-
----
-
-## Sequencing
-
-Live work, ordered by leverage:
-
-1. **R6 EAV** — minimal helper extraction is one PR; structural flatten is a separate decision point.
-
-Bigger structural items (Governor Threads, Job Learnings, Installer) live as proposals in `architecture/proposals/` rather than remediation — they're new capability, not debt repayment.
+**When to revisit:** No urgency. Defer until there's a concrete reason —
+property-shape changes, an actual performance budget, or operator-extensible
+properties become a goal.
 
 ---
 
 ## Shipped (historical)
 
-For continuity. Each was originally tracked here as architectural debt; resolved via the indicated mechanism.
+For continuity. Each was originally tracked here as architectural debt;
+resolved via the indicated mechanism.
 
 | Original item | Status | Resolution |
 |---|---|---|
@@ -61,6 +43,7 @@ For continuity. Each was originally tracked here as architectural debt; resolved
 | R4 worker/chat CLI duplication | Obsolete | The standalone chat surface was removed when the Governor replaced it. Nothing left to dedupe. |
 | R5 coalescing dispersal (write side) | Shipped | Depth-1 SQLite triggers (`tasks_depth1_*`); `cascade_completion` extracted; lock-at-terminal as emergent policy from pending-only guards. |
 | R5 coalescing dispersal (read side) | Shipped | `tasks_resolved` view, `get_task_resolved` helper, all endpoints (output/diff/outcome/stream), `get_recent_tasks_for_governor`, `dashboard_health` migrated. Frontend "residual" turned out to be moot — `get_task_queue` already filters `coalesced_id IS NULL`, so subordinates never render as standalone cards in `Queue.jsx`/`Tasks.jsx`. |
+| R6 EAV property tax (minimal) | Shipped | `_get_property_schema()` caches `(default_props, def_types)`; `_overlay_properties()` is the single overlay helper. `get_job`, `list_jobs`, `get_cascade_targets` all call them — no more copy-pasted assembly. |
 | R7 async git operations | Shipped | All subprocess-running helpers in `git.py` are async via `asyncio.to_thread`. 60 callsites across worker/scheduler/dispatch/governor/route modules await them. |
 | R8 glob matching mis-filed | Shipped | `_any_file_matches` and `_glob_to_regex` extracted to `backend/matching.py` as `any_file_matches` / `glob_to_regex`. |
 | R9 main.py route extraction | Shipped | All `*_routes.py` modules extracted; `main.py` is a thin shell (lifespan, CORS, `include_router`). |

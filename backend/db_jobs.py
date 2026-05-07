@@ -16,12 +16,14 @@ from backend.db_core import get_db
 log = logging.getLogger("maistro.database")
 
 _property_defs_cache: list | None = None
+_property_schema_cache: tuple[dict, dict] | None = None
 
 
 def _reset_caches():
     """Clear cached property defs — called by db_core.close_db on project switch."""
-    global _property_defs_cache
+    global _property_defs_cache, _property_schema_cache
     _property_defs_cache = None
+    _property_schema_cache = None
 
 
 def slugify(name: str) -> str:
@@ -55,6 +57,42 @@ async def _get_property_defs() -> list:
     return _property_defs_cache
 
 
+async def _get_property_schema() -> tuple[dict, dict]:
+    """Return (default_props, def_types).
+
+    `default_props` maps key → cast default value (ready to copy into a job).
+    `def_types` maps key → declared type, for casting overrides.
+
+    Cached alongside the underlying defs cache. Cleared on project switch
+    via `_reset_caches`.
+    """
+    global _property_schema_cache
+    if _property_schema_cache is None:
+        defs = await _get_property_defs()
+        def_types = {d["key"]: d["type"] for d in defs}
+        default_props = {
+            d["key"]: _cast_property(d["default_value"], d["type"])
+            for d in defs
+        }
+        _property_schema_cache = (default_props, def_types)
+    return _property_schema_cache
+
+
+def _overlay_properties(default_props: dict, def_types: dict,
+                        raw_overrides: dict) -> dict:
+    """Build a per-job property dict by overlaying raw text overrides on defaults.
+
+    `raw_overrides` is the {key: text-value} shape stored in `job_properties`
+    (or an empty dict for a job with none). Each override is cast to the
+    declared type before assignment. Unknown keys (not in `def_types`)
+    fall through as `string`.
+    """
+    props = default_props.copy()
+    for key, value in raw_overrides.items():
+        props[key] = _cast_property(value, def_types.get(key, "string"))
+    return props
+
+
 async def create_job(name: str, properties: dict | None = None) -> dict:
     slug = slugify(name)
     db = await get_db()
@@ -80,18 +118,13 @@ async def get_job(job_id: int, running_ids: set | None = None) -> dict | None:
         return None
     job = dict(row[0])
 
-    # Get all property defs with defaults, override with job-specific values
-    defs = await _get_property_defs()
-    props = {}
-    for d in defs:
-        props[d["key"]] = _cast_property(d["default_value"], d["type"])
-
     job_props = await db.execute_fetchall(
         "SELECT key, value FROM job_properties WHERE job_id = ?", (job_id,)
     )
-    def_types = {d["key"]: d["type"] for d in defs}
-    for p in job_props:
-        props[p["key"]] = _cast_property(p["value"], def_types.get(p["key"], "string"))
+    raw = {p["key"]: p["value"] for p in job_props}
+
+    default_props, def_types = await _get_property_schema()
+    props = _overlay_properties(default_props, def_types, raw)
 
     # Derive running status from tasks table
     if running_ids is not None:
@@ -137,18 +170,13 @@ async def list_jobs() -> list[dict]:
     for p in prop_rows:
         props_by_job.setdefault(p["job_id"], {})[p["key"]] = p["value"]
 
-    defs = await _get_property_defs()
-    def_defaults = {d["key"]: d["default_value"] for d in defs}
-    def_types = {d["key"]: d["type"] for d in defs}
-
-    default_props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
+    default_props, def_types = await _get_property_schema()
 
     jobs = []
     for row in job_rows:
         job = dict(row)
-        props = default_props.copy()
-        for key, value in props_by_job.get(job["id"], {}).items():
-            props[key] = _cast_property(value, def_types.get(key, "string"))
+        props = _overlay_properties(default_props, def_types,
+                                    props_by_job.get(job["id"], {}))
         props["running"] = job["id"] in running_ids
         props["pending_count"] = pending_counts.get(job["id"], 0)
         props["queued_count"] = queued_counts.get(job["id"], 0)
@@ -254,17 +282,13 @@ async def get_cascade_targets(completed_job_id: int) -> list[dict]:
     for p in prop_rows:
         props_by_job.setdefault(p["job_id"], {})[p["key"]] = p["value"]
 
-    defs = await _get_property_defs()
-    def_defaults = {d["key"]: d["default_value"] for d in defs}
-    def_types = {d["key"]: d["type"] for d in defs}
-    default_props = {k: _cast_property(v, def_types[k]) for k, v in def_defaults.items()}
+    default_props, def_types = await _get_property_schema()
 
     jobs = []
     for row in job_rows:
         job = dict(row)
-        props = default_props.copy()
-        for key, value in props_by_job.get(job["id"], {}).items():
-            props[key] = _cast_property(value, def_types.get(key, "string"))
+        props = _overlay_properties(default_props, def_types,
+                                    props_by_job.get(job["id"], {}))
         props["running"] = job["id"] in running_ids
         job["properties"] = props
         jobs.append(job)
