@@ -52,7 +52,7 @@ export default function App() {
     if (!project) return
     const poll = () => {
       getGovernorStatus()
-        .then(s => setGovernorBadge((s.pending_suggestions || 0) + (s.unread_observations || 0)))
+        .then(s => setGovernorBadge((s.unread_threads || 0) + (s.pending_proposals || 0)))
         .catch(() => {})
     }
     poll()

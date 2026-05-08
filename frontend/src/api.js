@@ -168,31 +168,42 @@ export const getFeed = (params = {}) => {
   return fetchJSON(`/api/feed/?${qs}`)
 }
 
-// ── Governor ──
+// ── Governor (threads) ──
 
-export const getGovernorFindings = (params = {}) => {
-  const qs = new URLSearchParams(params).toString()
-  return fetchJSON(`/api/governor/findings?${qs}`)
+export const listGovernorThreads = (status) => {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  return fetchJSON(`/api/governor/threads${qs}`)
 }
 
-export const approveGovernorFinding = (id) =>
-  fetchJSON(`/api/governor/findings/${id}/approve`, { method: 'POST' })
+export const getGovernorThread = (id) =>
+  fetchJSON(`/api/governor/threads/${id}`)
 
-export const declineGovernorFinding = (id) =>
-  fetchJSON(`/api/governor/findings/${id}/decline`, { method: 'POST' })
+export const createGovernorThread = ({ title, body }) =>
+  fetchJSON('/api/governor/threads', {
+    method: 'POST',
+    body: JSON.stringify({ title, body }),
+  })
 
-export const readGovernorFinding = (id) =>
-  fetchJSON(`/api/governor/findings/${id}/read`, { method: 'POST' })
+export const replyGovernorThread = (id, body) =>
+  fetchJSON(`/api/governor/threads/${id}/reply`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  })
 
-export const dismissGovernorFinding = (id) =>
-  fetchJSON(`/api/governor/findings/${id}/dismiss`, { method: 'POST' })
+export const closeGovernorThread = (id) =>
+  fetchJSON(`/api/governor/threads/${id}/close`, { method: 'POST' })
 
-export const triggerGovernor = () =>
-  fetchJSON('/api/governor/trigger', { method: 'POST' })
+export const reopenGovernorThread = (id) =>
+  fetchJSON(`/api/governor/threads/${id}/reopen`, { method: 'POST' })
 
-export const getGovernorRuns = () => fetchJSON('/api/governor/runs')
+export const markGovernorThreadRead = (id) =>
+  fetchJSON(`/api/governor/threads/${id}/mark-read`, { method: 'POST' })
 
 export const getGovernorStatus = () => fetchJSON('/api/governor/status')
+
+export const getGovernorDebug = () => fetchJSON('/api/governor/debug')
+
+export const getGovernorRuns = () => fetchJSON('/api/governor/runs')
 
 // ── Job Templates ──
 
