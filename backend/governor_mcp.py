@@ -101,12 +101,23 @@ def tool_get_job_health(args: dict) -> str:
     return _api_get(f"/api/dashboard?window={window}")
 
 
-def tool_get_prior_findings(args: dict) -> str:
-    limit = args.get("limit", 30)
-    return _api_get(f"/api/governor/findings?limit={limit}")
+def tool_list_open_threads(args: dict) -> str:
+    """Thin list of open threads — id, title, opener, last_activity_at."""
+    return _api_get("/api/governor/threads?status=open&limit=100")
 
 
-# Write tools — only available in execution mode
+def tool_get_thread(args: dict) -> str:
+    """Full message history of one thread."""
+    thread_id = args.get("thread_id")
+    if not thread_id:
+        return "Error: thread_id required"
+    return _api_get(f"/api/governor/threads/{thread_id}")
+
+
+# Write tools — only available in reply mode (MAISTRO_GOVERNOR_MODE=write).
+# The Governor's discretion (informed by REPLY_SYSTEM_PROMPT) decides when
+# to actually invoke them. Constructive only — no delete_job, no
+# disable_job. Closure of threads is human-only and has no MCP surface.
 
 def tool_update_job_properties(args: dict) -> str:
     job_id = args.get("job_id")
@@ -124,13 +135,6 @@ def tool_create_job(args: dict) -> str:
     if args.get("properties"):
         payload["properties"] = args["properties"]
     return _api_post("/api/jobs/", payload)
-
-
-def tool_delete_job(args: dict) -> str:
-    job_id = args.get("job_id")
-    if not job_id:
-        return "Error: job_id required"
-    return _api_delete(f"/api/jobs/{job_id}")
 
 
 def tool_update_queue_settings(args: dict) -> str:
@@ -176,13 +180,26 @@ READ_TOOLS = [
         },
     },
     {
-        "name": "get_prior_findings",
-        "description": "Get your own previous findings with their status (approved/declined/pending for suggestions, read/unread for observations).",
+        "name": "list_open_threads",
+        "description": (
+            "List open Governor threads (id, title, opener, last_activity_at). "
+            "Closed threads are intentionally invisible — the operator muted them."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_thread",
+        "description": (
+            "Get one thread's full message history with action_payloads. "
+            "Use this when a survey decides one specific thread is relevant "
+            "and needs more detail than the prepacked summary."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "Max findings to return (default 30)"},
+                "thread_id": {"type": "integer", "description": "Thread id from list_open_threads."},
             },
+            "required": ["thread_id"],
         },
     },
 ]
@@ -216,17 +233,6 @@ WRITE_TOOLS = [
         },
     },
     {
-        "name": "delete_job",
-        "description": "Delete a job and all its associated data (tasks, properties, sessions).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "job_id": {"type": "integer", "description": "ID of the job to delete"},
-            },
-            "required": ["job_id"],
-        },
-    },
-    {
         "name": "update_queue_settings",
         "description": "Update global queue settings (e.g., auto_dispatch).",
         "inputSchema": {
@@ -245,10 +251,10 @@ TOOL_HANDLERS = {
     "get_recent_tasks": tool_get_recent_tasks,
     "get_git_log": tool_get_git_log,
     "get_job_health": tool_get_job_health,
-    "get_prior_findings": tool_get_prior_findings,
+    "list_open_threads": tool_list_open_threads,
+    "get_thread": tool_get_thread,
     "update_job_properties": tool_update_job_properties,
     "create_job": tool_create_job,
-    "delete_job": tool_delete_job,
     "update_queue_settings": tool_update_queue_settings,
 }
 

@@ -352,32 +352,45 @@ CREATE TABLE IF NOT EXISTS governor_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trigger TEXT NOT NULL,
     task_count_at_trigger INTEGER,
-    findings_count INTEGER DEFAULT 0,
+    message_count INTEGER DEFAULT 0,
     started_at DATETIME DEFAULT (datetime('now')),
     completed_at DATETIME,
     error TEXT
 );
 
-CREATE TABLE IF NOT EXISTS governor_findings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    type TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    title TEXT NOT NULL,
-    body TEXT NOT NULL,
-    execution_result TEXT,
-    governor_run_id INTEGER REFERENCES governor_runs(id) ON DELETE CASCADE,
-    created_at DATETIME DEFAULT (datetime('now')),
-    updated_at DATETIME DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_governor_findings_run
-    ON governor_findings (governor_run_id);
-
-CREATE INDEX IF NOT EXISTS idx_governor_findings_status
-    ON governor_findings (status);
-
 CREATE INDEX IF NOT EXISTS idx_governor_runs_started
     ON governor_runs (started_at DESC);
+
+-- Governor threads replace the one-way findings feed. A thread is a
+-- meta-management discussion between the Governor and the operator.
+-- Closed threads are muted from the Governor's context entirely;
+-- reopening is human-only (no MCP write tool touches status).
+CREATE TABLE IF NOT EXISTS governor_threads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open','closed')),
+    opener TEXT NOT NULL CHECK(opener IN ('governor','human')),
+    unread_for_human INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    last_activity_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    closed_at DATETIME
+);
+
+CREATE INDEX IF NOT EXISTS idx_governor_threads_status
+    ON governor_threads (status, last_activity_at DESC);
+
+CREATE TABLE IF NOT EXISTS governor_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id INTEGER NOT NULL REFERENCES governor_threads(id) ON DELETE CASCADE,
+    author TEXT NOT NULL CHECK(author IN ('governor','human')),
+    body TEXT NOT NULL,
+    action_payload TEXT,
+    run_id INTEGER REFERENCES governor_runs(id),
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_governor_messages_thread
+    ON governor_messages (thread_id, id ASC);
 
 -- Per-job learnings: discrete, addressable, individually-toggleable rules
 -- that complement the prose `description`. Empty for every existing job

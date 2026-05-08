@@ -115,16 +115,21 @@ from backend.db_dashboard import (
 
 # ── Governor ───────────────────────────────────────────────
 from backend.db_governor import (
+    add_message,
     complete_governor_run,
-    create_governor_finding,
+    count_unexecuted_proposals,
     create_governor_run,
+    create_thread,
     get_governor_counter,
-    get_governor_finding,
-    get_governor_findings,
+    get_governor_debug,
     get_governor_runs,
     get_governor_status,
     get_recent_tasks_for_governor,
+    get_thread,
     increment_governor_counter,
+    list_open_threads_thin,
+    list_threads,
+    mark_thread_read,
     reset_governor_counter,
-    update_governor_finding,
+    set_thread_status,
 )

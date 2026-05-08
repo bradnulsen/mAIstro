@@ -1,8 +1,19 @@
-"""Governor routes — findings, manual trigger, run history, status."""
+"""Governor routes — threads, messages, runs, status, debug.
+
+The conversation surface is threads (open and closed) with append-only
+messages. Approvals collapse into prose: a Governor message may carry a
+structured ``action_payload``, but the only response affordance is the
+thread's normal compose box. The next reply invocation reads the
+conversation and decides whether to execute.
+
+Close and reopen are human-only. Neither reaches any MCP write tool;
+this route layer is the only path to thread-status changes.
+"""
 
 import logging
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from backend import database as db, governor
 from backend.state import require_project
@@ -12,70 +23,126 @@ log = logging.getLogger("maistro.governor")
 router = APIRouter(prefix="/api/governor", tags=["governor"])
 
 
-@router.get("/findings")
-async def list_findings(status: str | None = None, type: str | None = None, limit: int = 50):
+# ── Request models ─────────────────────────────────────────
+
+
+class CreateThreadRequest(BaseModel):
+    title: str
+    body: str
+
+
+class ReplyRequest(BaseModel):
+    body: str
+
+
+# ── Threads ────────────────────────────────────────────────
+
+
+@router.get("/threads")
+async def list_threads(status: str | None = None, limit: int = 100):
     require_project()
-    return await db.get_governor_findings(status=status, type_=type, limit=limit)
+    if status is not None and status not in ("open", "closed"):
+        raise HTTPException(400, "status must be 'open' or 'closed'")
+    return await db.list_threads(status=status, limit=limit)
 
 
-@router.post("/findings/{finding_id}/approve")
-async def approve_finding(finding_id: int):
+@router.get("/threads/{thread_id}")
+async def get_thread(thread_id: int):
     require_project()
-    finding = await db.get_governor_finding(finding_id)
-    if not finding:
-        raise HTTPException(404, "Finding not found")
-    if finding["type"] != "suggestion":
-        raise HTTPException(400, "Only suggestions can be approved")
-    if finding["status"] != "pending":
-        raise HTTPException(400, f"Finding is {finding['status']}, not pending")
-
-    await db.update_governor_finding(finding_id, status="approved")
-    governor.spawn(governor.execute_suggestion(finding_id))
-    return {"status": "approved"}
+    thread = await db.get_thread(thread_id)
+    if not thread:
+        raise HTTPException(404, "Thread not found")
+    return thread
 
 
-@router.post("/findings/{finding_id}/decline")
-async def decline_finding(finding_id: int):
+@router.post("/threads")
+async def create_thread(req: CreateThreadRequest):
+    """Human opens a thread. Auto-queues a reply invocation on the new
+    thread so the Governor responds without waiting for the next survey."""
     require_project()
-    finding = await db.get_governor_finding(finding_id)
-    if not finding:
-        raise HTTPException(404, "Finding not found")
-    if finding["type"] != "suggestion":
-        raise HTTPException(400, "Only suggestions can be declined")
-    if finding["status"] != "pending":
-        raise HTTPException(400, f"Finding is {finding['status']}, not pending")
+    title = (req.title or "").strip()
+    body = (req.body or "").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    if not body:
+        raise HTTPException(400, "body is required")
 
-    await db.update_governor_finding(finding_id, status="declined")
-    return {"status": "declined"}
+    thread_id = await db.create_thread(title, opener="human")
+    await db.add_message(thread_id, author="human", body=body)
+    governor.enqueue_reply(thread_id)
+    return {"thread_id": thread_id}
 
 
-@router.post("/findings/{finding_id}/read")
-async def mark_finding_read(finding_id: int):
+@router.post("/threads/{thread_id}/reply")
+async def reply_to_thread(thread_id: int, req: ReplyRequest):
+    """Human posts in an open thread. Spawns or coalesces into a reply
+    invocation on this thread."""
     require_project()
-    finding = await db.get_governor_finding(finding_id)
-    if not finding:
-        raise HTTPException(404, "Finding not found")
+    body = (req.body or "").strip()
+    if not body:
+        raise HTTPException(400, "body is required")
+    thread = await db.get_thread(thread_id)
+    if not thread:
+        raise HTTPException(404, "Thread not found")
+    if thread["status"] != "open":
+        raise HTTPException(400, "Thread is closed; reopen it first")
 
-    await db.update_governor_finding(finding_id, status="read")
-    return {"status": "read"}
+    await db.add_message(thread_id, author="human", body=body)
+    governor.enqueue_reply(thread_id)
+    return {"status": "ok"}
 
 
-@router.post("/findings/{finding_id}/dismiss")
-async def dismiss_finding(finding_id: int):
+@router.post("/threads/{thread_id}/close")
+async def close_thread(thread_id: int):
+    """Human-only. Mutes the thread from every future Governor invocation."""
     require_project()
-    finding = await db.get_governor_finding(finding_id)
-    if not finding:
-        raise HTTPException(404, "Finding not found")
-
-    await db.update_governor_finding(finding_id, status="dismissed")
-    return {"status": "dismissed"}
+    ok = await db.set_thread_status(thread_id, "closed")
+    if not ok:
+        raise HTTPException(404, "Thread not found, or already closed")
+    return {"status": "closed"}
 
 
-@router.post("/trigger")
-async def trigger_governor():
+@router.post("/threads/{thread_id}/reopen")
+async def reopen_thread(thread_id: int):
+    """Human-only. Restores Governor visibility on the thread."""
     require_project()
-    governor.spawn(governor.run_governor("manual"))
-    return {"status": "triggered"}
+    ok = await db.set_thread_status(thread_id, "open")
+    if not ok:
+        raise HTTPException(404, "Thread not found, or already open")
+    return {"status": "open"}
+
+
+@router.post("/threads/{thread_id}/mark-read")
+async def mark_read(thread_id: int):
+    require_project()
+    await db.mark_thread_read(thread_id)
+    return {"status": "ok"}
+
+
+# ── Status / debug / runs ──────────────────────────────────
+
+
+@router.get("/status")
+async def governor_status():
+    """Conversation-surface state: unread threads + pending proposals."""
+    require_project()
+    return await db.get_governor_status()
+
+
+@router.get("/debug")
+async def governor_debug():
+    """Operator-debug state: counter, last_run, queue depth, running flag.
+
+    Surfaces internals that are intentionally absent from /status — this
+    backs the collapsed-by-default debug drawer in the Governor view.
+    """
+    require_project()
+    db_state = await db.get_governor_debug()
+    return {
+        **db_state,
+        "queue_depth": governor.queue_depth(),
+        "running_lock": governor.is_running(),
+    }
 
 
 @router.get("/runs")
@@ -84,14 +151,8 @@ async def list_runs(limit: int = 20):
     return await db.get_governor_runs(limit=limit)
 
 
-@router.get("/status")
-async def governor_status():
-    require_project()
-    return await db.get_governor_status()
-
-
 @router.get("/recent-tasks")
 async def recent_tasks_for_governor(limit: int = 50):
-    """Endpoint used by Governor MCP server to fetch recent tasks."""
+    """Used by the Governor MCP server."""
     require_project()
     return await db.get_recent_tasks_for_governor(limit=limit)
