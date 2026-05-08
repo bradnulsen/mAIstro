@@ -203,30 +203,47 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
                 {subtitle && <span className={`command-bar-count ${state}`}>{subtitle}</span>}
               </button>
               {popout === j.id && (
-                <div className="command-bar-popout">
-                  <div className="command-bar-popout-header">{j.name}</div>
-                  <textarea
-                    className="command-bar-popout-context"
-                    value={context}
-                    onChange={e => setContext(e.target.value)}
-                    placeholder="Context (optional)"
-                    rows={2}
-                    autoFocus
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey && !dispatching) {
-                        e.preventDefault()
-                        handleDispatch(j.id)
-                      }
-                      if (e.key === 'Escape') { setPopout(null); setContext('') }
-                    }}
-                  />
-                  <button
-                    className="primary small"
-                    onClick={() => handleDispatch(j.id)}
-                    disabled={dispatching}
-                  >
-                    {dispatching ? 'Dispatching...' : '▶ Dispatch'}
-                  </button>
+                <div
+                  className="dispatch-modal-backdrop"
+                  onMouseDown={e => { if (e.target === e.currentTarget) { setPopout(null); setContext('') } }}
+                >
+                  <div className="dispatch-modal" ref={popoutRef}>
+                    <div className="dispatch-modal-header">
+                      <span className="dispatch-modal-title">Dispatch — {j.name}</span>
+                      <button
+                        className="dispatch-modal-close"
+                        onClick={() => { setPopout(null); setContext('') }}
+                        title="Close (Esc)"
+                      >✕</button>
+                    </div>
+                    <textarea
+                      className="dispatch-modal-context"
+                      value={context}
+                      onChange={e => setContext(e.target.value)}
+                      placeholder="Context (optional) — what should this job work on?"
+                      autoFocus
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !dispatching) {
+                          e.preventDefault()
+                          handleDispatch(j.id)
+                        }
+                        if (e.key === 'Escape') { setPopout(null); setContext('') }
+                      }}
+                    />
+                    <div className="dispatch-modal-footer">
+                      <span className="dispatch-modal-hint">Ctrl+Enter to dispatch · Esc to close</span>
+                      <div className="dispatch-modal-actions">
+                        <button onClick={() => { setPopout(null); setContext('') }}>Cancel</button>
+                        <button
+                          className="primary"
+                          onClick={() => handleDispatch(j.id)}
+                          disabled={dispatching}
+                        >
+                          {dispatching ? 'Dispatching…' : '▶ Dispatch'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
