@@ -6,3 +6,7 @@ __pycache__/
 *.pyc
 
 .claude/
+
+# PyInstaller bundle output (see maistro.spec)
+build/
+dist/

@@ -23,6 +23,8 @@ log = logging.getLogger("maistro")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend import appstate, database as db, scheduler, worker
 from backend import state
@@ -76,3 +78,58 @@ app.include_router(config_router)
 @app.get("/health")
 async def health():
     return {"status": "ok", "project": state.PROJECT_DIR}
+
+
+# ── Static frontend (production / installed mode) ──────────
+#
+# In dev, Vite serves the SPA on :5173 with /api proxied here. In an
+# installed (PyInstaller-bundled) build the frontend is shipped as a
+# pre-built ``frontend/dist/`` next to the backend; mount it here so
+# the user opens a single ``localhost:8420`` URL. Set
+# ``MAISTRO_FRONTEND_DIST`` to override the resolution (e.g. for a
+# bundled build that places dist elsewhere). When the directory is
+# absent (the pure dev path), this block is a no-op.
+def _resolve_frontend_dist() -> str | None:
+    import sys
+
+    override = os.environ.get("MAISTRO_FRONTEND_DIST")
+    if override:
+        return override if os.path.isdir(override) else None
+
+    # PyInstaller bundles: data files live under _MEIPASS.
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        candidate = os.path.join(bundle_root, "frontend", "dist")
+        if os.path.isdir(candidate):
+            return candidate
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate = os.path.join(repo_root, "frontend", "dist")
+    return candidate if os.path.isdir(candidate) else None
+
+
+_dist_dir = _resolve_frontend_dist()
+if _dist_dir:
+    log.info("Serving frontend bundle from %s", _dist_dir)
+    _index_path = os.path.join(_dist_dir, "index.html")
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(_dist_dir, "assets")),
+        name="assets",
+    )
+
+    @app.get("/")
+    async def _index():
+        return FileResponse(_index_path)
+
+    @app.get("/{full_path:path}")
+    async def _spa_fallback(full_path: str):
+        # API routes are registered above; FastAPI matches them first.
+        # This catch-all serves the SPA for any other path so deep
+        # links (eg /governor) load index.html and React routes there.
+        candidate = os.path.join(_dist_dir, full_path)
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(_index_path)
+else:
+    log.info("frontend/dist not found — running in dev mode (Vite serves the UI)")

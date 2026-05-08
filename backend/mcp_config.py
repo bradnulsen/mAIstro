@@ -33,7 +33,15 @@ def build_mcp_config(
     worktree path. The MCP server uses it for git/file write operations
     while keeping project_dir as the read source for project-wide context.
     """
-    server_script = os.path.join(os.path.dirname(__file__), "mcp_server.py")
+    # In a PyInstaller bundle, sys.executable is the bundled exe — invoking
+    # it with a script path would just re-run uvicorn. The launcher's
+    # --mcp-server flag routes the bundled exe into mcp_server.main()
+    # instead. In dev, we still pass the script path directly.
+    if getattr(sys, "frozen", False):
+        cmd_args = [sys.executable, "--mcp-server"]
+    else:
+        server_script = os.path.join(os.path.dirname(__file__), "mcp_server.py")
+        cmd_args = [sys.executable, server_script]
 
     job_mcp_names = set(job["properties"].get("mcp_servers") or [])
     props = job["properties"]
@@ -46,8 +54,8 @@ def build_mcp_config(
     servers = {
         "maistro": {
             "type": "stdio",
-            "command": sys.executable,
-            "args": [server_script],
+            "command": cmd_args[0],
+            "args": cmd_args[1:],
             "env": {
                 "MAISTRO_JOB_ID": str(job["id"]),
                 "MAISTRO_JOB_SLUG": job["slug"],

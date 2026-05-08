@@ -577,13 +577,18 @@ def _format_git_log(git_log: str) -> str:
 
 def _write_mcp_config(project_dir: str, mode: str = "read") -> str:
     """Write a Governor-specific MCP config to a temp file."""
-    server_script = os.path.join(os.path.dirname(__file__), "governor_mcp.py")
+    # See mcp_config.py for the bundled-mode rationale.
+    if getattr(sys, "frozen", False):
+        cmd, args = sys.executable, ["--governor-mcp"]
+    else:
+        server_script = os.path.join(os.path.dirname(__file__), "governor_mcp.py")
+        cmd, args = sys.executable, [server_script]
     config = {
         "mcpServers": {
             "governor": {
                 "type": "stdio",
-                "command": sys.executable,
-                "args": [server_script],
+                "command": cmd,
+                "args": args,
                 "env": {
                     "MAISTRO_PROJECT_DIR": project_dir,
                     "MAISTRO_BACKEND_PORT": "8420",
