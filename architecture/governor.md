@@ -1,159 +1,216 @@
 # Governor
 
-The Governor is an autonomous meta-analysis agent that periodically reviews recent task activity and emits structured findings (suggestions and observations) to the operator. It is entirely meta-scoped — it observes how jobs and tasks are performing within the platform, identifies friction and improvement opportunities, and surfaces findings on a dedicated UI. It does not touch project code, does not participate in task dispatch, and does not converse with the user.
+The Governor is an autonomous meta-management agent. It reviews how jobs and tasks are performing within the platform and corresponds with the operator through a thread-based message board. It does not touch project code, does not participate in task dispatch, and does not converse outside its threads.
 
-The Governor replaces the standalone chat interface that earlier versions of the platform exposed. The chat surface is gone; the meta-aware agent has been redirected from reactive Q&A to proactive analysis.
-
-> **Direction**: DESIGN has reset the Governor to a thread-based, two-way correspondence model — surveys (autonomous) and replies (operator-action-triggered) as the two invocation types, persistent threads with append-only messages as the unit of exchange, prose-only assent (no Approve/Decline buttons), per-thread reply coalescing, constructive-only write surface (no `delete_job`, no `disable_job`, no `close_thread`), closed threads invisible to the Governor, and operator-only thread closure/reopening. The full target shape is specified in [proposals/governor-threads.md](proposals/governor-threads.md). This document describes the current as-built findings architecture; it will be rewritten when the threads model ships. Current closed-loop-learning-then-reach priority order means this is now next-up after Job Learnings.
+The Governor replaced the standalone chat interface earlier versions exposed; the current threads model in turn replaced the one-way findings feed. **Only the human can close or reopen threads** — there is no MCP tool that touches thread status, so the mute/unmute boundary is structurally enforced, not merely prompt-instructed.
 
 **Modules**:
-- `backend/governor.py` — orchestration: trigger handling, prompt assembly, CLI invocation, finding parsing, suggestion execution
-- `backend/governor_mcp.py` — stdio MCP server providing read tools (and write tools in execution mode)
-- `backend/governor_routes.py` — REST endpoints for findings, runs, manual trigger, status
-- `backend/db_governor.py` — persistence (counters, runs, findings)
+- `backend/governor.py` — orchestration: invocation queue + dispatcher, survey and reply prompt assembly, CLI invocation, output parsing, persistence
+- `backend/governor_mcp.py` — stdio MCP server providing read tools (and write tools in reply mode)
+- `backend/governor_routes.py` — REST endpoints for threads, messages, runs, status, debug
+- `backend/db_governor.py` — persistence (counters, runs, threads, messages)
 
-## Trigger Sources
+## Conceptual Model
 
-Two trigger sources, both routed through `governor.run_governor(trigger, task_count)`:
+A **thread** is a persistent meta-management discussion with a status (`open` / `closed`), an opener (`governor` or `human`), and an ordered append-only list of **messages**. Messages are written by either side. A Governor message may carry a structured `action_payload` (a typed proposal — `update_job_properties`, `create_job`, or `update_queue_settings`); the only response affordance is the thread's compose box. The next reply invocation reads the conversation and decides whether the human's intent is clearly affirmative; if so, it applies the change via the write tool and posts a result message describing what it did.
 
-- **Auto** — the worker increments a `governor_task_counter` (config key) on every executed terminal transition (`completed`, `exhausted`, `failed`, `timed_out`) via `_check_governor_trigger`. `cancelled` is skipped because it reflects user intent rather than system behavior; `rejected` never reaches the worker. When the counter reaches 10, the worker resets it to 0 and spawns a Governor run with `trigger="auto"`. Counting failures alongside successes is intentional — a job consistently exhausting turns or failing is exactly what the Governor should review, and counting only successes would let broken jobs evade oversight indefinitely. The cadence is fixed; the user does not configure it.
-- **Manual** — `POST /api/governor/trigger` calls `run_governor("manual")` directly. Manual runs do not affect the counter.
+Closed threads are **invisible** to the Governor. They are excluded from every invocation's context packet — not even titles. Reopening restores visibility.
 
-A third trigger source — `trigger="execution"` — is used by `execute_suggestion` when the operator approves a suggestion. Execution runs are not user-initiated analyses; they are focused, write-enabled passes that apply a single approved change.
+## Invocation Types
 
-## Run Lock
+Every Governor activity is one of two invocation types. Each is a fresh, isolated CLI invocation with its own context packet and system prompt. Neither resumes a session.
 
-A module-level `asyncio.Lock` (`_run_lock`) ensures at most one Governor run is in flight at a time. Auto triggers fire-and-forget through `governor.spawn` (which holds a strong reference to prevent GC of the task before its first await); if a run is already in progress, the new invocation is logged and skipped. The lock is held across CLI invocation, finding parsing, and persistence.
+### 1. Survey (auto trigger)
 
-Manual triggers are also spawned in the background — the API endpoint returns immediately while the run executes asynchronously.
+The worker increments a `governor_task_counter` config key on every executed terminal transition (`completed`, `exhausted`, `failed`, `timed_out`). When it reaches 10, the worker resets it and calls `run_governor("auto", task_count=N)`, which delegates to `_run_survey`. `cancelled` is skipped (user intent, not system behavior); `rejected` never reaches the worker.
 
-## Run Persistence
+The survey reads project state and the thin list of open threads (id, title, opener, last_activity_at, last 1–2 message bodies). It outputs a JSON array of operations:
 
-Every run produces a `governor_runs` row at start and updates it at completion. Rows record: trigger source, task count at trigger (for auto), started_at, completed_at, findings_count, optional error message.
+```json
+{"op": "post", "thread_id": <int>, "body": "...", "action_payload": {...} | null}
+{"op": "open_thread", "title": "...", "body": "...", "action_payload": {...} | null}
+```
 
-A run is considered "active" when `completed_at IS NULL`. The status endpoint surfaces this for the UI's "running" indicator.
+The parser applies operations in order. Posts to non-open threads are silently dropped. A silent survey (`[]`) is acceptable. MCP mode = `read`.
 
-## Context Assembly
+### 2. Reply (human acted in a thread)
 
-`_build_context` gathers the data the Governor reasons over:
+A reply runs whenever a human creates a thread or posts in an existing one. The route layer calls `governor.enqueue_reply(thread_id)`, which is idempotent — if a reply for that thread is already queued or in flight, it's a no-op. If a new message arrives while a reply is in flight, calling `enqueue_reply` again re-queues so a follow-up invocation addresses the new message after the in-flight one completes.
 
-- **Jobs** — full configuration via `db.list_jobs()` (name, description, model, max_turns, timeout, subscriptions, all properties)
-- **Recent terminal tasks** — `db.get_recent_tasks_for_governor(limit=50)` reads through `tasks_resolved` so coalesced subordinates inherit their root's execution metrics. Each row includes `is_subordinate` and `effective_root_id` so the Governor can tell folded contexts from independent runs.
-- **Job health** — `db.dashboard_health(7)` for per-job aggregates over the last 7 days
-- **Prior findings** — `db.get_governor_findings(limit=30)` with statuses, providing continuity across runs without persistent sessions
-- **Git log** — `git.log_oneline` for the last 30 commits, attributing changes to jobs by author
+The reply reads the focal thread (full message history, including any prior `action_payload`s) plus a snapshot of project state. It outputs a single JSON object:
 
-`_format_context` serializes this into the Governor's user prompt as a structured Markdown document. Critically, it includes an explicit note about coalescing semantics — that subordinates' metrics are inherited from their root and should not be summed — because the Governor's analysis would otherwise misclassify coalesce groups as "many cheap runs" instead of "one consolidated run."
+```json
+{"body": "...", "action_payload": {...} | null}
+```
 
-There is no persistent session. Each run is a fresh context window. Continuity comes from including prior findings in the context, not from resuming a CLI session.
+If the model produces no parseable response, a fallback Governor message (`"[The Governor failed to produce a parseable response. The run is logged for debugging — try posting again or check the debug drawer.]"`) is written into the thread and the run is marked errored. **Failures are loud** — the human always sees something happen in the thread.
 
-## CLI Invocation
+MCP mode = `write` (always). The Governor's discretion, informed by the reply system prompt and the conversation, decides whether write tools are actually called.
 
-`_invoke_cli` calls the standard CLI bridge (`cli.invoke`) with:
+## Concurrency
 
-- A Governor-specific system prompt (`GOVERNOR_SYSTEM_PROMPT` for analysis, `EXECUTION_SYSTEM_PROMPT` for suggestion execution)
-- The assembled user prompt
-- A temporary MCP config file pointing at `governor_mcp.py` with mode=read or mode=write
-- Model `sonnet`, max_turns 20
+A module-level `asyncio.Lock` (`_run_lock`) ensures at most one invocation in flight system-wide, regardless of type. Surveys and replies serialize against each other so the Governor reasons across threads against a coherent snapshot.
 
-Governor runs do not go through the worker, do not create a `tasks` row, and do not appear in the queue. The Governor is operationally distinct from job dispatch — it reasons about jobs and tasks, but it is not one of them. This is enforced structurally: there is no "Governor job" in `jobs`, and `governor.run_governor` invokes the CLI directly rather than through `worker.process_one`.
+The reply queue is a `list[int]` of thread ids managed by `_dispatcher_loop`. `enqueue_reply` appends if the thread isn't already in the queue and ensures the dispatcher coroutine is running. The dispatcher pulls one thread id at a time, runs `_run_reply`, then pops it from the queue. Auto surveys go through `run_governor` directly under the same lock; if locked, they're skipped (the next counter cycle picks up).
 
-The CLI's response text is collected from `text` and `assistant_complete` events. `error` events raise. The temporary MCP config is unlinked in the `finally` block.
+The queue is an internal implementation detail — it is **not** exposed on the conversation surface. `/api/governor/status` returns only `{unread_threads, pending_proposals}`. Queue depth and running flag live on `/api/governor/debug` and back the collapsed-by-default debug drawer.
 
-## Finding Parsing
+## Schema
 
-The Governor's contract is to output a JSON array of `{type, title, body}` objects as its final message. `_parse_findings` is robust to common output drift:
+```sql
+CREATE TABLE governor_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger TEXT NOT NULL,                  -- 'auto' | 'reply'
+    task_count_at_trigger INTEGER,
+    message_count INTEGER DEFAULT 0,
+    started_at DATETIME DEFAULT (datetime('now')),
+    completed_at DATETIME,
+    error TEXT
+);
 
-1. Try direct `json.loads` on the trimmed text
-2. Try extracting from a fenced code block
-3. Try parsing whatever JSON-like substring sits between the first `[` and last `]`
-4. As a last resort, wrap the raw output as a single observation titled "Governor analysis (unstructured)"
+CREATE TABLE governor_threads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open','closed')),
+    opener TEXT NOT NULL CHECK(opener IN ('governor','human')),
+    unread_for_human INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    last_activity_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    closed_at DATETIME
+);
 
-`_validate_findings` filters: type must be `suggestion` or `observation`, title and body must be non-empty, title is truncated to 200 chars. Invalid items are silently dropped. Each surviving finding is persisted via `db.create_governor_finding`, which also sets the initial status (`pending` for suggestions, `unread` for observations).
+CREATE TABLE governor_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id INTEGER NOT NULL REFERENCES governor_threads(id) ON DELETE CASCADE,
+    author TEXT NOT NULL CHECK(author IN ('governor','human')),
+    body TEXT NOT NULL,
+    action_payload TEXT,                    -- JSON, nullable
+    run_id INTEGER REFERENCES governor_runs(id),
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+```
 
-## Suggestion Execution
+There is no `action_status` column. Whether a proposal has been executed is determinable from the thread narrative: a later Governor message describes the execution. The status badge (`pending_proposals`) walks open threads and counts those whose newest message is a Governor message with a non-null `action_payload` — when the Governor posts an "I applied this" follow-up, the count drops naturally.
 
-When the operator approves a pending suggestion:
+## Routes
 
-1. `POST /api/governor/findings/{id}/approve` updates the finding's status to `approved` and spawns `governor.execute_suggestion(id)`
-2. `execute_suggestion` writes a new `governor_runs` row with `trigger="execution"`, assembles a focused user prompt containing the approved suggestion's title and body, writes a write-mode MCP config, and invokes the CLI with `EXECUTION_SYSTEM_PROMPT`
-3. The Governor reads the current state, applies the change via write tools, and emits a brief JSON summary
-4. The finding is updated to `executed` (with the response text as `execution_result`) or `failed` (with the error message)
+`backend/governor_routes.py` (`prefix="/api/governor"`):
 
-This is not a general-purpose execution channel. The Governor executes the specific change it proposed. The write tools are scoped to meta-operations (job config, queue settings) — the Governor cannot modify project files, commit code, or dispatch tasks.
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/threads` | List threads (`?status=open` or `closed`), with last-message preview |
+| `GET` | `/threads/{id}` | Get a thread + its full message list |
+| `POST` | `/threads` | Human opens a thread (`{title, body}`); auto-queues a reply invocation |
+| `POST` | `/threads/{id}/reply` | Human posts in an open thread (`{body}`); spawns or coalesces a reply |
+| `POST` | `/threads/{id}/close` | Human-only mute |
+| `POST` | `/threads/{id}/reopen` | Human-only restore |
+| `POST` | `/threads/{id}/mark-read` | Clear `unread_for_human` |
+| `GET` | `/status` | `{unread_threads, pending_proposals}` |
+| `GET` | `/debug` | Operator-debug state: counter, last_run, queue_depth, running flag |
+| `GET` | `/runs` | Recent runs with type / message_count / error |
+| `GET` | `/recent-tasks` | Used by the Governor MCP server's `get_recent_tasks` tool |
 
-Decline is purely a status update — `POST /api/governor/findings/{id}/decline` sets status to `declined` with no Governor invocation.
+The close and reopen routes are the **only** paths to thread-status changes. No MCP write tool touches status, structurally enforcing the human-only mute boundary.
 
-Read/dismiss for observations work analogously: status transitions, no agent run.
+## MCP Server (`governor_mcp.py`)
 
-## MCP Server: `governor_mcp.py`
-
-A dedicated stdio MCP server presents Governor-specific tools, gated by mode:
+A dedicated stdio MCP server, gated by mode (`MAISTRO_GOVERNOR_MODE` env var):
 
 ### Read Tools (always available)
 
 | Tool | Backed by |
-|------|-----------|
+|---|---|
 | `list_jobs` | `GET /api/jobs/` — full configuration |
 | `get_recent_tasks` | `GET /api/governor/recent-tasks?limit=N` — terminal tasks via `tasks_resolved` |
 | `get_git_log` | `git log --oneline -N` (subprocess, project-dir scoped) |
 | `get_job_health` | `GET /api/dashboard?window=N` — per-job aggregates |
-| `get_prior_findings` | `GET /api/governor/findings?limit=N` |
+| `list_open_threads` | `GET /api/governor/threads?status=open` — thin list, no closed threads |
+| `get_thread` | `GET /api/governor/threads/{id}` — full message history of one thread |
 
-### Write Tools (execution mode only)
+There is **no** tool to read closed threads. The MCP surface gives the Governor no way to bypass the operator's mute action.
+
+### Write Tools (reply mode only)
 
 | Tool | Backed by |
-|------|-----------|
-| `update_job_properties` | `PATCH /api/jobs/{id}` — any property |
+|---|---|
+| `update_job_properties` | `PATCH /api/jobs/{id}` |
 | `create_job` | `POST /api/jobs/` |
-| `delete_job` | `DELETE /api/jobs/{id}` |
 | `update_queue_settings` | `POST /api/queue/settings` |
 
-Mode is selected by the `MAISTRO_GOVERNOR_MODE` env var (`read` or `write`) which `_write_mcp_config` sets when assembling the MCP config. Inside the server, `tools/list` returns the appropriate set, and `tools/call` rejects write-tool invocations in read mode with a `Method not found` error. This is defense-in-depth — even if the Governor model attempts to call a write tool during analysis, the server refuses.
+The write surface is **constructive only**. There is no `delete_job`, no `disable_job`, and no thread-status tool. Removing or pausing jobs is operator-only; closure of threads is operator-only.
 
-Tool calls reach the backend over HTTP (`localhost:8420`) rather than through direct database access. The MCP server is a separate process with its own environment; routing through HTTP keeps the trust boundary clean (every action passes through the same routes the UI uses).
+Mode is selected by `_write_mcp_config(project_dir, mode)` — survey runs use `read`, reply runs use `write`. The server's `tools/list` returns the appropriate set, and `tools/call` rejects write-tool invocations in read mode.
 
-## Routes
+Tool calls reach the backend over HTTP (`localhost:8420`) rather than direct DB access — the MCP server is a separate process and routing through HTTP keeps the trust boundary clean.
 
-`backend/governor_routes.py` exposes (`prefix="/api/governor"`):
+## Context Assembly
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/findings` | List findings, optionally filtered by type/status |
-| `POST` | `/findings/{id}/approve` | Mark approved and spawn execution run |
-| `POST` | `/findings/{id}/decline` | Mark declined (no run) |
-| `POST` | `/findings/{id}/read` | Mark observation as read |
-| `POST` | `/findings/{id}/dismiss` | Mark observation/suggestion as dismissed |
-| `POST` | `/trigger` | Spawn a manual run |
-| `GET` | `/runs` | Recent runs with status |
-| `GET` | `/status` | Aggregated state for the rail badge (counter, running flag, last run, pending/unread counts) |
-| `GET` | `/recent-tasks` | The same data the MCP `get_recent_tasks` tool returns (used by the MCP server itself) |
+### Survey context (`_build_survey_context`)
 
-## Frontend
+- Jobs (full configuration via `db.list_jobs()`)
+- Recent terminal tasks via `db.get_recent_tasks_for_governor(50)` (reads through `tasks_resolved` so coalesced subordinates inherit their root's metrics)
+- Job health via `db.dashboard_health(7)`
+- Thin list of open threads via `db.list_open_threads_thin(50)` (id, title, opener, last_activity_at, last 1–2 message bodies)
+- Git log (last 30 commits)
 
-The `Governor` rail item opens `Governor.jsx`, which renders:
+### Reply context (`_build_reply_context`)
 
-- A findings feed ordered by recency (suggestions and observations interleaved)
-- Per-suggestion approve/decline buttons; per-observation read/dismiss buttons
-- A manual trigger button
-- A run history sidebar (last N runs, with their findings count and trigger source)
-- A status badge counting pending suggestions and unread observations, surfaced on the rail
+- The focal thread: full message history, including any prior `action_payload`s
+- Project state: jobs, recent tasks, health, git log (same as survey)
+- Other open threads (titles only, for awareness — replies stay focused on the active thread)
+- **No** closed-thread visibility
 
-The view does not provide a text input. The operator does not converse with the Governor.
+Both context formatters include an explicit note about coalescing semantics — that subordinates' metrics are inherited from their root and should not be summed — to prevent the Governor from misclassifying coalesce groups as "many cheap runs."
+
+There is no persistent session. Each invocation is a fresh context window. Continuity comes from including thread state in the context, not from CLI session resume.
+
+## System Prompts
+
+Two distinct system prompts in `backend/governor.py`:
+
+- **`SURVEY_SYSTEM_PROMPT`** — directs the Governor to either post in existing open threads or open new ones. Prefer updating an existing thread when in scope. Defines the operations array output contract.
+- **`REPLY_SYSTEM_PROMPT`** — directs the Governor to read the focal thread, treat the latest human message as operative, **verify before writing** (read the current state of the target entity; if the world has moved on since a proposal, do not blindly apply — post a clarifying message instead), and output a single message object. When the Governor executes a previous proposal, the response message describes what was done and `action_payload` is null.
+
+## Output Parsing
+
+Both invocation types use robust JSON extraction (`_extract_json_array` for surveys, `_extract_json_object` for replies):
+
+1. Direct `json.loads` on the trimmed text
+2. Fenced code-block extraction
+3. Bracket-matching fallback (first `[`/`{` to last `]`/`}`)
+
+Survey output: invalid operations are silently dropped. The run completes with `message_count` reflecting how many ops actually applied.
+
+Reply output: parse failure produces the explicit fallback message in the thread. The run is recorded with an error so the debug drawer surfaces it.
+
+## Frontend (deferred)
+
+The frontend rewrite for `Governor.jsx` is part of the in-flight P1 work and lands in a follow-up commit. Target shape:
+
+- **Two-pane layout** — left pane: thread list (open at top by `last_activity_at`, "Closed (N)" disclosure below); right pane: selected thread message list with a compose box at the bottom.
+- **Action payload cards** — a Governor message with an `action_payload` renders the payload as a structured "proposed change" card under the message body. **No Approve / Decline buttons.** The human's response is the compose box.
+- **"+ New Thread"** at the top of the left pane — inline composer, Submit creates the thread and auto-queues a reply.
+- **Close button** in the thread header (when open); **Reopen button** replacing the compose box (when closed).
+- **Debug drawer** — collapsed-by-default pane with the counter, last run, queue depth, running flag, and recent runs list.
+- **Rail badge** counts open threads with unread Governor messages or unexecuted proposals.
+
+Until the frontend ships, the Governor view in the UI will not function — the new backend uses different routes and shapes than the existing component expects.
 
 ## Constraints
 
-- **Meta-scoped**: write tools are restricted to job config and queue settings. Cannot modify project files, dispatch tasks, or commit code.
-- **No persistent session**: each run is fresh context. Continuity is via prior-findings injection, not session resume.
-- **Lock-serialized**: at most one run in flight. Auto triggers that arrive during a running execution are dropped (the counter does not back-pressure — the next 10 executed terminal transitions trigger the next run).
+- **Meta-scoped**: write tools restricted to job config and queue settings. Cannot modify project files, dispatch tasks, or commit code. No `delete_job`, no `disable_job`.
+- **Human-only thread status**: close and reopen are reachable only through the route layer, not through any MCP tool.
+- **Closed = invisible**: closed threads are excluded from every invocation's context packet, not just deprioritized.
+- **No persistent session**: each invocation is fresh context; continuity is via in-context thread state.
+- **Lock-serialized**: at most one invocation in flight system-wide. Surveys that arrive during a running invocation are skipped.
 - **Independent of the worker**: Governor runs do not block, queue behind, or interact with task dispatch. The two systems share the database but not the execution path.
-- **Fixed cadence**: 10 executed terminal tasks (`completed`, `exhausted`, `failed`, `timed_out`; `cancelled` and `rejected` excluded). Not user-configurable.
-- **Coalescing-aware**: recent-tasks reads through `tasks_resolved`; the system prompt explicitly warns against summing metrics across coalesced subordinates.
+- **Fixed cadence**: 10 executed terminal tasks. Not user-configurable.
+- **Coalescing-aware**: recent-tasks reads through `tasks_resolved`; both system prompts explicitly warn against summing metrics across coalesced subordinates.
 
 ## Relationship to Other Systems
 
-- [Storage](storage.md) — `governor_runs` and `governor_findings` tables; the `governor_task_counter` config key
-- [Dispatch Engine](dispatch-engine.md) — the worker increments the auto-trigger counter on every executed terminal transition (success and non-cancellation failures alike)
-- [CLI Bridge](cli-bridge.md) — Governor runs invoke the same CLI bridge as job dispatches, with a separate MCP config
+- [Storage](storage.md) — `governor_runs`, `governor_threads`, `governor_messages` tables; the `governor_task_counter` config key
+- [Dispatch Engine](dispatch-engine.md) — the worker increments the survey counter on every executed terminal transition
+- [CLI Bridge](cli-bridge.md) — Governor invocations use the same CLI bridge as job dispatches, with a separate MCP config
 - [Tool Mediation](tool-mediation.md) — the Governor MCP server is structurally similar to the internal MCP server but scoped to meta-operations
-- [Frontend](frontend.md) — the Governor view replaces the prior Chat surface
+- [Frontend](frontend.md) — the Governor view will be a thread-based message board (rewrite pending)
