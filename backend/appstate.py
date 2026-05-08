@@ -1,15 +1,42 @@
 """App-level state — lives in the application directory, not the project.
 
 Stores recent projects and app-wide preferences that persist across sessions.
+
+The app-DB path resolves in this order:
+1. ``MAISTRO_APPDATA`` env var if set — points at a directory containing
+   (or to contain) ``app.db``. Used by dev runs (``run.py`` sets it to the
+   repo-local ``.maistro/`` so checked-out dev work keeps its app state)
+   and by anyone overriding the install default.
+2. OS-conventional per-user app-data directory. This is the path an
+   installed build will land on.
+   - Windows: ``%APPDATA%\\mAistro\\app.db``
+   - macOS:   ``~/Library/Application Support/mAistro/app.db``
+   - Linux:   ``$XDG_DATA_HOME/mAistro/app.db`` (default ``~/.local/share/mAistro/``)
+
+Project DBs are not affected — they remain at ``<project>/.maistro/maistro.db``.
 """
 
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
 
-# App DB lives in .maistro/ at the repo root (gitignored)
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_MAISTRO_DIR = os.path.join(APP_DIR, ".maistro")
+
+def _resolve_appdata_dir() -> str:
+    override = os.environ.get("MAISTRO_APPDATA")
+    if override:
+        return override
+
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "mAistro")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/mAistro")
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "mAistro")
+
+
+_MAISTRO_DIR = _resolve_appdata_dir()
 APP_DB_PATH = os.path.join(_MAISTRO_DIR, "app.db")
 
 
