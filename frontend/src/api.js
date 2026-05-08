@@ -51,10 +51,10 @@ export const reorderJobs = (jobIds) =>
 
 export const listLearnings = (jobId) => fetchJSON(`/api/jobs/${jobId}/learnings`)
 
-export const createLearning = (jobId, body) =>
+export const createLearning = (jobId, { summary, body }) =>
   fetchJSON(`/api/jobs/${jobId}/learnings`, {
     method: 'POST',
-    body: JSON.stringify({ body }),
+    body: JSON.stringify({ summary, body }),
   })
 
 export const updateLearning = (id, updates) =>
@@ -71,52 +71,52 @@ export const reorderLearnings = (jobId, learningIds) =>
 
 // ── Tasks (atomic work items) ──
 
-export const enqueueTask = (jobId, context) =>
-  fetchJSON(`/api/tasks/${jobId}`, {
+export const enqueueTrigger = (jobId, context) =>
+  fetchJSON(`/api/triggers/${jobId}`, {
     method: 'POST',
     body: JSON.stringify({ context: context || undefined }),
   })
 
-export const getTaskQueue = () => fetchJSON('/api/tasks/queue')
+export const getTriggerQueue = () => fetchJSON('/api/triggers/queue')
 
-export const getTaskOutput = (taskId) =>
-  fetchJSON(`/api/tasks/${taskId}/output`)
+export const getTriggerOutput = (taskId) =>
+  fetchJSON(`/api/triggers/${taskId}/output`)
 
-export const updateTask = (id, updates) =>
-  fetchJSON(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
+export const updateTrigger = (id, updates) =>
+  fetchJSON(`/api/triggers/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
 
-export const getTaskDiff = (id) => fetchJSON(`/api/tasks/${id}/diff`)
+export const getTriggerDiff = (id) => fetchJSON(`/api/triggers/${id}/diff`)
 
-export const getTaskOutcome = (id) => fetchJSON(`/api/tasks/${id}/outcome`)
+export const getTriggerOutcome = (id) => fetchJSON(`/api/triggers/${id}/outcome`)
 
-export const integrateTaskWorkspace = (id, strategy = 'default') =>
-  fetchJSON(`/api/tasks/${id}/workspace/integrate?strategy=${strategy}`, { method: 'POST' })
+export const integrateTriggerWorkspace = (id, strategy = 'default') =>
+  fetchJSON(`/api/triggers/${id}/workspace/integrate?strategy=${strategy}`, { method: 'POST' })
 
-export const discardTaskWorkspace = (id) =>
-  fetchJSON(`/api/tasks/${id}/workspace/discard`, { method: 'POST' })
+export const discardTriggerWorkspace = (id) =>
+  fetchJSON(`/api/triggers/${id}/workspace/discard`, { method: 'POST' })
 
-export const getOrphanStash = (id) => fetchJSON(`/api/tasks/${id}/orphan-stash`)
+export const getOrphanStash = (id) => fetchJSON(`/api/triggers/${id}/orphan-stash`)
 
 export const restoreOrphanStash = (id) =>
-  fetchJSON(`/api/tasks/${id}/orphan-stash/restore`, { method: 'POST' })
+  fetchJSON(`/api/triggers/${id}/orphan-stash/restore`, { method: 'POST' })
 
 export const discardOrphanStash = (id) =>
-  fetchJSON(`/api/tasks/${id}/orphan-stash/discard`, { method: 'POST' })
+  fetchJSON(`/api/triggers/${id}/orphan-stash/discard`, { method: 'POST' })
 
-export const cancelTask = (id) =>
-  fetchJSON(`/api/tasks/cancel/${id}`, { method: 'POST' })
+export const cancelTrigger = (id) =>
+  fetchJSON(`/api/triggers/cancel/${id}`, { method: 'POST' })
 
-export const resumeTask = (id) =>
-  fetchJSON(`/api/tasks/${id}/resume`, { method: 'POST' })
+export const resumeTrigger = (id) =>
+  fetchJSON(`/api/triggers/${id}/resume`, { method: 'POST' })
 
-export const replyTask = (id, context) =>
-  fetchJSON(`/api/tasks/${id}/reply`, {
+export const replyTrigger = (id, context) =>
+  fetchJSON(`/api/triggers/${id}/reply`, {
     method: 'POST',
     body: JSON.stringify({ context }),
   })
 
-export const streamTask = (taskId, onEvent) =>
-  fetchSSE(`/api/tasks/${taskId}/stream`, {}, onEvent)
+export const streamTrigger = (taskId, onEvent) =>
+  fetchSSE(`/api/triggers/${taskId}/stream`, {}, onEvent)
 
 // ── Queue Control ──
 
@@ -134,32 +134,32 @@ export const shelveAll = () =>
 export const processOne = (taskId) =>
   fetchJSON(`/api/queue/process/${taskId}`, { method: 'POST' })
 
-export const reorderTasks = (taskIds) =>
+export const reorderTriggers = (taskIds) =>
   fetchJSON('/api/queue/reorder', { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) })
 
-export const approveTask = (id) =>
-  fetchJSON(`/api/tasks/${id}/approve`, { method: 'POST' })
+export const approveTrigger = (id) =>
+  fetchJSON(`/api/triggers/${id}/approve`, { method: 'POST' })
 
-export const rejectTask = (id) =>
-  fetchJSON(`/api/tasks/${id}/reject`, { method: 'POST' })
+export const rejectTrigger = (id) =>
+  fetchJSON(`/api/triggers/${id}/reject`, { method: 'POST' })
 
-export const mergeTasks = (taskIds) =>
-  fetchJSON('/api/tasks/merge', { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) })
+export const mergeTriggers = (taskIds) =>
+  fetchJSON('/api/triggers/merge', { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) })
 
-export const splitTask = (id) =>
-  fetchJSON(`/api/tasks/${id}/split`, { method: 'POST' })
+export const splitTrigger = (id) =>
+  fetchJSON(`/api/triggers/${id}/split`, { method: 'POST' })
 
-export const uncoalesceTask = (id) =>
-  fetchJSON(`/api/tasks/${id}/uncoalesce`, { method: 'POST' })
+export const uncoalesceTrigger = (id) =>
+  fetchJSON(`/api/triggers/${id}/uncoalesce`, { method: 'POST' })
 
-export const transferTask = (id, toQueued) =>
-  fetchJSON(`/api/tasks/${id}/transfer`, {
+export const transferTrigger = (id, toQueued) =>
+  fetchJSON(`/api/triggers/${id}/transfer`, {
     method: 'POST',
     body: JSON.stringify({ to_queued: toQueued }),
   })
 
 export const getSubordinates = (id) =>
-  fetchJSON(`/api/tasks/${id}/subordinates`)
+  fetchJSON(`/api/triggers/${id}/subordinates`)
 
 // ── Feed ──
 

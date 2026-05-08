@@ -387,6 +387,7 @@ CREATE INDEX IF NOT EXISTS idx_governor_runs_started
 CREATE TABLE IF NOT EXISTS job_learnings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    summary TEXT NOT NULL DEFAULT '',
     body TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     position INTEGER NOT NULL DEFAULT 0,
@@ -417,7 +418,9 @@ INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
     ('require_approval', 'false', 'boolean'),
     ('allowed_internal_tools', '[]', 'json'),
     ('allowed_dispatch_targets', '[]', 'json'),
-    ('allow_learning_self_modification', 'false', 'boolean');
+    ('allow_learning_self_modification', 'false', 'boolean'),
+    ('max_learnings', '10', 'integer'),
+    ('max_learning_chars', '1000', 'integer');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 INSERT OR IGNORE INTO config (key, value) VALUES ('agent_dispatch_depth_limit', '5');

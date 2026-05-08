@@ -4,7 +4,7 @@ import logging
 import os
 from typing import AsyncIterator
 
-from backend import cli, database as db, db_learnings, git, matching, mcp_config as mcp_cfg
+from backend import cli, database as db, git, matching, mcp_config as mcp_cfg
 
 log = logging.getLogger("maistro.dispatch")
 
@@ -40,15 +40,13 @@ async def run_task(
 
     log.info("[task:%d] Starting job=%s", task_id, job["id"])
 
-    task_record = task if task is not None else await db.get_task(task_id)
+    task_record = task if task is not None else await db.get_trigger(task_id)
     queue_context = _build_queue_context(task_record, subordinates)
     manifest = await build_job_manifest()
     resume_session_id = task_record.get("resume_session_id") if task_record else None
 
-    learnings = await db_learnings.list_enabled_learnings(job["id"])
-
     system_prompt = build_dispatch_system_prompt(job, workspace)
-    user_prompt = build_user_prompt(job, project_dir, queue_context, manifest, learnings)
+    user_prompt = build_user_prompt(job, project_dir, queue_context, manifest)
 
     log.info("[task:%d] System: %d chars, User: %d chars%s",
              task_id, len(system_prompt), len(user_prompt),
@@ -114,19 +112,33 @@ You are running in HEADLESS DISPATCH mode. Your working directory is {cwd} — a
 - Commit your changes with descriptive messages explaining what changed and why.
 - Use the job name as a commit tag prefix: [{job_name}] description
 - Stage and commit related changes together as logical units.
-- Documentation files should be first-principle, as-is representations of current state — not task lists or work-in-progress notes. Reasoning and work context belong in commit messages."""
+- Documentation files should be first-principle, as-is representations of current state — not task lists or work-in-progress notes. Reasoning and work context belong in commit messages.
+
+## Learnings
+Your job has a curated, capped list of learnings — discrete rules, examples, and constraints that complement the brief in the user prompt. They are not pre-injected; query them yourself when the task is non-trivial.
+- Call `list_learnings` early to see one-line summaries of what's stored (breadth-first scan).
+- Call `read_learnings` with the ids of summaries that look relevant to fetch full bodies (deep-dive only what you'll actually use).
+{learnings_write_block}"""
+
+
+LEARNINGS_WRITE_BLOCK = """\
+- When you discover guidance worth carrying forward to future runs, capture it via `add_learning` (provide both a one-sentence `summary` and a longer `body`). Prefer `update_learning` over appending when a similar rule already exists.
+- The list has a hard cap. At capacity, `add_learning` will refuse — consolidate or delete an existing learning first rather than abandoning the insight."""
 
 
 def build_dispatch_system_prompt(job: dict, cwd: str) -> str:
+    props = job.get("properties") or {}
+    write_block = LEARNINGS_WRITE_BLOCK if props.get("allow_learning_self_modification") else ""
     return DISPATCH_SYSTEM_PROMPT.format(
         job_name=job["name"],
         cwd=cwd,
+        learnings_write_block=write_block,
     )
 
 
 def build_user_prompt(job: dict, project_dir: str,
-                      queue_context: str | None = None, manifest: str | None = None,
-                      learnings: list[str] | None = None) -> str:
+                      queue_context: str | None = None,
+                      manifest: str | None = None) -> str:
     props = job["properties"]
     sections = []
 
@@ -140,10 +152,6 @@ def build_user_prompt(job: dict, project_dir: str,
         sections.append(f"# {name}\n{summary}")
     else:
         sections.append(f"# {name}")
-
-    if learnings:
-        body = "\n\n".join(learnings)
-        sections.append(f"## Learnings\n{body}")
 
     if queue_context:
         sections.append(queue_context)

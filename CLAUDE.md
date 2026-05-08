@@ -45,7 +45,8 @@ The repo's design documentation is layered. When you need depth, read these in o
 - **Tasks** (`tasks` table): atomic. Each row has exactly one trigger, one context, one `job_id` FK. Tasks are never mutated after creation — retry, reply, and resume create new tasks and coalesce the original under the new one.
 - **Coalescing**: `coalesced_id` FK links subordinates to a root. Depth-1 is enforced by SQLite triggers (`tasks_depth1_insert`, `tasks_depth1_update_target`, `tasks_depth1_update_self`). `coalesce_under()` and `merge_tasks()` flatten before re-parenting so depth-1 holds at every intermediate state. `cascade_completion()` is the single helper used by every worker completion path to terminal-cascade subordinates of a root.
 - **Coalescing lock**: every coalesce-mutating op (`split_task`, `uncoalesce_task`, `merge_tasks`) requires all participants to be `pending`; `transfer_task` requires `pending`/`queued` and roots only. Therefore a terminal coalesced subtree is structurally immutable — outcome data on the root is permanent. Reply/resume "unlock" a terminal subtree by introducing a new non-terminal root above it.
-- **`tasks` vs `task_executions`**: `tasks` holds intrinsic identity + queue placement + materialized status. Per-execution outcome data (`session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`, `worktree_path`, `task_branch`) lives in a sibling `task_executions` table keyed by `task_id` — one row per task that actually ran. Coalesced subordinates have no `task_executions` row; their effective outcome is the root's. Write helpers in `db_tasks` (`transition_task`, `update_task`, etc.) route outcome fields to `task_executions` via `upsert_execution` automatically — callers see the same kwargs interface.
+- **Vocabulary state.** Stage 1 of the [triggers-and-dispatches](architecture/proposals/triggers-and-dispatches.md) rename is committed: Python identifiers, frontend, API URLs, and the `MAISTRO_TRIGGER_ID` env var use `trigger` (was `task`) and `dispatch` (was `task_execution`). **SQL tables intentionally keep their legacy names** — `tasks`, `task_executions`, `task_events`, plus the `tasks.trigger` / `tasks.trigger_detail` columns. Path params are still `task_id`. Stage 2+ (schema rename) is deferred. Use trigger/dispatch in new code; expect the inversion at the storage boundary.
+- **`tasks` vs `task_executions`**: `tasks` holds intrinsic identity + queue placement + materialized status. Per-execution outcome data (`session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`, `worktree_path`, `task_branch`) lives in a sibling `task_executions` table keyed by `task_id` — one row per trigger that actually ran. Coalesced subordinates have no `task_executions` row; their effective outcome is the root's. Write helpers in `db_triggers` (`transition_trigger`, `update_trigger`, etc.) route outcome fields to `task_executions` via `upsert_dispatch` automatically — callers see the same kwargs interface.
 - **Reading task data — two semantic profiles**:
   - **"Per-task as the agent saw it"** → read from the `tasks_resolved` view or call `get_task_resolved()`. The view is a 4-way join (`tasks` LEFT JOIN `task_executions` self LEFT JOIN `tasks` root LEFT JOIN `task_executions` root); outcome columns are `COALESCE(self_exec.col, root_exec.col)`, intrinsic columns pass through. Adds derived `is_subordinate` and `effective_root_id`. Use this for output/diff/outcome endpoints, the Governor's recent-tasks view, and anywhere a user might click on a subordinate.
   - **"Per-execution / per-cost"** → `tasks t JOIN task_executions te ON te.task_id = t.id WHERE t.coalesced_id IS NULL`. One row per actual run, no double-counting. Use for aggregates (`dashboard_health`, cost totals, success-rate metrics).
@@ -64,7 +65,7 @@ active   → completed / exhausted / failed / cancelled / timed_out / interrupte
 
 Terminal: `completed`, `exhausted`, `failed`, `cancelled`, `timed_out`, `interrupted`, `rejected`. `exhausted` (turn-limit) is distinct from `completed` (natural end), `failed` (error), and `timed_out` (wall-clock).
 
-All status changes go through `transition_task()` / `transition_tasks_batch()` (in `backend/db_tasks.py`, re-exported via `backend/database.py`). They validate the transition, write the event row, and update the materialized status column in the same transaction. When a root transitions terminal, subordinates cascade in batch via `cascade_completion()`.
+All status changes go through `transition_trigger()` / `transition_triggers_batch()` (in `backend/db_triggers.py`, re-exported via `backend/database.py`). They validate the transition, write the event row, and update the materialized status column in the same transaction. When a root transitions terminal, subordinates cascade in batch via `cascade_completion()`.
 
 Duration is computed from event pairs (`activated` → terminal), not from column arithmetic — this preserves correctness across retry cycles. `compute_durations_from_events` is the helper.
 
@@ -121,31 +122,34 @@ Real implementation lives in:
 | `db_core` | Connection lifecycle, `SCHEMA_SQL` / `SEED_SQL`, `init_db`, project-switch readers-draining (`db_read_guard`, `close_db`) |
 | `db_migrations` | Isolated legacy-DB migration runner (run on startup; **do not add new entries** — edit `SCHEMA_SQL` and recreate the dev DB) |
 | `db_jobs` | Job CRUD, EAV property registry, `slugify`, cascade lookup |
-| `db_tasks` | Task CRUD, state machine, event log, coalescing (`transition_task`, `coalesce_under`, `cascade_completion`, `merge_tasks`, `split_task`, `transfer_task`). Routes outcome fields to `task_executions` via `upsert_execution` so callers don't have to know about the split. |
+| `db_triggers` | Trigger CRUD, state machine, event log, coalescing (`transition_trigger`, `coalesce_under`, `cascade_completion`, `merge_triggers`, `split_trigger`, `transfer_trigger`). Routes outcome fields to `task_executions` via `upsert_dispatch` so callers don't have to know about the split. (Stage 1 of triggers-and-dispatches: Python rename only; SQL tables still named `tasks` / `task_executions` / `task_events`.) |
 | `db_chat` | Chat sessions, messages, raw event audit log |
 | `db_config` | Key-value config + external MCP server registration and cascade delete |
 | `db_dashboard` | Read-only operational analytics queries |
 | `db_governor` | Governor counters, runs, findings |
+| `db_learnings` | Per-job learnings — discrete, addressable, individually-toggleable rules complementing the prose `description`. Each row has a one-line `summary` (the index entry) plus a longer `body`. **Not auto-injected**: agents query `list_learnings` (id + summary) for breadth then `read_learnings(ids)` for depth, via the internal MCP server. Bounded by the `max_learnings` (default 10) and `max_learning_chars` (default 1000) job properties — the cap turns agent self-modification into a curation problem. |
 
 New code should import the domain module directly. The re-export shim exists so existing `from backend import database as db; db.foo()` call sites keep working without churn.
 
 ### `backend/main.py` is a thin shell
 
-Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All routes live in `*_routes.py` modules: `job_routes`, `queue_routes`, `governor_routes`, `project_routes`, `feed_routes`, `git_routes`, `mcp_routes`, `dashboard_routes`, `config_routes`.
+Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All routes live in `*_routes.py` modules: `job_routes`, `queue_routes`, `governor_routes`, `project_routes`, `feed_routes`, `git_routes`, `mcp_routes`, `dashboard_routes`, `config_routes`, `learnings_routes`.
 
 ### Other backend modules
 
 - `state.py` — shared mutable state (`PROJECT_DIR`, `_switching` flag) and `require_project()` to break circular imports.
 - `appstate.py` — app-level DB at `<repo>/.maistro/app.db`. Owns the recent-projects list and cross-project job templates (sync sqlite3, not aiosqlite — these are short, infrequent reads outside any project context).
-- `worker.py` — background worker: pulls from queue, runs one task at a time, manages lifecycle via `transition_task()`, handles cancellation/timeout watchdog and stale-task sweep on startup.
+- `worker.py` — background worker: pulls from queue, runs one trigger at a time, manages lifecycle via `transition_trigger()`, handles cancellation/timeout watchdog and stale-trigger sweep on startup.
 - `scheduler.py` — cron-based scheduler: checks job schedules every 30s, enqueues when due.
 - `dispatch.py` — prompt assembly (`build_dispatch_system_prompt`, `build_user_prompt`), watch trigger matching (`_any_file_matches`, `_glob_to_regex`), job manifest.
 - `cli.py` — Claude CLI subprocess invocation, NDJSON parsing. On `is_error` results, emits `result_meta` alongside the error event with `stop_reason` derived from the CLI's `subtype` (e.g. `error_max_turns` → `max_turns`), so the worker correctly classifies turn-limit failures as `exhausted` rather than `completed`.
 - `git.py` — git subprocess abstraction (still sync `subprocess.run`; see Known Debt).
 - `events.py` — single source of truth for SSE event types and wire serialization (`to_sse()`).
-- `pubsub.py` — task-level + global queue-level subscriber registries for SSE.
+- `pubsub.py` — trigger-level + global queue-level subscriber registries for SSE.
 - `governor.py` — orchestration (trigger handling, prompt assembly, finding parsing, suggestion execution).
 - `mcp_probe.py` — external MCP server tool discovery via stdio handshake.
+- `mcpb_import.py` — `.mcpb` bundle import lifecycle: zip extraction, manifest validation, stdio server-def construction, staging/finalize storage under `<project>/.maistro/bundles/`. No HTTP or DB I/O — `mcp_routes` wires the produced def into `db.create_mcp_server`.
+- `matching.py` — glob matching (`any_file_matches`, `glob_to_regex`) used by watch-trigger evaluation. Lives separately from `dispatch.py` because triggering and prompt-assembly are different concerns.
 
 ### Frontend layout
 
@@ -164,7 +168,7 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 - **Task columns**: `trigger` (type), `trigger_detail` (specifics), `context` (pre-formatted text) — real columns, not JSON.
 - **Queue**: auto-processing or paused via `/api/queue/settings` (`auto_dispatch` toggle).
 - **Ports**: backend 8420, frontend 5173.
-- **API routes**: all prefixed `/api/`. REST conventions: `GET/POST /api/jobs/`, `PATCH/DELETE /api/jobs/:id`. Tasks at `/api/tasks/` (output via `/api/tasks/{task_id}/output` — there is no `/api/chat/` namespace, though `chat_sessions`/`chat_messages` tables still back task output). Queue settings at `/api/queue/settings`. Governor at `/api/governor/`.
+- **API routes**: all prefixed `/api/`. REST conventions: `GET/POST /api/jobs/`, `PATCH/DELETE /api/jobs/:id`. Triggers at `/api/triggers/` (output via `/api/triggers/{task_id}/output` — path params still named `task_id`; no `/api/chat/` namespace, though `chat_sessions`/`chat_messages` tables still back trigger output). Queue settings at `/api/queue/settings`. Governor at `/api/governor/`. Learnings at `/api/jobs/{job_id}/learnings` (operator) and `/api/learnings/agent-add` etc. (agent — stamps `source='agent'`).
 - **SSE events** (defined in `events.py`): `text`, `thinking`, `tool_use`, `assistant_complete`, `result_meta`, `result`, `session_id`, `error`, `done`, `task`, `queue_changed`.
 
 ### Database Schema
@@ -182,8 +186,7 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 
 ## Known Debt (see `REMEDIATION.md`)
 
-The big structural splits (R2 database, R9 routes, R5 write-side coalescing) are done. Remaining:
+The full structural backlog (R1–R5, R7–R9, R11–R13) shipped. Two items remain, both deliberate deferrals rather than unfinished work:
 
-- **R7: Async git operations.** `git.py` still uses sync `subprocess.run`, blocking the event loop on every git call from worker, scheduler, dispatch, and feed routes. Wrap in `asyncio.to_thread`, make callers `await`.
-- **R8: Move glob matching.** `_any_file_matches` and `_glob_to_regex` are trigger-matching functions misfiled in `dispatch.py`. Move to `git.py` or a dedicated `matching.py`.
-- **R5 read-side residual.** Task-card rendering in `Queue.jsx` / `Tasks.jsx` shows null metrics for subordinates because it reads `task.num_turns` etc. directly. Cosmetic, not correctness — switch to `get_task_resolved` or fall back to root values via a frontend helper as those surfaces are touched.
+- **R6 (deferred): structural EAV flatten.** Replace `job_property_defs` + `job_properties` with a `job_config` JSON column on `jobs`. The minimal fix shipped (cached schema, shared assembly helpers); the structural option is no-urgency. Revisit on property-shape churn, an actual perf budget, or operator-extensible properties as a goal.
+- **Triggers-and-dispatches Stage 2+ (deferred).** Stage 1 (Python/frontend/URL rename to trigger/dispatch) is shipped; the storage rename and the structural promotion of dispatches to a first-class entity are deferred. The Python ↔ SQL vocabulary inversion is the visible artifact — `db_triggers` operates on tables called `tasks` / `task_executions` / `task_events`. Tracked in [architecture/proposals/triggers-and-dispatches.md](architecture/proposals/triggers-and-dispatches.md).

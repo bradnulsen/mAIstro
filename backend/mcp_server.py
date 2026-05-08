@@ -12,7 +12,7 @@ Each task gets an instance configured via environment variables:
     MAISTRO_WORKSPACE_DIR           cwd for the agent's edits and commits (Phase 3a: equals project_dir; Phase 3b: per-task worktree)
     MAISTRO_SESSION_ID              chat session ID for audit logging
     MAISTRO_BACKEND_PORT            backend HTTP port (default 8420)
-    MAISTRO_TASK_ID                 current task ID (for provenance)
+    MAISTRO_TRIGGER_ID                 current task ID (for provenance)
     MAISTRO_ALLOWED_INTERNAL_TOOLS  JSON list of allowed tool names (empty = all)
     MAISTRO_ALLOWED_DISPATCH_TARGETS JSON list of job IDs this agent can dispatch
     MAISTRO_ALLOW_LEARNING_WRITES   "1" if the dispatching job has the
@@ -45,7 +45,7 @@ PROJECT_DIR = os.environ.get("MAISTRO_PROJECT_DIR", ".")
 WORKSPACE_DIR = os.environ.get("MAISTRO_WORKSPACE_DIR", PROJECT_DIR)
 SESSION_ID = os.environ.get("MAISTRO_SESSION_ID", "")
 BACKEND_PORT = int(os.environ.get("MAISTRO_BACKEND_PORT", "8420"))
-TASK_ID = os.environ.get("MAISTRO_TASK_ID", "")
+TASK_ID = os.environ.get("MAISTRO_TRIGGER_ID", "")
 
 # Tool filtering: empty list = all tools available
 _allowed_raw = os.environ.get("MAISTRO_ALLOWED_INTERNAL_TOOLS", "[]")
@@ -265,7 +265,7 @@ def tool_dispatch_task(args: dict) -> str:
             "source_task_id": int(TASK_ID) if TASK_ID else 0,
         }).encode("utf-8")
         req = urllib.request.Request(
-            f"http://localhost:{BACKEND_PORT}/api/tasks/agent-dispatch",
+            f"http://localhost:{BACKEND_PORT}/api/triggers/agent-dispatch",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -283,7 +283,7 @@ def tool_dispatch_task(args: dict) -> str:
 def tool_get_queue_status(args: dict) -> str:
     """Get read-only view of current queue state."""
     try:
-        url = f"http://localhost:{BACKEND_PORT}/api/tasks/queue"
+        url = f"http://localhost:{BACKEND_PORT}/api/triggers/queue"
         with urllib.request.urlopen(url, timeout=5) as resp:
             tasks = json.loads(resp.read())
 
@@ -333,12 +333,17 @@ def _job_id_int() -> int:
 
 
 def tool_list_learnings(args: dict) -> str:
-    """Read the current job's learnings (enabled and disabled)."""
+    """Breadth view: one-line summaries of enabled learnings for this job.
+
+    Returns id + summary so the agent can scan cheaply, then deep-dive
+    selected rows via `read_learnings`. Disabled learnings are excluded —
+    the operator muted them for a reason.
+    """
     job_id = _job_id_int()
     if not job_id:
         return "Error: job context unavailable"
     try:
-        url = f"http://localhost:{BACKEND_PORT}/api/jobs/{job_id}/learnings"
+        url = f"http://localhost:{BACKEND_PORT}/api/jobs/{job_id}/learnings/summaries"
         with urllib.request.urlopen(url, timeout=5) as resp:
             rows = json.loads(resp.read())
     except urllib.error.HTTPError as e:
@@ -349,11 +354,40 @@ def tool_list_learnings(args: dict) -> str:
 
     if not rows:
         return "(no learnings)"
-    lines = []
+    return "\n".join(f"#{r['id']} ({r['source']}): {r['summary']}" for r in rows)
+
+
+def tool_read_learnings(args: dict) -> str:
+    """Depth view: full bodies for the requested learning ids."""
+    job_id = _job_id_int()
+    if not job_id:
+        return "Error: job context unavailable"
+    raw_ids = args.get("ids") or []
+    ids: list[int] = []
+    for x in raw_ids:
+        if isinstance(x, int):
+            ids.append(x)
+        elif isinstance(x, str) and x.isdigit():
+            ids.append(int(x))
+    if not ids:
+        return "Error: ids is required (non-empty list of learning ids from list_learnings)"
+
+    ok, out = _http_request("POST", "/api/learnings/read",
+                            {"job_id": job_id, "ids": ids})
+    if not ok:
+        return f"Error reading learnings: {out}"
+    try:
+        rows = json.loads(out)
+    except json.JSONDecodeError:
+        return out
+    if not rows:
+        return "(no matching learnings)"
+    blocks = []
     for r in rows:
-        flag = "" if r["enabled"] else " [disabled]"
-        lines.append(f"#{r['id']} ({r['source']}){flag}: {r['body']}")
-    return "\n".join(lines)
+        blocks.append(
+            f"#{r['id']} ({r['source']}) — {r['summary']}\n{r['body']}"
+        )
+    return "\n\n".join(blocks)
 
 
 def _http_request(method: str, path: str, payload: dict | None = None) -> tuple[bool, str]:
@@ -380,11 +414,14 @@ def tool_add_learning(args: dict) -> str:
     job_id = _job_id_int()
     if not job_id:
         return "Error: job context unavailable"
+    summary = (args.get("summary") or "").strip()
     body = (args.get("body") or "").strip()
+    if not summary:
+        return "Error: summary is required (one-sentence index entry)"
     if not body:
         return "Error: body is required"
     ok, out = _http_request("POST", "/api/learnings/agent-add",
-                            {"job_id": job_id, "body": body})
+                            {"job_id": job_id, "summary": summary, "body": body})
     if not ok:
         return f"Error adding learning: {out}"
     try:
@@ -400,14 +437,28 @@ def tool_update_learning(args: dict) -> str:
     learning_id = args.get("id")
     if isinstance(learning_id, str):
         learning_id = int(learning_id) if learning_id.isdigit() else 0
-    body = (args.get("body") or "").strip()
     if not learning_id:
         return "Error: id is required"
-    if not body:
-        return "Error: body is required"
+
+    payload: dict = {}
+    summary = args.get("summary")
+    body = args.get("body")
+    if summary is not None:
+        summary = summary.strip()
+        if not summary:
+            return "Error: summary cannot be empty"
+        payload["summary"] = summary
+    if body is not None:
+        body = body.strip()
+        if not body:
+            return "Error: body cannot be empty"
+        payload["body"] = body
+    if not payload:
+        return "Error: provide at least one of summary or body"
+
     ok, out = _http_request("PATCH",
                             f"/api/learnings/{learning_id}/agent-update",
-                            {"body": body})
+                            payload)
     if not ok:
         return f"Error updating learning: {out}"
     return f"Updated learning #{learning_id}"
@@ -478,7 +529,7 @@ TOOLS = [
         "name": "git_commit",
         "description": (
             f"Commit staged/unstaged changes with enforced authorship "
-            f"({JOB_NAME} <{JOB_ID}@maistro.local>) and message prefix ([{JOB_NAME}])."
+            f"({JOB_NAME} <{JOB_SLUG}@maistro.local>) and message prefix ([{JOB_NAME}])."
         ),
         "inputSchema": {
             "type": "object",
@@ -570,10 +621,10 @@ TOOLS = [
     {
         "name": "list_learnings",
         "description": (
-            "Read the current job's learnings — discrete rules that complement "
-            "the prose description. Returns enabled and disabled rows with id, "
-            "body, source (human or agent), enabled flag, and position. Always "
-            "available as introspection regardless of self-modification permission."
+            "Breadth view of this job's enabled learnings — returns id, "
+            "one-line summary, and source (human or agent) for each row. "
+            "Use this first to scan what's stored, then call read_learnings "
+            "with the ids that look relevant. Always available."
         ),
         "inputSchema": {
             "type": "object",
@@ -581,31 +632,57 @@ TOOLS = [
         },
     },
     {
-        "name": "add_learning",
+        "name": "read_learnings",
         "description": (
-            "Append a new agent-authored learning to this job's list. "
-            "Requires the allow_learning_self_modification job permission. "
-            "The new row is stamped source='agent' and only the agent (or an "
-            "operator) can later edit or delete it."
+            "Depth view of selected learnings — returns the full body for "
+            "each requested id (scoped to the current job). Use after "
+            "list_learnings to deep-dive only the entries you'll actually "
+            "use. Always available."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "body": {
-                    "type": "string",
-                    "description": "The learning body — one rule, example, or constraint.",
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Learning ids returned by list_learnings.",
                 },
             },
-            "required": ["body"],
+            "required": ["ids"],
+        },
+    },
+    {
+        "name": "add_learning",
+        "description": (
+            "Append a new agent-authored learning to this job's list. "
+            "Requires the allow_learning_self_modification job permission. "
+            "Provide both a one-sentence summary (the index entry) and a "
+            "longer body. Stamped source='agent'. The list has a hard cap "
+            "(max_learnings job property); at capacity the call is refused — "
+            "consolidate via update_learning or delete_learning first."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "One-sentence index entry (max 120 chars).",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Full learning body — the rule, example, or constraint.",
+                },
+            },
+            "required": ["summary", "body"],
         },
     },
     {
         "name": "update_learning",
         "description": (
-            "Rewrite the body of an agent-authored learning. Requires the "
-            "allow_learning_self_modification job permission. Refuses to edit "
-            "operator-authored (source='human') rows. Toggling enabled is an "
-            "operator action and not exposed here."
+            "Rewrite the summary and/or body of an agent-authored learning. "
+            "Requires the allow_learning_self_modification job permission. "
+            "Refuses to edit operator-authored (source='human') rows. "
+            "Toggling enabled is an operator action and not exposed here."
         ),
         "inputSchema": {
             "type": "object",
@@ -614,12 +691,16 @@ TOOLS = [
                     "type": "integer",
                     "description": "Learning id (from list_learnings).",
                 },
+                "summary": {
+                    "type": "string",
+                    "description": "Replacement summary (optional).",
+                },
                 "body": {
                     "type": "string",
-                    "description": "Replacement body.",
+                    "description": "Replacement body (optional).",
                 },
             },
-            "required": ["id", "body"],
+            "required": ["id"],
         },
     },
     {
@@ -654,6 +735,7 @@ TOOL_HANDLERS = {
     "dispatch_task": tool_dispatch_task,
     "get_queue_status": tool_get_queue_status,
     "list_learnings": tool_list_learnings,
+    "read_learnings": tool_read_learnings,
     "add_learning": tool_add_learning,
     "update_learning": tool_update_learning,
     "delete_learning": tool_delete_learning,
@@ -679,7 +761,7 @@ def _log_tool_call(tool_name: str, input_args: dict, result: str):
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }).encode("utf-8")
         req = urllib.request.Request(
-            f"http://localhost:{BACKEND_PORT}/api/tasks/mcp-event",
+            f"http://localhost:{BACKEND_PORT}/api/triggers/mcp-event",
             data=payload,
             headers={
                 "Content-Type": "application/json",

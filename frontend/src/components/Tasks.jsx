@@ -21,8 +21,8 @@ const TIPS = {
   mcpServers: 'External MCP servers to connect to this job\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
   allowedInternalTools: 'Internal MCP tools the agent can access. When a subset is selected, only listed tools are presented by the internal server. All checked = default (no restrictions). Use this to create read-only jobs or restrict dispatch capabilities.',
   allowedDispatchTargets: 'Jobs this agent can dispatch via the dispatch_task tool. When none are selected, the agent cannot dispatch other jobs. Self-dispatch is always prohibited.',
-  learnings: 'Discrete, individually-toggleable rules and notes the agent sees alongside the description. Use for guidance worth muting/reordering on its own. Disabled rows are stored but excluded from the prompt.',
-  allowLearningSelfModification: 'When enabled, the agent can add, edit, and delete its own learnings via internal MCP tools — closing the feedback loop "what did I learn this run that should change me next time?". The agent can only modify learnings it itself authored (source=agent); operator-authored rows are never agent-writable. Read-only list_learnings is always available regardless of this setting.',
+  learnings: 'Discrete, individually-toggleable rules and notes. The agent queries them on demand via list_learnings (returns id + summary) and read_learnings (returns full body). Each row needs a one-sentence summary so the agent can scan breadth-first before deep-diving. Disabled rows are hidden from the agent. Bounded by the max_learnings job property.',
+  allowLearningSelfModification: 'When enabled, the agent can add, edit, and delete its own learnings via internal MCP tools — closing the feedback loop "what did I learn this run that should change me next time?". The agent can only modify learnings it itself authored (source=agent); operator-authored rows are never agent-writable. Read tools (list_learnings / read_learnings) are always available regardless of this setting.',
 }
 
 export default function Tasks({ jobs, onRefresh }) {
@@ -727,8 +727,10 @@ function LearningsList({ jobId }) {
   const [items, setItems] = useState(null)
   const [error, setError] = useState('')
   const [adding, setAdding] = useState(false)
+  const [newSummary, setNewSummary] = useState('')
   const [newBody, setNewBody] = useState('')
   const [editingId, setEditingId] = useState(null)
+  const [editSummary, setEditSummary] = useState('')
   const [editBody, setEditBody] = useState('')
   const [dragIdx, setDragIdx] = useState(null)
   const [dragOverIdx, setDragOverIdx] = useState(null)
@@ -739,10 +741,12 @@ function LearningsList({ jobId }) {
   useEffect(() => { reload() }, [reload])
 
   const handleAdd = async () => {
+    const summary = newSummary.trim()
     const body = newBody.trim()
-    if (!body) return
+    if (!summary || !body) return
     try {
-      await createLearning(jobId, body)
+      await createLearning(jobId, { summary, body })
+      setNewSummary('')
       setNewBody('')
       setAdding(false)
       reload()
@@ -750,10 +754,11 @@ function LearningsList({ jobId }) {
   }
 
   const handleSaveEdit = async (id) => {
+    const summary = editSummary.trim()
     const body = editBody.trim()
-    if (!body) { setEditingId(null); return }
+    if (!summary || !body) { setEditingId(null); return }
     try {
-      await updateLearning(id, { body })
+      await updateLearning(id, { summary, body })
       setEditingId(null)
       reload()
     } catch (e) { setError(e.message) }
@@ -813,24 +818,44 @@ function LearningsList({ jobId }) {
               title={l.enabled ? 'Enabled — included in prompt' : 'Disabled — excluded from prompt'}
             />
             {editingId === l.id ? (
-              <textarea
-                className="learning-body learning-body-edit"
-                value={editBody}
-                onChange={e => setEditBody(e.target.value)}
-                onBlur={() => handleSaveEdit(l.id)}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') setEditingId(null)
-                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSaveEdit(l.id) }
-                }}
-                rows={Math.max(2, editBody.split('\n').length)}
-                autoFocus
-              />
+              <div className="learning-edit">
+                <input
+                  className="learning-summary learning-summary-edit"
+                  type="text"
+                  value={editSummary}
+                  onChange={e => setEditSummary(e.target.value)}
+                  placeholder="One-sentence summary"
+                  maxLength={120}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') setEditingId(null)
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSaveEdit(l.id) }
+                  }}
+                  autoFocus
+                />
+                <textarea
+                  className="learning-body learning-body-edit"
+                  value={editBody}
+                  onChange={e => setEditBody(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') setEditingId(null)
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSaveEdit(l.id) }
+                  }}
+                  rows={Math.max(2, editBody.split('\n').length)}
+                />
+                <div className="learning-new-actions">
+                  <button className="small primary" onClick={() => handleSaveEdit(l.id)}>Save</button>
+                  <button className="small" onClick={() => setEditingId(null)}>Cancel</button>
+                </div>
+              </div>
             ) : (
               <div
-                className="learning-body"
-                onClick={() => { setEditingId(l.id); setEditBody(l.body) }}
+                className="learning-content"
+                onClick={() => { setEditingId(l.id); setEditSummary(l.summary || ''); setEditBody(l.body) }}
                 title="Click to edit"
-              >{l.body}</div>
+              >
+                <div className="learning-summary">{l.summary || <span className="muted-text">(no summary)</span>}</div>
+                <div className="learning-body">{l.body}</div>
+              </div>
             )}
             <span className={`learning-source learning-source-${l.source}`}>{l.source}</span>
             <button
@@ -842,21 +867,35 @@ function LearningsList({ jobId }) {
         ))}
         {adding && (
           <div className="learning-item learning-item-new">
-            <textarea
-              className="learning-body learning-body-edit"
-              value={newBody}
-              onChange={e => setNewBody(e.target.value)}
-              placeholder="A rule, example, or constraint..."
-              rows={Math.max(2, newBody.split('\n').length)}
-              onKeyDown={e => {
-                if (e.key === 'Escape') { setAdding(false); setNewBody('') }
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleAdd() }
-              }}
-              autoFocus
-            />
-            <div className="learning-new-actions">
-              <button className="small primary" onClick={handleAdd} disabled={!newBody.trim()}>Add</button>
-              <button className="small" onClick={() => { setAdding(false); setNewBody('') }}>Cancel</button>
+            <div className="learning-edit">
+              <input
+                className="learning-summary learning-summary-edit"
+                type="text"
+                value={newSummary}
+                onChange={e => setNewSummary(e.target.value)}
+                placeholder="One-sentence summary (the index entry)"
+                maxLength={120}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') { setAdding(false); setNewSummary(''); setNewBody('') }
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleAdd() }
+                }}
+                autoFocus
+              />
+              <textarea
+                className="learning-body learning-body-edit"
+                value={newBody}
+                onChange={e => setNewBody(e.target.value)}
+                placeholder="The full rule, example, or constraint..."
+                rows={Math.max(2, newBody.split('\n').length)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') { setAdding(false); setNewSummary(''); setNewBody('') }
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleAdd() }
+                }}
+              />
+              <div className="learning-new-actions">
+                <button className="small primary" onClick={handleAdd} disabled={!newSummary.trim() || !newBody.trim()}>Add</button>
+                <button className="small" onClick={() => { setAdding(false); setNewSummary(''); setNewBody('') }}>Cancel</button>
+              </div>
             </div>
           </div>
         )}
