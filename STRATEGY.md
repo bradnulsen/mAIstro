@@ -30,27 +30,26 @@ The platform's *operational* loop is mature: tasks dispatch reliably, run in iso
 
 What the platform does *not* yet do well: **learn**. The feedback loops that turn lived experience into better future behavior are either absent or one-directional:
 
-- **Operator ↔ Governor is one-way.** The Governor speaks (findings); the operator can only assent or decline. Real meta-management is a conversation — push-back, clarification, "yes but in this case do X." Right now an operator who disagrees with a finding has nowhere to put that disagreement; the Governor never sees the rebuttal, never refines its read of the project. The system optimizes a relationship it never sees both sides of.
-- **Agents can't write to their own instructions.** The job's `description` is a prose monolith, edited only by operators. There's no mechanism for an agent to record a learning ("this failure mode happens when X — here's how to avoid it next time") in a place that next dispatch will see. The closest thing today is the operator manually editing prose after reading task output.
-- **Completed tasks can't be interrogated.** The agent's session is locked behind the streamed output log. "Why did you change this file? What alternatives did you consider?" requires conversational access to the agent's prior context. Currently the user reads raw NDJSON. Workspace isolation made the runtime answer clean — resume on the preserved task branch — but the surface itself doesn't exist.
+- **Operator ↔ Governor is one-way.** The Governor speaks (findings); the operator can only assent or decline. Real meta-management is a conversation — push-back, clarification, "yes but in this case do X." Right now an operator who disagrees with a finding has nowhere to put that disagreement; the Governor never sees the rebuttal, never refines its read of the project.
+- **Agents could not write to their own instructions.** *(Closed: the `job_learnings` surface ships with both operator and gated agent CRUD, and dispatch queries learnings on demand rather than auto-injecting.)*
 
-Together these three gaps describe a platform that *executes* but doesn't *improve.* That's the next chapter.
-
-A separate concern, orthogonal to learning, is **reach**: today mAistro ships as a developer setup (`pip install`, `npm install`, two terminals). The operators who would benefit most — non-developer subject-matter experts coordinating with autonomous agents — can't run it. An installer closes that gap. Sequenced after the learning work because shipping a non-developer-friendly product whose UX is still on its current one-way Governor and prose-monolith jobs would lock in shape that's about to change.
+A separate concern, orthogonal to learning, is **reach**: today mAistro ships as a developer setup (`pip install`, `npm install`, two terminals). The operators who would benefit most — non-developer subject-matter experts coordinating with autonomous agents — can't run it. An installer closes that gap.
 
 External MCP polish (env-var UI, server status in dispatch detail, runtime error attribution, config validation) and structural item R6 (EAV-flatten to JSON column) are real but not load-bearing. They live in Deferred with explicit revisit triggers.
 
 ## Guiding Policy
 
-**Close the learning loops, then open the reach.** The platform's execution surface is mature. The next leverage isn't a new trigger type or another dashboard panel — it's making the platform *get better the longer it runs*. That requires three structural changes, in order: a two-way meta-management surface (Governor threads), task-level interrogation, and structured agent-writable knowledge (job learnings). Together they form the closed loop: tasks generate insights → operator and Governor refine through conversation → insights become learnings → learnings shape next dispatch → patterns surface in the next survey. Once that loop runs, an installer makes the platform usable by the operators who most need it.
+**Close the meta-management loop, then open the reach.** The platform's execution surface is mature, and the agent-writable side of the learning loop has shipped. The remaining structural change is the two-way meta-management surface (Governor threads); after that, an installer makes the platform usable by the operators who most need it.
 
-The order from here: Governor threads first because they reshape how subsequent items integrate (learnings get proposed via thread `action_payload`s; interrogation findings get raised as threads); task session interrogation second because it lights up the deepest investigative move the operator currently can't make and pairs naturally with thread context; job learnings third because by then the conversational write surface exists to flow learnings through; installer fourth because depth must precede breadth.
+The order from here: Governor threads first (so the operator and the Governor can actually have a conversation, and the Governor can propose learnings via thread `action_payload`s rather than findings); installer second (depth before breadth — shipping to a non-developer audience while the Governor surface is one-way would lock in a shape we're already replacing).
+
+Task session interrogation was previously sequenced here as P2; it has been **dropped** as a planned priority. The "let the operator chat with a completed task's resumed agent" framing fails the value-vs-cost test once you notice that (a) the resumed agent confabulates rather than recalls, (b) the dispatch primitive already handles "ask the agent about its work" via a fresh task with read-only context, and (c) the multi-turn human↔agent thread primitive lands in P1 anyway. If a real need surfaces, revisit then — likely as a "thread on a task" reusing P1's infrastructure rather than as its own subsystem.
 
 ## Priority 1: Governor Threads
 
 **The problem:** The Governor surfaces findings; the operator approves, declines, or executes. There is no return channel. The operator cannot ask the Governor a question, cannot push back on a misreading, cannot refine a proposal through conversation. Findings are static artifacts in a feed — read, dismiss, or commit. This shape was right when the Governor was a proof of value (does autonomous oversight surface anything useful?). Now that the answer is yes, the missing piece is dialogue: the Governor's analysis is most valuable when it can be challenged, scoped, and iterated.
 
-**Why first:** Governor threads reshape the conversational surface that the next two priorities flow through. Task session interrogation produces observations that often deserve thread-level capture ("you said in task #412 that the migration approach was risky — say more"). Job learnings are most naturally proposed via thread `action_payload`s ("I noticed jobs without explicit error-handling guidance fail more — propose adding..."). Building threads first means interrogation and learnings land in a project where two-way meta-management already exists, instead of retrofitting their integration after the fact.
+**Why first:** Governor threads reshape the conversational surface that learning proposals will eventually flow through. With learnings already shipped, the Governor will gain a natural path to propose them via thread `action_payload`s ("I noticed jobs without explicit error-handling guidance fail more — propose adding...") instead of one-shot findings.
 
 **Specifically:** see [governor-threads proposal](architecture/proposals/governor-threads.md) for the full design. The shape:
 - **Threads** replace findings as the persistent unit of Governor↔Human exchange. Each thread is a meta-management discussion with a status (open / closed), an opener (governor / human), and an ordered append-only message list.
@@ -62,42 +61,15 @@ The order from here: Governor threads first because they reshape how subsequent 
 
 Schema: `governor_findings` is dropped; `governor_threads` and `governor_messages` replace it. Per the no-migration-system policy, the dev DB is recreated; an optional `migrate_db.py` script can fold each existing finding into a single-message thread.
 
-**Second-order effects:** A thread-shaped Governor surface is the natural home for task-interrogation insights ("here's what I learned from chatting with task #412") and learning proposals ("based on three failures across jobs A/B/C, I propose adding this learning to all three"). Threads also normalize the absence of a manual trigger — humans start a thread when they want to talk; the Governor is no longer something the operator pings, it's something they correspond with.
+**In flight:** P1 backend (schema, db helpers, routes, governor.py refactor, MCP server) shipped. The frontend (`Governor.jsx` rewrite) and architecture-doc rewrite (`architecture/governor.md`) are the remaining steps.
 
-## Priority 2: Task Session Interrogation
-
-**The problem:** Completed tasks produce outcome summaries and diffs, but the user cannot ask follow-up questions of the agent that ran them. "Why did you change this file?" "What alternatives did you consider?" "Did you see anything you didn't act on?" Today's only path is reading the raw streamed output log — noisy, non-interactive, and a poor fit for the kind of "drill into a specific task" investigation that complements the Governor's "patterns across many tasks."
-
-**Why second:** With workspaces shipped, the runtime question is clean — the resumed agent runs on the preserved task branch, looking at exactly the state it produced. Sequenced after threads because interrogation insights frequently want a place to live longer than the chat ("the operator learned X from talking to task #412") and threads provide that container. Sequenced before learnings because interrogation is often *how* the operator decides a learning is worth pinning.
-
-**Specifically:**
-- **Session resume from Dispatch.** Completed (and other terminal) tasks gain a "Chat" action in the Resolved column that opens the task's session in a conversational interface. The agent resumes via Claude CLI `--resume` with its full prior context intact.
-- **Read-only tool restriction.** The resumed session is dispatched with write tools removed (`Edit`, `Write`, internal `git_commit` and `git_branch_*`, dispatch). The agent can read files, search code, and reason about its prior work, but cannot modify the project or branches. The task's worktree (if preserved) is the working directory; if integrated already, a fresh read-only worktree is created from `result_commit`.
-- **Gating new work through tasks.** If the conversation reveals work that should be done, the operator dispatches a new task. The read-only session is an investigation tool, not an execution channel. The chat surface offers a "convert to dispatched task" button that pre-populates a task draft from the conversation.
-- **Optional thread linking.** Insights surfaced during interrogation can be sent to the Governor as a new thread post — closes the loop between micro (this specific task) and macro (Governor's pattern view).
-
-**Second-order effects:** Interrogation gives the Governor a richer raw signal (operator-curated insights from specific tasks, not just outcome summaries). It also clarifies what the existing "outcome summary" should and shouldn't try to be — the summary is for the dashboard, the chat is for the deep dive.
-
-## Priority 3: Job Learnings
-
-**The problem:** A job's instructional surface is a prose monolith (`description`). Operators can edit it; agents cannot write to it; the entire blob ships in every dispatch. There's no granularity — a single rule cannot be toggled off without surgical prose editing, no provenance — agents have no way to record "this is what I learned from the last failure," and no per-rule lifecycle. This is the only feedback loop the platform doesn't have: "what should the agent change about itself based on what just happened?"
-
-**Why third:** Learnings depend on the conversational surface from P1 (the Governor proposes learnings via thread `action_payload`s; the operator assents in prose) and on the investigative surface from P2 (interrogation reveals what's worth pinning). Sequenced last among learning-loop work because the value of structured learnings compounds when there's already a way to source them.
-
-**Specifically:** see [job-learnings-decomposition proposal](architecture/proposals/job-learnings-decomposition.md) for the full design. The shape:
-- **Hybrid surface.** `summary` and `description` stay as today (prose for narrative framing). A new `job_learnings` table holds discrete, addressable, individually-toggleable rules. Prompt assembly appends a `## Learnings` section after the description when enabled rows exist.
-- **Per-row lifecycle.** Fields: `body`, `enabled`, `position` (drag-reorder), `source` (`human` | `agent`), `created_at`, `updated_at`.
-- **Agent self-modification, gated.** A new EAV property `allow_learning_self_modification` (boolean, default `false`) controls whether the dispatch exposes write tools (`add_learning`, `update_learning`, `delete_learning`) on the internal MCP server. Read tool (`list_learnings`) is always available.
-- **Asymmetric write surface.** Agents can manage their own learnings (`source='agent'`) but cannot edit or delete operator-authored ones. Operators can do anything in the UI.
-- **No forced migration.** Existing jobs start with an empty learnings list; their prompts are byte-identical to today's. The feature is purely additive at the data layer.
-
-**Second-order effects:** Once learnings exist, the Governor (read-only by default, write via threads) gains a path to propose learnings as part of survey output. The cross-project job templates feature in `appstate.py` will need to copy learnings alongside the job row. Disabled learnings cost nothing at prompt time, so accumulation is cheap; if prompt size becomes an issue, retrieval-based selection becomes a separate proposal.
-
-## Priority 4: Installer Distribution
+## Priority 2: Installer Distribution
 
 **The problem:** mAistro ships as a developer setup — clone the repo, `pip install -r requirements.txt`, `npm install`, `python run.py` in one terminal and `npm run dev` in another. The operators who would benefit most — non-developer subject-matter experts coordinating with autonomous agents on a single project — cannot follow that recipe. The platform's deployment shape (single user, single project, localhost) was always meant to ship to end users; what's missing is the artifact that puts it in their hands.
 
-**Why fourth:** Depth before breadth. Shipping an installer whose UX still has one-way findings, no agent-writable learnings, and no task interrogation locks in a shape that's about to change. Once P1–P3 land, the product is ready for the audience the installer opens up.
+**Why second:** Depth before breadth. Shipping an installer whose UX still has one-way findings locks in a shape that's about to change. Once P1 lands, the product is ready for the audience the installer opens up.
+
+**In flight:** The app-DB path has been relocated to user app-data with a `MAISTRO_APPDATA` env override for dev runs (P4 step 1). Remaining: PyInstaller spec + smoke test, Inno Setup script, Claude CLI detect-and-prompt, single-instance launcher.
 
 **Specifically:** see [installer-distribution proposal](architecture/proposals/installer-distribution.md) for the full design. v1 shape:
 - **PyInstaller-bundled backend + browser-based UI.** Lowest mechanical cost; backend serves `frontend/dist/` and the user opens `localhost:8420`. Native window (Tauri) is v2 if browser-tab UX proves unacceptable. Electron stays a non-goal.
@@ -139,6 +111,8 @@ Valuable but deliberately postponed:
 
 ## Completed
 
+- **Job Learnings** (was P3) — per-job, individually-toggleable rules complementing the prose `description`. Operator and gated agent CRUD via internal MCP. v2 follow-up: capped list (`max_learnings`, default 10) with per-row size cap, switched from auto-injection to query-on-demand (`list_learnings` returns id+summary, `read_learnings` fetches full bodies for selected ids), system prompt directs the agent to use them. Cap acts as a forcing function for consolidation over append.
+- **Triggers/Dispatches Stage 1 rename** — Python identifiers, frontend props/wrappers, API URLs, and the `MAISTRO_TRIGGER_ID` env var moved from `task`/`task_execution` to `trigger`/`dispatch`. SQL tables stay legacy (`tasks` / `task_executions` / `task_events`); Stage 2+ structural promotion of dispatches as a first-class entity remains deferred.
 - **Task Workspace Isolation** (was P1) — three-phase delivery now fully shipped. Phase 1: CLI subtype mapping (`error_max_turns` → `stop_reason: max_turns`) so turn-limit failures classify as `exhausted`, not `completed`. Phase 2: stash-on-orphan safety net for non-success terminals with a dirty working tree. Phase 3: per-task git worktrees at `.maistro/worktrees/task-<id>/` on `<job-slug>/task-<id>` branches. Terminal handlers reconcile via git: `completed` fast-forwards into main and removes the worktree; non-success preserves with discard / manual-merge controls. Operator-wins conflict policy. WorkspaceBanner exposes path, branch, manual-merge command, and confirm-gated `POST /api/tasks/{id}/workspace/discard`. Resume reuses the original worktree. Resolved kanban floats tasks with preserved worktrees to the top.
 - **`tasks` / `task_executions` split** — intrinsic identity + queue placement on `tasks`; per-execution outcome data on `task_executions`. `tasks_resolved` view + `get_task_resolved` route per-task reads through subordinates. Recovery from / prevention of `tasks_old` FK corruption.
 - **Async git operations (R7)** — `git.py` async via `asyncio.to_thread`; ~60 callsites across worker/scheduler/dispatch/governor/route modules await them.
