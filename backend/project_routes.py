@@ -42,7 +42,7 @@ async def open_project(req: OpenProjectRequest):
 
     switching = state.PROJECT_DIR and os.path.normpath(path) != os.path.normpath(state.PROJECT_DIR)
     if switching:
-        active = worker.get_active_task_id()
+        active = worker.get_active_dispatch_id()
         if active is not None:
             raise HTTPException(409, f"Cannot switch projects while task #{active} is running. Cancel it first or wait for completion.")
         log.info("[project] Switching from %s to %s", state.PROJECT_DIR, path)
@@ -180,7 +180,7 @@ async def remove_recent_project(path: str):
 
 @router.post("/api/project/close")
 async def close_project():
-    active = worker.get_active_task_id()
+    active = worker.get_active_dispatch_id()
     if active is not None:
         raise HTTPException(409, f"Cannot close project while task #{active} is running. Cancel it first or wait for completion.")
     state._switching = True

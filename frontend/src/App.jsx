@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTask, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus } from './api'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTrigger, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus } from './api'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
 import Governor from './components/Governor'
@@ -151,7 +151,7 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
   const handleDispatch = async (jobId) => {
     setDispatching(true)
     try {
-      await enqueueTask(jobId, context || undefined)
+      await enqueueTrigger(jobId, context || undefined)
       setPopout(null)
       setContext('')
       refreshJobs()

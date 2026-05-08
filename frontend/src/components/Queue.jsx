@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import Markdown from 'react-markdown'
 import {
-  getTaskQueue, cancelTask, updateTask, getTaskOutput,
-  getTaskDiff, getTaskOutcome, processOne,
-  streamTask, approveTask, rejectTask,
-  reorderTasks, mergeTasks, splitTask, uncoalesceTask, getSubordinates,
-  transferTask, resumeTask, replyTask,
+  getTriggerQueue, cancelTrigger, updateTrigger, getTriggerOutput,
+  getTriggerDiff, getTriggerOutcome, processOne,
+  streamTrigger, approveTrigger, rejectTrigger,
+  reorderTriggers, mergeTriggers, splitTrigger, uncoalesceTrigger, getSubordinates,
+  transferTrigger, resumeTrigger, replyTrigger,
   getOrphanStash, restoreOrphanStash, discardOrphanStash,
-  discardTaskWorkspace,
-  integrateTaskWorkspace,
+  discardTriggerWorkspace,
+  integrateTriggerWorkspace,
 } from '../api'
 import {
   formatDate, formatDuration, formatDurationSecs, TRIGGER_ICONS, mdBreaks,
@@ -96,7 +96,7 @@ export default function Queue() {
 
   const refresh = useCallback(async () => {
     try {
-      const queue = await getTaskQueue()
+      const queue = await getTriggerQueue()
       setItems(queue)
       setSelected(prev => {
         if (!prev) return null
@@ -150,7 +150,7 @@ export default function Queue() {
       setIsStreaming(true)
 
       try {
-        const { abort, done } = streamTask(selected.id, (event) => {
+        const { abort, done } = streamTrigger(selected.id, (event) => {
           if (cancelled) return
           const type = event.type
           if (type === 'text' || type === 'assistant_complete') {
@@ -166,7 +166,7 @@ export default function Queue() {
             })
           } else if (type === 'done') {
             setIsStreaming(false)
-            getTaskOutput(selected.id).then(data => {
+            getTriggerOutput(selected.id).then(data => {
               if (!cancelled) setOutput(data)
             }).catch(() => {})
           } else if (type === 'error') {
@@ -177,7 +177,7 @@ export default function Queue() {
         done.catch(() => {
           if (!cancelled) {
             setIsStreaming(false)
-            getTaskOutput(selected.id).then(data => {
+            getTriggerOutput(selected.id).then(data => {
               if (!cancelled) setOutput(data)
             }).catch(() => {})
           }
@@ -194,7 +194,7 @@ export default function Queue() {
       setIsStreaming(false)
       const load = async () => {
         try {
-          const data = await getTaskOutput(selected.id)
+          const data = await getTriggerOutput(selected.id)
           if (!cancelled) setOutput(data)
         } catch { if (!cancelled) setOutput(null) }
       }
@@ -222,7 +222,7 @@ export default function Queue() {
   const handleApprove = async (id) => {
     setActionError('')
     try {
-      await approveTask(id)
+      await approveTrigger(id)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -232,7 +232,7 @@ export default function Queue() {
   const handleReject = async (id) => {
     setActionError('')
     try {
-      await rejectTask(id)
+      await rejectTrigger(id)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -241,7 +241,7 @@ export default function Queue() {
 
   const handleCancel = async (id) => {
     try {
-      await cancelTask(id)
+      await cancelTrigger(id)
       setConfirmCancel(null)
       await refresh()
       if (selected?.id === id) setSelected(null)
@@ -251,7 +251,7 @@ export default function Queue() {
   const handleMergePair = async (draggedId, targetId) => {
     setActionError('')
     try {
-      await mergeTasks([draggedId, targetId])
+      await mergeTriggers([draggedId, targetId])
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -261,7 +261,7 @@ export default function Queue() {
   const handleSplit = async (id) => {
     setActionError('')
     try {
-      await splitTask(id)
+      await splitTrigger(id)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -272,7 +272,7 @@ export default function Queue() {
     e.stopPropagation()
     setActionError('')
     try {
-      await uncoalesceTask(taskId)
+      await uncoalesceTrigger(taskId)
       await refresh()
     } catch (err) {
       setActionError(err.message)
@@ -282,7 +282,7 @@ export default function Queue() {
   const handleTransfer = async (id, toQueued) => {
     setActionError('')
     try {
-      await transferTask(id, toQueued)
+      await transferTrigger(id, toQueued)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -292,7 +292,7 @@ export default function Queue() {
   const handleResume = async (id) => {
     setActionError('')
     try {
-      await resumeTask(id)
+      await resumeTrigger(id)
       await refresh()
     } catch (e) {
       setActionError(e.message)
@@ -302,7 +302,7 @@ export default function Queue() {
   const handleReply = async (id, context) => {
     setActionError('')
     try {
-      await replyTask(id, context)
+      await replyTrigger(id, context)
       setReplyContext(null)
       await refresh()
     } catch (e) {
@@ -403,7 +403,7 @@ export default function Queue() {
             dragMode="reorder"
             selected={selected}
             onSelect={setSelected}
-            onReorder={reorderTasks}
+            onReorder={reorderTriggers}
             onTransfer={handleTransfer}
             onRefresh={refresh}
             activeItems={activeItems}
@@ -836,7 +836,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
   useEffect(() => {
     if (!item.completed_at || !item.start_commit || !item.result_commit || item.start_commit === item.result_commit) return
     let cancelled = false
-    getTaskOutcome(item.id).then(data => {
+    getTriggerOutcome(item.id).then(data => {
       if (!cancelled) setOutcomeSummary(data.summary)
     }).catch(() => {})
     return () => { cancelled = true }
@@ -847,7 +847,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
     if (!item.start_commit || !item.result_commit || item.start_commit === item.result_commit) return
     let cancelled = false
     setDiffLoading(true)
-    getTaskDiff(item.id).then(data => {
+    getTriggerDiff(item.id).then(data => {
       if (!cancelled) setDiffData(data)
     }).catch(() => {}).finally(() => {
       if (!cancelled) setDiffLoading(false)
@@ -860,7 +860,7 @@ function TaskDetail({ item, output, onUpdate, liveText, liveThinking, liveTools,
     setSaveError('')
     try {
       const targetId = selectedTrigger ?? item.id
-      await updateTask(targetId, { context: editingContext })
+      await updateTrigger(targetId, { context: editingContext })
       setEditingContext(null)
       if (onUpdate) await onUpdate()
       if (item.subordinate_count > 0) {
@@ -1145,7 +1145,7 @@ function WorkspaceBanner({ taskId, workspacePath, branch, errorDetail, onChange 
   const integrateWith = async (strategy, busyKey) => {
     setError(''); setBusy(busyKey); setPending(null)
     try {
-      await integrateTaskWorkspace(taskId, strategy)
+      await integrateTriggerWorkspace(taskId, strategy)
       if (onChange) await onChange()
     } catch (e) {
       setError(e.message)
@@ -1157,7 +1157,7 @@ function WorkspaceBanner({ taskId, workspacePath, branch, errorDetail, onChange 
   const handleDiscard = async () => {
     setError(''); setBusy('discard')
     try {
-      await discardTaskWorkspace(taskId)
+      await discardTriggerWorkspace(taskId)
       if (onChange) await onChange()
     } catch (e) {
       setError(e.message); setPending(null)

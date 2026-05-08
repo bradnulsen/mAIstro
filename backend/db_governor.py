@@ -8,7 +8,7 @@ audit trail, and the `governor_findings` user-facing feed.
 
 from backend.db_core import get_db
 from backend.db_config import get_config, set_config
-from backend.db_tasks import TERMINAL_STATUSES_SQL
+from backend.db_triggers import TERMINAL_STATUSES_SQL
 
 
 async def increment_governor_counter() -> int:

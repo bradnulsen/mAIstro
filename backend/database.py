@@ -4,7 +4,8 @@ Schema, connection, and CRUD helpers live in:
 - db_core         — connection management, schema, init
 - db_migrations   — isolated legacy-DB migrations (do NOT add new ones)
 - db_jobs         — job CRUD, EAV property system
-- db_tasks        — task lifecycle, state machine, coalescing
+- db_triggers     — trigger lifecycle, state machine, coalescing
+                    (renamed from db_tasks in Stage 1 of triggers-and-dispatches)
 - db_chat         — chat sessions, messages, raw event log
 - db_config       — config kv + MCP server registration
 - db_dashboard    — operational analytics queries
@@ -39,8 +40,8 @@ from backend.db_jobs import (
     update_job,
 )
 
-# ── Tasks (CRUD, state machine, coalescing) ────────────────
-from backend.db_tasks import (
+# ── Triggers (CRUD, state machine, coalescing) ─────────────
+from backend.db_triggers import (
     LEGAL_TRANSITIONS,
     NON_SUCCESS_TERMINAL_STATUSES,
     PRE_EXECUTION_STATUSES,
@@ -48,34 +49,34 @@ from backend.db_tasks import (
     TERMINAL_STATUSES,
     TERMINAL_STATUSES_SQL,
     apply_events,
-    approve_task,
+    approve_trigger,
     cascade_completion,
     coalesce_under,
     compute_durations_from_events,
-    enqueue_task,
+    enqueue_trigger,
     get_agent_dispatch_depth,
-    get_oldest_queued_task,
-    get_subordinate_tasks,
-    get_task,
-    get_task_events,
-    get_task_events_batch,
-    get_task_queue,
-    get_task_resolved,
-    get_task_status_from_events,
-    merge_tasks,
-    reject_task,
-    reorder_tasks,
-    split_task,
+    get_oldest_queued_trigger,
+    get_subordinate_triggers,
+    get_trigger,
+    get_trigger_events,
+    get_trigger_events_batch,
+    get_trigger_queue,
+    get_trigger_resolved,
+    get_trigger_status_from_events,
+    merge_triggers,
+    reject_trigger,
+    reorder_triggers,
+    split_trigger,
     status_from_events,
-    sweep_stale_tasks,
+    sweep_stale_triggers,
     timestamps_from_events,
-    transfer_all_tasks,
-    transfer_task,
-    transition_task,
-    transition_tasks_batch,
-    uncoalesce_task,
-    update_task,
-    update_tasks_batch,
+    transfer_all_triggers,
+    transfer_trigger,
+    transition_trigger,
+    transition_triggers_batch,
+    uncoalesce_trigger,
+    update_trigger,
+    update_triggers_batch,
 )
 
 # ── Chat ───────────────────────────────────────────────────

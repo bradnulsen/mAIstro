@@ -56,7 +56,7 @@ def build_mcp_config(
                 "MAISTRO_WORKSPACE_DIR": workspace_dir or project_dir,
                 "MAISTRO_SESSION_ID": session_id,
                 "MAISTRO_BACKEND_PORT": str(backend_port),
-                "MAISTRO_TASK_ID": str(task_id or ""),
+                "MAISTRO_TRIGGER_ID": str(task_id or ""),
                 "MAISTRO_ALLOWED_INTERNAL_TOOLS": allowed_internal,
                 "MAISTRO_ALLOWED_DISPATCH_TARGETS": allowed_dispatch,
                 "MAISTRO_ALLOW_LEARNING_WRITES": allow_learning_writes,

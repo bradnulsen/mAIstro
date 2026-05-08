@@ -1,15 +1,20 @@
-"""Task lifecycle: CRUD, state machine, event log, coalescing.
+"""Trigger lifecycle: CRUD, state machine, event log, coalescing.
 
-Tasks are atomic units of work — exactly one trigger, one context, one job.
-They are never mutated after creation; reply and resume create new tasks
+Triggers are atomic units of work — exactly one kind, one context, one job.
+They are never mutated after creation; reply and resume create new triggers
 that coalesce the original via the `coalesced_id` FK. The status state
-machine is authoritative: every transition goes through `transition_task`
-(or `transition_tasks_batch`) which validates the source→target pair,
+machine is authoritative: every transition goes through `transition_trigger`
+(or `transition_triggers_batch`) which validates the source→target pair,
 writes a `task_events` row, and updates the materialized status column.
 
-Coalescing maintains a depth-1 invariant — enforced by triggers in
+Coalescing maintains a depth-1 invariant — enforced by SQLite triggers in
 SCHEMA_SQL and re-asserted in code via `_flatten_coalesce` whenever a
-task is re-parented.
+trigger is re-parented.
+
+Note: SQL table names (`tasks`, `task_events`, `task_executions`) reflect
+Stage 1 of the triggers-and-dispatches refactor — Python identifiers have
+been renamed but SQL strings continue to reference the legacy table names.
+The schema rename is Stage 2+ (deferred).
 """
 
 import json
@@ -39,7 +44,7 @@ _OUTCOME_FIELDS = frozenset({
 # Reusable SELECT fragment that pulls every execution column out of a
 # LEFT JOIN aliased as `te`. Used so callers' returned dicts include the
 # same keys they had before normalization.
-_TASK_EXECUTION_SELECT = (
+_DISPATCH_SELECT = (
     "te.session_id, te.start_commit, te.result_commit, "
     "te.stop_reason, te.num_turns, te.cost_usd, "
     "te.started_at, te.completed_at, te.error, "
@@ -47,7 +52,7 @@ _TASK_EXECUTION_SELECT = (
 )
 
 
-async def upsert_execution(task_id: int, conn=None, _commit: bool = True, **fields):
+async def upsert_dispatch(trigger_id: int, conn=None, _commit: bool = True, **fields):
     """Create or update the per-task execution row.
 
     Insert-or-update on `task_executions` keyed by task_id. The first call
@@ -59,7 +64,7 @@ async def upsert_execution(task_id: int, conn=None, _commit: bool = True, **fiel
         return
     bad = set(fields) - _OUTCOME_FIELDS
     if bad:
-        raise ValueError(f"upsert_execution: unknown outcome fields {bad}")
+        raise ValueError(f"upsert_dispatch: unknown outcome fields {bad}")
     if conn is None:
         conn = await get_db()
     cols = list(fields.keys())
@@ -70,12 +75,12 @@ async def upsert_execution(task_id: int, conn=None, _commit: bool = True, **fiel
         f"VALUES ({placeholders}) "
         f"ON CONFLICT(task_id) DO UPDATE SET {set_clause}"
     )
-    await conn.execute(sql, [task_id] + [fields[c] for c in cols])
+    await conn.execute(sql, [trigger_id] + [fields[c] for c in cols])
     if _commit:
         await conn.commit()
 
 
-async def enqueue_task(job_id: int, trigger: str,
+async def enqueue_trigger(job_id: int, trigger: str,
                        trigger_detail: str | None = None,
                        context: str | None = None) -> int:
     """Enqueue an atomic task. Coalescing links via coalesced_id instead of mutating data.
@@ -156,7 +161,7 @@ async def enqueue_task(job_id: int, trigger: str,
     return root_id if root_id is not None else new_id
 
 
-async def get_task(task_id: int) -> dict | None:
+async def get_trigger(trigger_id: int) -> dict | None:
     """Read a task with its execution row (if it ran) joined.
 
     Identity-mode read: returns this task's own data without coalescing
@@ -166,21 +171,21 @@ async def get_task(task_id: int) -> dict | None:
     db = await get_db()
     rows = await db.execute_fetchall(
         f"""SELECT t.*, j.name as job_name,
-                  {_TASK_EXECUTION_SELECT}
+                  {_DISPATCH_SELECT}
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
            LEFT JOIN task_executions te ON te.task_id = t.id
            WHERE t.id = ?""",
-        (task_id,)
+        (trigger_id,)
     )
     if not rows:
         return None
     task = dict(rows[0])
-    apply_events(task, await get_task_events(task_id, db))
+    apply_events(task, await get_trigger_events(trigger_id, db))
     return task
 
 
-async def get_task_resolved(task_id: int) -> dict | None:
+async def get_trigger_resolved(trigger_id: int) -> dict | None:
     """Read a task through the tasks_resolved view.
 
     Outcome columns (session_id, start_commit, result_commit, num_turns,
@@ -196,16 +201,16 @@ async def get_task_resolved(task_id: int) -> dict | None:
     db = await get_db()
     rows = await db.execute_fetchall(
         "SELECT t.*, j.name as job_name FROM tasks_resolved t JOIN jobs j ON j.id = t.job_id WHERE t.id = ?",
-        (task_id,)
+        (trigger_id,)
     )
     if not rows:
         return None
     task = dict(rows[0])
-    apply_events(task, await get_task_events(task_id, db))
+    apply_events(task, await get_trigger_events(trigger_id, db))
     return task
 
 
-async def get_agent_dispatch_depth(task_id: int) -> int:
+async def get_agent_dispatch_depth(trigger_id: int) -> int:
     """Trace the agent dispatch chain back from a task and return its depth.
 
     Each agent-triggered task has trigger_detail of format 'source_job_id#source_task_id'.
@@ -214,7 +219,7 @@ async def get_agent_dispatch_depth(task_id: int) -> int:
     """
     conn = await get_db()
     depth = 0
-    current_id = task_id
+    current_id = trigger_id
     seen = set()
     while current_id and current_id not in seen:
         seen.add(current_id)
@@ -238,12 +243,12 @@ async def get_agent_dispatch_depth(task_id: int) -> int:
     return depth
 
 
-async def get_task_queue(limit: int = 50) -> list[dict]:
+async def get_trigger_queue(limit: int = 50) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
         f"""SELECT t.*, j.name as job_name,
                   COUNT(sub.id) as subordinate_count,
-                  {_TASK_EXECUTION_SELECT}
+                  {_DISPATCH_SELECT}
            FROM tasks t
            JOIN jobs j ON j.id = t.job_id
            LEFT JOIN tasks sub ON sub.coalesced_id = t.id
@@ -256,7 +261,7 @@ async def get_task_queue(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def get_oldest_queued_task() -> dict | None:
+async def get_oldest_queued_trigger() -> dict | None:
     """Get the highest-priority queued task (skips pending, approval-pending, and subordinates)."""
     db = await get_db()
     rows = await db.execute_fetchall(
@@ -271,7 +276,7 @@ async def get_oldest_queued_task() -> dict | None:
     return dict(rows[0]) if rows else None
 
 
-async def update_task(task_id: int, _commit: bool = True, **kwargs):
+async def update_trigger(trigger_id: int, _commit: bool = True, **kwargs):
     """Update fields on a task, routing outcome fields to its execution row.
 
     Tasks-table columns and task_executions columns get directed to the
@@ -282,37 +287,37 @@ async def update_task(task_id: int, _commit: bool = True, **kwargs):
     task_kwargs = {k: kwargs[k] for k in kwargs if k not in _OUTCOME_FIELDS}
     if task_kwargs:
         sets = ", ".join(f"{k} = ?" for k in task_kwargs)
-        vals = list(task_kwargs.values()) + [task_id]
+        vals = list(task_kwargs.values()) + [trigger_id]
         await db.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
     if exec_kwargs:
-        await upsert_execution(task_id, conn=db, _commit=False, **exec_kwargs)
+        await upsert_dispatch(trigger_id, conn=db, _commit=False, **exec_kwargs)
     if _commit:
         await db.commit()
 
 
-async def update_tasks_batch(task_ids: list[int], **kwargs):
+async def update_triggers_batch(trigger_ids: list[int], **kwargs):
     """Update multiple tasks with the same field values in a single statement.
 
     Routes outcome fields to per-task execution rows. Always commits —
-    even when task_ids is empty — to flush any prior uncommitted writes
+    even when trigger_ids is empty — to flush any prior uncommitted writes
     in the same transaction.
     """
     db = await get_db()
     exec_kwargs = {k: kwargs[k] for k in kwargs if k in _OUTCOME_FIELDS}
     task_kwargs = {k: kwargs[k] for k in kwargs if k not in _OUTCOME_FIELDS}
-    if task_ids:
+    if trigger_ids:
         if task_kwargs:
             sets = ", ".join(f"{k} = ?" for k in task_kwargs)
-            placeholders = ",".join("?" * len(task_ids))
-            vals = list(task_kwargs.values()) + list(task_ids)
+            placeholders = ",".join("?" * len(trigger_ids))
+            vals = list(task_kwargs.values()) + list(trigger_ids)
             await db.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
         if exec_kwargs:
-            for tid in task_ids:
-                await upsert_execution(tid, conn=db, _commit=False, **exec_kwargs)
+            for tid in trigger_ids:
+                await upsert_dispatch(tid, conn=db, _commit=False, **exec_kwargs)
     await db.commit()
 
 
-# ── Task Status State Machine ─────────────────────────────
+# ── Trigger Status State Machine ──────────────────────────
 
 # Legal transitions: (current_status, new_status) -> allowed
 LEGAL_TRANSITIONS: set[tuple[str, str]] = {
@@ -388,7 +393,7 @@ _EVENT_TO_STATUS = {
 _STATUS_EVENTS = frozenset(_EVENT_TO_STATUS.keys())
 
 
-async def get_task_status_from_events(task_id: int, conn=None) -> str | None:
+async def get_trigger_status_from_events(trigger_id: int, conn=None) -> str | None:
     """Derive current task status from the latest lifecycle event.
 
     Returns None if the task has no events.
@@ -398,14 +403,14 @@ async def get_task_status_from_events(task_id: int, conn=None) -> str | None:
     placeholders = ",".join(f"'{e}'" for e in _STATUS_EVENTS)
     rows = await conn.execute_fetchall(
         f"SELECT event FROM task_events WHERE task_id = ? AND event IN ({placeholders}) ORDER BY id DESC LIMIT 1",
-        (task_id,)
+        (trigger_id,)
     )
     if not rows:
         return None
     return _EVENT_TO_STATUS[rows[0]["event"]]
 
 
-async def _resolve_task_status(task_id: int, conn) -> str:
+async def _resolve_trigger_status(trigger_id: int, conn) -> str:
     """Get current task status, backfilling from the status column if no events exist.
 
     Tasks created before task_events was introduced have no events. This
@@ -413,19 +418,19 @@ async def _resolve_task_status(task_id: int, conn) -> str:
     Raises ValueError if the task doesn't exist.
     """
     from backend.state import utcnow
-    status = await get_task_status_from_events(task_id, conn)
+    status = await get_trigger_status_from_events(trigger_id, conn)
     if status is not None:
         return status
-    rows = await conn.execute_fetchall("SELECT status FROM tasks WHERE id = ?", (task_id,))
+    rows = await conn.execute_fetchall("SELECT status FROM tasks WHERE id = ?", (trigger_id,))
     if not rows:
-        raise ValueError(f"Task #{task_id} not found")
+        raise ValueError(f"Trigger #{trigger_id} not found")
     status = rows[0]["status"]
     synth_event = _STATUS_TO_EVENT.get(status, status)
     await conn.execute(
         "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
-        (task_id, synth_event, "backfilled", utcnow())
+        (trigger_id, synth_event, "backfilled", utcnow())
     )
-    log.warning("[database] Task #%d had no events — backfilled from status=%s", task_id, status)
+    log.warning("[database] Trigger #%d had no events — backfilled from status=%s", trigger_id, status)
     return status
 
 # Map status to the timestamp column that should be set on transition.
@@ -443,7 +448,7 @@ _STATUS_TIMESTAMP = {
     "rejected": "completed_at",
 }
 
-_TASK_TIMESTAMP_COLS = frozenset({"queued_at"})  # remaining on tasks
+_TRIGGER_TIMESTAMP_COLS = frozenset({"queued_at"})  # remaining on tasks
 # Other timestamps (started_at, completed_at) are routed to task_executions
 # via the _OUTCOME_FIELDS membership check.
 
@@ -468,7 +473,7 @@ def _build_event_detail(new_status: str, fields: dict) -> str | None:
     return None
 
 
-async def transition_task(task_id: int, new_status: str, _commit: bool = True, **fields):
+async def transition_trigger(trigger_id: int, new_status: str, _commit: bool = True, **fields):
     """Transition a task to a new status with validation.
 
     All status changes must go through this function. Status + queue
@@ -483,11 +488,11 @@ async def transition_task(task_id: int, new_status: str, _commit: bool = True, *
     Raises ValueError if the transition is illegal.
     """
     conn = await get_db()
-    current_status = await _resolve_task_status(task_id, conn)
+    current_status = await _resolve_trigger_status(trigger_id, conn)
 
     if (current_status, new_status) not in LEGAL_TRANSITIONS:
         raise ValueError(
-            f"Illegal transition for task #{task_id}: {current_status} → {new_status}"
+            f"Illegal transition for trigger #{trigger_id}: {current_status} → {new_status}"
         )
 
     from backend.state import utcnow
@@ -521,17 +526,17 @@ async def transition_task(task_id: int, new_status: str, _commit: bool = True, *
         # Event log: the source of truth.
         await conn.execute(
             "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
-            (task_id, event_type, event_detail, event_ts)
+            (trigger_id, event_type, event_detail, event_ts)
         )
 
         # Materialized status + queue placement on tasks.
         sets = ", ".join(f"{k} = ?" for k in task_updates)
-        vals = list(task_updates.values()) + [task_id]
+        vals = list(task_updates.values()) + [trigger_id]
         await conn.execute(f"UPDATE tasks SET {sets} WHERE id = ?", vals)
 
         # Execution data on its own row (insert-or-update on task_id).
         if exec_fields:
-            await upsert_execution(task_id, conn=conn, _commit=False, **exec_fields)
+            await upsert_dispatch(trigger_id, conn=conn, _commit=False, **exec_fields)
 
         if _commit:
             await conn.commit()
@@ -542,11 +547,11 @@ async def transition_task(task_id: int, new_status: str, _commit: bool = True, *
         try:
             await conn.rollback()
         except Exception:
-            log.exception("[database] rollback after transition_task failure also failed")
+            log.exception("[database] rollback after transition_trigger failure also failed")
         raise
 
 
-async def transition_tasks_batch(task_ids: list[int], new_status: str, **fields):
+async def transition_triggers_batch(trigger_ids: list[int], new_status: str, **fields):
     """Transition multiple tasks to the same new status.
 
     Skips validation per-task for performance — caller is responsible for
@@ -555,7 +560,7 @@ async def transition_tasks_batch(task_ids: list[int], new_status: str, **fields)
     rows; status + queue placement are written to `tasks`. Wrapped in a
     transaction with rollback on failure.
     """
-    if not task_ids:
+    if not trigger_ids:
         return
     conn = await get_db()
     from backend.state import utcnow
@@ -583,30 +588,30 @@ async def transition_tasks_batch(task_ids: list[int], new_status: str, **fields)
     try:
         await conn.executemany(
             "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
-            [(tid, event_type, event_detail, event_ts) for tid in task_ids]
+            [(tid, event_type, event_detail, event_ts) for tid in trigger_ids]
         )
 
         sets = ", ".join(f"{k} = ?" for k in task_updates)
-        placeholders = ",".join("?" * len(task_ids))
-        vals = list(task_updates.values()) + list(task_ids)
+        placeholders = ",".join("?" * len(trigger_ids))
+        vals = list(task_updates.values()) + list(trigger_ids)
         await conn.execute(f"UPDATE tasks SET {sets} WHERE id IN ({placeholders})", vals)
 
         if exec_fields:
-            for tid in task_ids:
-                await upsert_execution(tid, conn=conn, _commit=False, **exec_fields)
+            for tid in trigger_ids:
+                await upsert_dispatch(tid, conn=conn, _commit=False, **exec_fields)
 
         await conn.commit()
     except Exception:
         try:
             await conn.rollback()
         except Exception:
-            log.exception("[database] rollback after transition_tasks_batch failure also failed")
+            log.exception("[database] rollback after transition_triggers_batch failure also failed")
         raise
 
 
-# ── Task Event Queries ────────────────────────────────────
+# ── Trigger Event Queries ─────────────────────────────────
 
-async def get_task_events(task_id: int, conn=None) -> list[dict]:
+async def get_trigger_events(trigger_id: int, conn=None) -> list[dict]:
     """Full event chain for a task, ordered chronologically.
 
     This is the canonical read — every event the task has ever experienced,
@@ -616,24 +621,24 @@ async def get_task_events(task_id: int, conn=None) -> list[dict]:
         conn = await get_db()
     rows = await conn.execute_fetchall(
         "SELECT event, detail, created_at FROM task_events WHERE task_id = ? ORDER BY id ASC",
-        (task_id,)
+        (trigger_id,)
     )
     return [dict(r) for r in rows]
 
 
-async def get_task_events_batch(task_ids: list[int], conn=None) -> dict[int, list[dict]]:
-    """Full event chains for multiple tasks, keyed by task_id.
+async def get_trigger_events_batch(trigger_ids: list[int], conn=None) -> dict[int, list[dict]]:
+    """Full event chains for multiple triggers, keyed by trigger_id.
 
     Same as get_task_events but batched — one query instead of N.
     """
-    if not task_ids:
+    if not trigger_ids:
         return {}
     if conn is None:
         conn = await get_db()
-    placeholders = ",".join("?" * len(task_ids))
+    placeholders = ",".join("?" * len(trigger_ids))
     rows = await conn.execute_fetchall(
         f"SELECT task_id, event, detail, created_at FROM task_events WHERE task_id IN ({placeholders}) ORDER BY id ASC",
-        task_ids
+        trigger_ids
     )
     result: dict[int, list[dict]] = {}
     for r in rows:
@@ -741,21 +746,21 @@ def compute_durations_from_events(events: list[dict]) -> dict:
     }
 
 
-async def transfer_task(task_id: int, to_queued: bool):
+async def transfer_trigger(trigger_id: int, to_queued: bool):
     """Move a task between pending and queued columns. Sets or clears queued_at.
     Also transfers subordinate tasks to maintain group cohesion."""
     from backend.state import utcnow
     db = await get_db()
     rows = await db.execute_fetchall(
         "SELECT id, coalesced_id FROM tasks WHERE id = ?",
-        (task_id,)
+        (trigger_id,)
     )
     if not rows:
-        raise ValueError("Task not found")
+        raise ValueError("Trigger not found")
     task = rows[0]
-    current_status = await _resolve_task_status(task_id, db)
+    current_status = await _resolve_trigger_status(trigger_id, db)
     if current_status not in PRE_EXECUTION_STATUSES:
-        raise ValueError("Can only transfer pre-execution tasks")
+        raise ValueError("Can only transfer pre-execution triggers")
     if task["coalesced_id"] is not None:
         raise ValueError("Cannot transfer a subordinate — transfer its root instead")
 
@@ -767,22 +772,22 @@ async def transfer_task(task_id: int, to_queued: bool):
     # Transfer root and all subordinates; clear sort_order (append to end of target column)
     await db.execute(
         "UPDATE tasks SET status = ?, queued_at = ?, sort_order = NULL WHERE id = ?",
-        (new_status, queued_at, task_id)
+        (new_status, queued_at, trigger_id)
     )
     # Dual-write: event for the root task
     await db.execute(
         "INSERT INTO task_events (task_id, event, created_at) VALUES (?, ?, ?)",
-        (task_id, event_type, now)
+        (trigger_id, event_type, now)
     )
 
     # Transfer subordinates
     sub_rows = await db.execute_fetchall(
         f"SELECT id FROM tasks WHERE coalesced_id = ? AND status IN {PRE_EXECUTION_STATUSES_SQL}",
-        (task_id,)
+        (trigger_id,)
     )
     await db.execute(
         f"UPDATE tasks SET status = ?, queued_at = ? WHERE coalesced_id = ? AND status IN {PRE_EXECUTION_STATUSES_SQL}",
-        (new_status, queued_at, task_id)
+        (new_status, queued_at, trigger_id)
     )
     # Dual-write: events for subordinates
     if sub_rows:
@@ -792,10 +797,10 @@ async def transfer_task(task_id: int, to_queued: bool):
         )
 
     await db.commit()
-    return task_id
+    return trigger_id
 
 
-async def transfer_all_tasks(to_queued: bool) -> int:
+async def transfer_all_triggers(to_queued: bool) -> int:
     """Batch transfer: all pending→queued or all queued→pending.
 
     Skips subordinate tasks — they follow their root.
@@ -854,48 +859,48 @@ async def transfer_all_tasks(to_queued: bool) -> int:
     return len(root_ids)
 
 
-async def reorder_tasks(task_ids: list[int]):
+async def reorder_triggers(trigger_ids: list[int]):
     """Set explicit sort_order on pending tasks to control execution priority."""
     db = await get_db()
     await db.executemany(
         f"UPDATE tasks SET sort_order = ? WHERE id = ? AND status IN {PRE_EXECUTION_STATUSES_SQL}",
-        [(i, tid) for i, tid in enumerate(task_ids)],
+        [(i, tid) for i, tid in enumerate(trigger_ids)],
     )
     await db.commit()
 
 
 # ── Coalescing ────────────────────────────────────────────
 
-async def _flatten_coalesce(conn: aiosqlite.Connection, task_id: int, new_root_id: int):
-    """Re-point any subordinates of task_id to new_root_id instead.
+async def _flatten_coalesce(conn: aiosqlite.Connection, trigger_id: int, new_root_id: int):
+    """Re-point any subordinates of trigger_id to new_root_id instead.
 
-    This must run BEFORE setting task_id.coalesced_id = new_root_id —
+    This must run BEFORE setting trigger_id.coalesced_id = new_root_id —
     otherwise the depth-1 trigger fires on the transient depth-2 state
-    where task_id is a subordinate but still has its own subordinates.
+    where trigger_id is a subordinate but still has its own subordinates.
     """
     await conn.execute(
         "UPDATE tasks SET coalesced_id = ? WHERE coalesced_id = ?",
-        (new_root_id, task_id)
+        (new_root_id, trigger_id)
     )
 
 
-async def coalesce_under(task_id: int, new_root_id: int):
-    """Coalesce task_id (and any of its subordinates) under new_root_id.
+async def coalesce_under(trigger_id: int, new_root_id: int):
+    """Coalesce trigger_id (and any of its subordinates) under new_root_id.
 
     Order matters: flatten first (subordinates re-point to new root) so
-    that when task_id itself is demoted to a subordinate, it has no
+    that when trigger_id itself is demoted to a subordinate, it has no
     subordinates of its own. Preserves depth-1 at every intermediate state.
     """
     conn = await get_db()
-    await _flatten_coalesce(conn, task_id, new_root_id)
+    await _flatten_coalesce(conn, trigger_id, new_root_id)
     await conn.execute(
         "UPDATE tasks SET coalesced_id = ? WHERE id = ?",
-        (new_root_id, task_id)
+        (new_root_id, trigger_id)
     )
     await conn.commit()
 
 
-async def get_subordinate_tasks(root_id: int) -> list[dict]:
+async def get_subordinate_triggers(root_id: int) -> list[dict]:
     """Return all tasks with coalesced_id pointing to root_id."""
     db = await get_db()
     rows = await db.execute_fetchall(
@@ -917,45 +922,45 @@ async def cascade_completion(root_id: int, terminal_status: str, **fields) -> li
 
     Returns the list of subordinate IDs that were transitioned.
     """
-    fresh_subs = await get_subordinate_tasks(root_id)
+    fresh_subs = await get_subordinate_triggers(root_id)
     sub_ids = [s["id"] for s in fresh_subs if s.get("status") not in TERMINAL_STATUSES]
     if sub_ids:
-        await transition_tasks_batch(sub_ids, terminal_status, **fields)
+        await transition_triggers_batch(sub_ids, terminal_status, **fields)
     return sub_ids
 
 
-async def merge_tasks(task_ids: list[int]) -> int:
+async def merge_triggers(trigger_ids: list[int]) -> int:
     """Merge pending same-job tasks. Returns root task ID."""
-    if len(task_ids) < 2:
-        raise ValueError("Need at least 2 tasks to merge")
+    if len(trigger_ids) < 2:
+        raise ValueError("Need at least 2 triggers to merge")
 
     db = await get_db()
-    placeholders = ",".join("?" * len(task_ids))
+    placeholders = ",".join("?" * len(trigger_ids))
     rows = await db.execute_fetchall(
         f"""SELECT id, job_id, approval, coalesced_id, created_at
             FROM tasks WHERE id IN ({placeholders})
             ORDER BY created_at ASC""",
-        task_ids,
+        trigger_ids,
     )
 
-    if len(rows) != len(task_ids):
-        raise ValueError("Some task IDs not found")
+    if len(rows) != len(trigger_ids):
+        raise ValueError("Some trigger IDs not found")
 
-    events_by_task = await get_task_events_batch(task_ids, db)
+    events_by_task = await get_trigger_events_batch(trigger_ids, db)
 
     job_ids = set()
     for r in rows:
         task_status = status_from_events(events_by_task.get(r["id"], []))
         if task_status != "pending":
-            raise ValueError(f"Task #{r['id']} is not pending — merge is a pending-column operation")
+            raise ValueError(f"Trigger #{r['id']} is not pending — merge is a pending-column operation")
         if r["approval"] == "pending":
-            raise ValueError(f"Task #{r['id']} is pending approval")
+            raise ValueError(f"Trigger #{r['id']} is pending approval")
         if r["coalesced_id"] is not None:
-            raise ValueError(f"Task #{r['id']} is already a subordinate")
+            raise ValueError(f"Trigger #{r['id']} is already a subordinate")
         job_ids.add(r["job_id"])
 
     if len(job_ids) > 1:
-        raise ValueError("Cannot merge tasks from different jobs")
+        raise ValueError("Cannot merge triggers from different jobs")
 
     root_id = rows[0]["id"]
     sub_ids = [r["id"] for r in rows[1:]]
@@ -976,7 +981,7 @@ async def merge_tasks(task_ids: list[int]) -> int:
     return root_id
 
 
-async def split_task(root_id: int) -> list[int]:
+async def split_trigger(root_id: int) -> list[int]:
     """Split a root task — make all subordinates independent again."""
     db = await get_db()
 
@@ -985,19 +990,19 @@ async def split_task(root_id: int) -> list[int]:
         (root_id,)
     )
     if not root_rows:
-        raise ValueError("Task not found")
+        raise ValueError("Trigger not found")
     root = root_rows[0]
     if root["coalesced_id"] is not None:
-        raise ValueError("Task is a subordinate, not a root")
-    root_status = await get_task_status_from_events(root_id, db)
+        raise ValueError("Trigger is a subordinate, not a root")
+    root_status = await get_trigger_status_from_events(root_id, db)
     if root_status != "pending":
-        raise ValueError("Can only split pending tasks — split is a pending-column operation")
+        raise ValueError("Can only split pending triggers — split is a pending-column operation")
 
     sub_rows = await db.execute_fetchall(
         "SELECT id FROM tasks WHERE coalesced_id = ?", (root_id,)
     )
     if not sub_rows:
-        raise ValueError("No subordinate tasks to split")
+        raise ValueError("No subordinate triggers to split")
 
     sub_ids = [r["id"] for r in sub_rows]
 
@@ -1031,25 +1036,25 @@ async def split_task(root_id: int) -> list[int]:
     return sub_ids
 
 
-async def uncoalesce_task(task_id: int) -> int:
+async def uncoalesce_trigger(trigger_id: int) -> int:
     """Remove a single subordinate from its coalesce group, making it independent."""
     db = await get_db()
 
     rows = await db.execute_fetchall(
         "SELECT id, job_id, coalesced_id FROM tasks WHERE id = ?",
-        (task_id,)
+        (trigger_id,)
     )
     if not rows:
-        raise ValueError("Task not found")
+        raise ValueError("Trigger not found")
     task = rows[0]
     if not task["coalesced_id"]:
-        raise ValueError("Task is not a subordinate — use split on the root task")
-    task_status = await get_task_status_from_events(task_id, db)
+        raise ValueError("Trigger is not a subordinate — use split on the root trigger")
+    task_status = await get_trigger_status_from_events(trigger_id, db)
     if task_status not in PRE_EXECUTION_STATUSES:
-        raise ValueError("Can only uncoalesce pre-execution tasks")
+        raise ValueError("Can only uncoalesce pre-execution triggers")
 
     # Verify root is in pending (uncoalesce is a pending-column operation)
-    root_status = await get_task_status_from_events(task["coalesced_id"], db)
+    root_status = await get_trigger_status_from_events(task["coalesced_id"], db)
     if root_status is not None and root_status != "pending":
         raise ValueError("Can only uncoalesce from a pending root — split is a pending-column operation")
 
@@ -1066,20 +1071,20 @@ async def uncoalesce_task(task_id: int) -> int:
     # Freed task always lands in pending (uncoalesce is a pending-column operation)
     await db.execute(
         "UPDATE tasks SET coalesced_id = NULL, sort_order = NULL, created_at = ?, status = 'pending', approval = ?, queued_at = NULL WHERE id = ?",
-        (now, approval_val, task_id),
+        (now, approval_val, trigger_id),
     )
 
     # Lifecycle event: freed task resets to pending
     await db.execute(
         "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'restored', ?)",
-        (task_id, now)
+        (trigger_id, now)
     )
 
     await db.commit()
-    return task_id
+    return trigger_id
 
 
-async def sweep_stale_tasks(now: str):
+async def sweep_stale_triggers(now: str):
     """Mark any in-flight tasks as interrupted (e.g. after restart).
 
     Uses transition_task for each stale task so the event log records
@@ -1092,12 +1097,12 @@ async def sweep_stale_tasks(now: str):
     if not rows:
         return []
     ids = [row["id"] for row in rows]
-    for task_id in ids:
-        await transition_task(task_id, "interrupted", error="interrupted", completed_at=now)
+    for trigger_id in ids:
+        await transition_trigger(trigger_id, "interrupted", error="interrupted", completed_at=now)
     return ids
 
 
-async def approve_task(task_id: int) -> bool:
+async def approve_trigger(trigger_id: int) -> bool:
     """Approve a pending-approval task (and its subordinates).
 
     No task_event is written here: approval is orthogonal to status — an
@@ -1109,13 +1114,13 @@ async def approve_task(task_id: int) -> bool:
     cursor = await db.execute(
         "UPDATE tasks SET approval = 'approved'"
         " WHERE (id = ? OR coalesced_id = ?) AND approval = 'pending'",
-        (task_id, task_id)
+        (trigger_id, trigger_id)
     )
     await db.commit()
     return cursor.rowcount > 0
 
 
-async def reject_task(task_id: int) -> bool:
+async def reject_trigger(trigger_id: int) -> bool:
     """Reject a pending-approval task (and its subordinates).
 
     Uses transition_task so the event log records each rejection.
@@ -1124,16 +1129,16 @@ async def reject_task(task_id: int) -> bool:
     # Find all tasks in the coalesce group with pending approval
     rows = await db.execute_fetchall(
         "SELECT id FROM tasks WHERE (id = ? OR coalesced_id = ?) AND approval = 'pending'",
-        (task_id, task_id)
+        (trigger_id, trigger_id)
     )
     if not rows:
         return False
     for row in rows:
         tid = row["id"]
         try:
-            await transition_task(tid, "rejected", error="rejected")
+            await transition_trigger(tid, "rejected", error="rejected")
         except ValueError:
-            log.warning("[database] reject_task: task #%d already terminal — skipping", tid)
+            log.warning("[database] reject_trigger: trigger #%d already terminal — skipping", tid)
             continue
         await db.execute(
             "UPDATE tasks SET approval = 'rejected' WHERE id = ?", (tid,)

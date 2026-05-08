@@ -1,7 +1,13 @@
-"""Background queue worker — processes tasks one at a time.
+"""Background queue worker — processes triggers one at a time.
 
 The worker is the only code path that invokes run_task.
-All feeders (manual, watch, timer) just create task records.
+All feeders (manual, watch, timer) just create trigger records.
+
+Stage 1 note: identifiers below use the trigger/dispatch vocabulary,
+but SQL string literals continue to reference the legacy `tasks` /
+`task_executions` table names and many internal Python variables
+(`task_id`, `task_branch`) keep their old names. The schema rename
+and full identifier polish are Stage 2+ of triggers-and-dispatches.
 """
 
 import asyncio
@@ -52,7 +58,7 @@ _cancel_event: asyncio.Event | None = None
 
 
 
-def get_active_task_id() -> int | None:
+def get_active_dispatch_id() -> int | None:
     """Return the task ID currently being processed, or None."""
     return _active_task_id
 
@@ -89,7 +95,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
     if not start_commit or worktree_head == start_commit:
         if await git.is_dirty(workspace_dir):
             err = "agent left uncommitted changes in the worktree"
-            await db.transition_task(task_id, "failed",
+            await db.transition_trigger(task_id, "failed",
                                      result_commit=worktree_head,
                                      error=err, **meta_fields)
             await db.cascade_completion(task_id, "failed",
@@ -103,14 +109,14 @@ async def _integrate_or_fail(task_id: int, job: dict,
         # range to downstream cascade-trigger jobs would just produce a
         # chain of identical no-ops at real CLI cost. Cascades require
         # actual work to react to.
-        await db.transition_task(task_id, "completed",
+        await db.transition_trigger(task_id, "completed",
                                  result_commit=start_commit, **meta_fields)
         await db.cascade_completion(task_id, "completed",
                                     result_commit=start_commit)
         log.info("[worker] Task #%d completed with no commits (no-op outcome, cascades suppressed)", task_id)
         await _force_remove_worktree(project_dir, workspace_dir)
         await git.branch_delete(project_dir, task_branch, force=True)
-        await db.update_task(task_id, worktree_path=None, task_branch=None)
+        await db.update_trigger(task_id, worktree_path=None, task_branch=None)
         await _check_governor_trigger(task_id)
         return
 
@@ -122,7 +128,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
         dedup_label=f"pre-integrate task-{task_id}",
     )
     if not ok:
-        await db.transition_task(task_id, "failed",
+        await db.transition_trigger(task_id, "failed",
                                  result_commit=worktree_head,
                                  error=err, **meta_fields)
         await db.cascade_completion(task_id, "failed",
@@ -133,7 +139,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
         return
 
     integrated_head = await git.head_hash(project_dir) or worktree_head
-    await db.transition_task(task_id, "completed",
+    await db.transition_trigger(task_id, "completed",
                              result_commit=integrated_head,
                              **meta_fields)
     await db.cascade_completion(task_id, "completed",
@@ -144,7 +150,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
     # Workspace + branch are no longer needed — discard them.
     await _force_remove_worktree(project_dir, workspace_dir)
     await git.branch_delete(project_dir, task_branch, force=True)
-    await db.update_task(task_id, worktree_path=None, task_branch=None)
+    await db.update_trigger(task_id, worktree_path=None, task_branch=None)
 
     await _enqueue_cascades(job_id, task_id,
                             job_name=job["name"],
@@ -238,17 +244,17 @@ def cancel(task_id: int) -> bool:
 async def process_one(task_id: int) -> dict | None:
     """Manually process a specific pending task by ID."""
     async with _lock:
-        task = await db.get_task(task_id)
+        task = await db.get_trigger(task_id)
         if not task:
             return None
         if task.get("status") not in db.PRE_EXECUTION_STATUSES:
             return None
         if task.get("approval") == "pending":
-            await db.approve_task(task_id)
+            await db.approve_trigger(task_id)
         # Ensure task is queued before processing (transition validates legality)
         if task.get("status") == "pending":
-            await db.transition_task(task_id, "queued")
-        await _process_task(task)
+            await db.transition_trigger(task_id, "queued")
+        await _process_trigger(task)
         return task
 
 
@@ -267,7 +273,7 @@ async def _sweep_stale():
     """
     if not db.DB_PATH:
         return
-    stale_ids = await db.sweep_stale_tasks(utcnow())
+    stale_ids = await db.sweep_stale_triggers(utcnow())
     for tid in stale_ids:
         log.warning("[worker] Marked stale task #%d as interrupted (workspace preserved)", tid)
     if state.PROJECT_DIR:
@@ -316,14 +322,14 @@ async def _sweep_stale_workspace_pointers():
             "(dir_exists=%s, branch_exists=%s, path=%s, branch=%s)",
             tid, dir_exists, branch_present, wt_path, branch,
         )
-        await db.update_task(tid, worktree_path=None, task_branch=None)
+        await db.update_trigger(tid, worktree_path=None, task_branch=None)
 
 
 async def _sweep_orphan_worktrees():
     """Remove worktree dirs whose task is missing or shouldn't have one.
 
     Closes the activation race: if the backend crashed between
-    `worktree_add` and the `transition_task(active, worktree_path=...)`
+    `worktree_add` and the `transition_trigger(active, worktree_path=...)`
     write, the directory is on disk but no task references it. Also
     catches manual/test detritus and worktrees left after a task was
     deleted directly from the DB.
@@ -338,7 +344,7 @@ async def _sweep_orphan_worktrees():
             task_id = int(entry[len("task-"):])
         except ValueError:
             continue
-        task = await db.get_task(task_id)
+        task = await db.get_trigger(task_id)
         # Keep worktrees for active tasks (in-flight) and non-success
         # terminals (preserved for inspection).
         if task and task.get("status") in db.NON_SUCCESS_TERMINAL_STATUSES | {"active"}:
@@ -379,9 +385,9 @@ async def _loop():
             # at the HTTP layer — this covers the poll gap.
             async with db.db_read_guard():
                 async with _lock:
-                    task = await db.get_oldest_queued_task()
+                    task = await db.get_oldest_queued_trigger()
                     if task:
-                        await _process_task(task)
+                        await _process_trigger(task)
 
         except asyncio.CancelledError:
             raise
@@ -396,30 +402,30 @@ async def _loop():
             await asyncio.sleep(5)
 
 
-async def _process_task(task: dict):
+async def _process_trigger(task: dict):
     """Execute a single task — create session, run CLI, store output."""
     task_id = task["id"]
     job_id = task["job_id"]
 
     if not state.PROJECT_DIR:
         try:
-            await db.transition_task(task_id, "active")
+            await db.transition_trigger(task_id, "active")
         except ValueError:
             pass
-        await db.transition_task(task_id, "failed", error="no project open")
+        await db.transition_trigger(task_id, "failed", error="no project open")
         return
 
     job = await db.get_job(job_id)
     if not job:
         try:
-            await db.transition_task(task_id, "active")
+            await db.transition_trigger(task_id, "active")
         except ValueError:
             pass
-        await db.transition_task(task_id, "failed", error=f"job '{job_id}' not found")
+        await db.transition_trigger(task_id, "failed", error=f"job '{job_id}' not found")
         return
 
     # Collect subordinate tasks (coalesced) and pass to queue context builder
-    subordinates = await db.get_subordinate_tasks(task_id)
+    subordinates = await db.get_subordinate_triggers(task_id)
 
     # For resume tasks, reuse the original chat session; otherwise create a new one
     resume_session_id = task.get("resume_session_id")
@@ -472,7 +478,7 @@ async def _process_task(task: dict):
         except (ValueError, TypeError):
             original_id = None
         if original_id:
-            original = await db.get_task(original_id)
+            original = await db.get_trigger(original_id)
             original_path = original.get("worktree_path") if original else None
             original_branch = original.get("task_branch") if original else None
             if original_path and os.path.isdir(original_path):
@@ -487,29 +493,29 @@ async def _process_task(task: dict):
                 # storage is gone too — resume can't find it. Fail loudly.
                 err = (f"cannot resume task #{original_id}: the original "
                        f"worktree no longer exists")
-                await db.transition_task(task_id, "active",
+                await db.transition_trigger(task_id, "active",
                                          session_id=session_id,
                                          start_commit=start_commit)
-                await db.transition_task(task_id, "failed", error=err)
+                await db.transition_trigger(task_id, "failed", error=err)
                 await db.cascade_completion(task_id, "failed", error=err)
                 pubsub.broadcast(task_id, events.error(err))
                 pubsub.broadcast(task_id, events.done())
-                pubsub.cleanup_task(task_id)
+                pubsub.cleanup_trigger(task_id)
                 pubsub.notify_queue_changed()
                 _active_task_id = None
                 _cancel_event = None
                 return
 
     if not start_commit:
-        await db.transition_task(task_id, "active",
+        await db.transition_trigger(task_id, "active",
                                  session_id=session_id,
                                  start_commit=start_commit)
-        await db.transition_task(task_id, "failed",
+        await db.transition_trigger(task_id, "failed",
                                  error="cannot create worktree: project has no commits yet")
         await db.cascade_completion(task_id, "failed",
                                     error="cannot create worktree: project has no commits yet")
         pubsub.broadcast(task_id, events.done())
-        pubsub.cleanup_task(task_id)
+        pubsub.cleanup_trigger(task_id)
         pubsub.notify_queue_changed()
         _active_task_id = None
         _cancel_event = None
@@ -525,24 +531,28 @@ async def _process_task(task: dict):
             # Drop any leftover branch from the prior attempt too
             await git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
 
-        wt_ok, wt_err = await git.worktree_add(state.PROJECT_DIR, workspace_dir, task_branch, start_commit)
+        wt_ok, wt_err = await git.worktree_add(
+            state.PROJECT_DIR, workspace_dir, task_branch, start_commit,
+            user_name=job["name"],
+            user_email=f"{job['slug']}@maistro.local",
+        )
         if not wt_ok:
             log.error("[worker] Task #%d worktree creation failed: %s", task_id, wt_err)
-            await db.transition_task(task_id, "active",
+            await db.transition_trigger(task_id, "active",
                                      session_id=session_id,
                                      start_commit=start_commit)
-            await db.transition_task(task_id, "failed",
+            await db.transition_trigger(task_id, "failed",
                                      error=f"worktree creation failed: {wt_err}")
             await db.cascade_completion(task_id, "failed",
                                         error=f"worktree creation failed: {wt_err}")
             pubsub.broadcast(task_id, events.done())
-            pubsub.cleanup_task(task_id)
+            pubsub.cleanup_trigger(task_id)
             pubsub.notify_queue_changed()
             _active_task_id = None
             _cancel_event = None
             return
 
-    await db.transition_task(task_id, "active",
+    await db.transition_trigger(task_id, "active",
                              session_id=session_id,
                              start_commit=start_commit,
                              worktree_path=workspace_dir,
@@ -559,12 +569,12 @@ async def _process_task(task: dict):
         # Health-check failure means the agent never ran — discard the empty worktree.
         await _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
         await git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
-        await db.transition_task(task_id, "failed", error=mcp_error,
+        await db.transition_trigger(task_id, "failed", error=mcp_error,
                                  worktree_path=None, task_branch=None)
         await db.cascade_completion(task_id, "failed", error=mcp_error)
         pubsub.broadcast(task_id, events.error(mcp_error))
         pubsub.broadcast(task_id, events.done())
-        pubsub.cleanup_task(task_id)
+        pubsub.cleanup_trigger(task_id)
         pubsub.notify_queue_changed()
         _active_task_id = None
         _cancel_event = None
@@ -656,7 +666,7 @@ async def _process_task(task: dict):
             meta_fields["cost_usd"] = _result_meta["cost_usd"]
 
         if _timed_out:
-            await db.transition_task(task_id, "timed_out",
+            await db.transition_trigger(task_id, "timed_out",
                                      result_commit=worktree_head, error="timed out",
                                      **meta_fields)
             await db.cascade_completion(task_id, "timed_out",
@@ -665,7 +675,7 @@ async def _process_task(task: dict):
                      task_id, worktree_head[:8])
             await _check_governor_trigger(task_id)
         elif _cancelled:
-            await db.transition_task(task_id, "cancelled",
+            await db.transition_trigger(task_id, "cancelled",
                                      result_commit=worktree_head, error="cancelled",
                                      **meta_fields)
             await db.cascade_completion(task_id, "cancelled",
@@ -677,7 +687,7 @@ async def _process_task(task: dict):
             max_turns = job["properties"].get("max_turns", 100)
             turns_used = meta_fields.get("num_turns", "?")
             err = f"hit turn limit ({turns_used}/{max_turns})"
-            await db.transition_task(task_id, "exhausted",
+            await db.transition_trigger(task_id, "exhausted",
                                      result_commit=worktree_head, error=err,
                                      **meta_fields)
             await db.cascade_completion(task_id, "exhausted",
@@ -707,7 +717,7 @@ async def _process_task(task: dict):
         except Exception as write_err:
             log.warning("[worker] Task #%d failed to write error response: %s", task_id, write_err)
         worktree_head = await git.head_hash(workspace_dir) or start_commit
-        await db.transition_task(task_id, "failed",
+        await db.transition_trigger(task_id, "failed",
                                  result_commit=worktree_head, error=str(e))
         try:
             await db.cascade_completion(task_id, "failed",
@@ -719,17 +729,17 @@ async def _process_task(task: dict):
         # Last-resort: if status is still 'active' (both try and except
         # crashed), force it to failed so tasks can never get stuck.
         try:
-            task_row = await db.get_task(task_id)
+            task_row = await db.get_trigger(task_id)
             if task_row and task_row.get("status") == "active":
                 log.error("[worker] Task #%d still active in finally — forcing to failed", task_id)
-                await db.transition_task(task_id, "failed",
+                await db.transition_trigger(task_id, "failed",
                                          error="internal error: post-processing failed")
         except Exception:
             log.exception("[worker] Task #%d CRITICAL: could not transition to failed", task_id)
         if watchdog and not watchdog.done():
             watchdog.cancel()
         pubsub.broadcast(task_id, events.done())
-        pubsub.cleanup_task(task_id)
+        pubsub.cleanup_trigger(task_id)
         pubsub.notify_queue_changed()
         _active_task_id = None
         _cancel_event = None
@@ -783,7 +793,7 @@ async def _enqueue_cascades(completed_job_id: int, task_id: int,
             result_commit=result_commit,
         )
 
-        new_id = await db.enqueue_task(
+        new_id = await db.enqueue_trigger(
             job["id"], "cascade",
             trigger_detail=str(completed_job_id),
             context=context,

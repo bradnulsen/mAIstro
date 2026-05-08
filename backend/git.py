@@ -313,18 +313,31 @@ async def is_dirty(cwd: str) -> bool:
 # ── Worktree operations (per-task workspace isolation) ────
 
 async def worktree_add(project_dir: str, path: str, branch: str,
-                       base_commit: str) -> tuple[bool, str]:
+                       base_commit: str,
+                       user_name: str | None = None,
+                       user_email: str | None = None) -> tuple[bool, str]:
     """Create a new worktree on a fresh branch from base_commit.
 
     Returns (ok, error_message). The branch is created (-b) so this fails
     if it already exists — task IDs are unique so this is correct: a stale
     branch from a previous attempt indicates a state that needs operator
     attention, not silent reuse.
+
+    If `user_name`/`user_email` are provided, they are set as worktree-local
+    git config so every commit from inside the worktree carries that
+    authorship — regardless of whether the agent uses the internal
+    `git_commit` MCP tool or a native `git commit` via Bash. Without this,
+    native git falls through to the operator's global config, which makes
+    Job Impact misattribute agent commits to the operator.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     result = await run_git("worktree", "add", "-b", branch, path, base_commit, cwd=project_dir)
     if result.returncode != 0:
         return False, (result.stderr or result.stdout).strip()
+    if user_name:
+        await run_git("config", "user.name", user_name, cwd=path)
+    if user_email:
+        await run_git("config", "user.email", user_email, cwd=path)
     return True, ""
 
 

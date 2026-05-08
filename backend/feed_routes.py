@@ -17,7 +17,7 @@ async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, 
     project_dir = require_project()
     entries = await git.log(project_dir, limit=limit, skip=offset, path=path, with_stats=True)
 
-    queue = await db.get_task_queue(limit=200)
+    queue = await db.get_trigger_queue(limit=200)
     task_by_commit = {t["result_commit"]: t for t in queue if t.get("result_commit")}
 
     feed = []

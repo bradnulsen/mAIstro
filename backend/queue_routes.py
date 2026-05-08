@@ -1,7 +1,12 @@
-"""Task queue routes — atomic work item lifecycle and queue control.
+"""Trigger queue routes — atomic work item lifecycle and queue control.
 
-Handles task enqueue, streaming, output, cancel, resume, reply,
+Handles trigger enqueue, streaming, output, cancel, resume, reply,
 editing, merge/split, and queue settings.
+
+Note: Stage 1 of triggers-and-dispatches refactor renamed identifiers
+and URL paths but left SQL strings (which still reference `tasks` /
+`task_executions` / `task_events` tables) and FastAPI route handler
+parameters (`task_id`) untouched. Schema rename is Stage 2+.
 """
 
 import asyncio
@@ -21,7 +26,7 @@ from backend import state
 from backend.dispatch import build_trigger_context
 from backend.state import utcnow, require_project
 
-router = APIRouter(tags=["tasks", "queue"])
+router = APIRouter(tags=["triggers", "queue"])
 
 
 # ── Pydantic Models ────────────────────────────────────────
@@ -62,10 +67,10 @@ class AgentDispatchRequest(BaseModel):
 
 # ── Task Routes ────────────────────────────────────────────
 
-@router.get("/api/tasks/queue")
-async def get_task_queue():
+@router.get("/api/triggers/queue")
+async def get_trigger_queue():
     require_project()
-    return await db.get_task_queue()
+    return await db.get_trigger_queue()
 
 
 @router.get("/api/queue/stream")
@@ -94,7 +99,7 @@ async def stream_queue_changes():
     return EventSourceResponse(stream())
 
 
-@router.get("/api/tasks/{task_id}/stream")
+@router.get("/api/triggers/{task_id}/stream")
 async def stream_task(task_id: int):
     """SSE stream of live events for a running task.
 
@@ -103,7 +108,7 @@ async def stream_task(task_id: int):
     works (otherwise it would hang forever on an empty channel).
     """
     require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_trigger(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
@@ -136,7 +141,7 @@ async def stream_task(task_id: int):
     return EventSourceResponse(stream())
 
 
-@router.get("/api/tasks/{task_id}/output")
+@router.get("/api/triggers/{task_id}/output")
 async def get_task_output(task_id: int):
     """Get stored output for a task.
 
@@ -145,7 +150,7 @@ async def get_task_output(task_id: int):
     empty messages list since they never opened their own session).
     """
     require_project()
-    task = await db.get_task_resolved(task_id)
+    task = await db.get_trigger_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
@@ -184,7 +189,7 @@ async def get_task_output(task_id: int):
     return {"messages": messages, "status": status, "task": task, "mcp_servers": mcp_server_names}
 
 
-@router.get("/api/tasks/{task_id}/outcome")
+@router.get("/api/triggers/{task_id}/outcome")
 async def get_task_outcome(task_id: int):
     """Get the outcome summary for a completed task (derived from git).
 
@@ -192,7 +197,7 @@ async def get_task_outcome(task_id: int):
     root's start_commit/result_commit range.
     """
     project_dir = require_project()
-    task = await db.get_task_resolved(task_id)
+    task = await db.get_trigger_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     start = task.get("start_commit")
@@ -203,7 +208,7 @@ async def get_task_outcome(task_id: int):
     return {"summary": summary}
 
 
-@router.get("/api/tasks/{task_id}/diff")
+@router.get("/api/triggers/{task_id}/diff")
 async def get_task_diff(task_id: int):
     """Get the git diff for a completed task (start_commit..result_commit).
 
@@ -211,7 +216,7 @@ async def get_task_diff(task_id: int):
     root's commit range.
     """
     project_dir = require_project()
-    task = await db.get_task_resolved(task_id)
+    task = await db.get_trigger_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     start = task.get("start_commit")
@@ -237,7 +242,7 @@ async def _resolve_workspace_for_action(task_id: int) -> tuple[str, str, int]:
     effective_root_id) prevents discard/integrate from yanking a worktree
     out from under a running resume.
     """
-    task = await db.get_task_resolved(task_id)
+    task = await db.get_trigger_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     wt_path = task.get("worktree_path")
@@ -248,7 +253,7 @@ async def _resolve_workspace_for_action(task_id: int) -> tuple[str, str, int]:
     if owner_id == task["id"]:
         owner_status = task.get("status")
     else:
-        owner = await db.get_task(owner_id)
+        owner = await db.get_trigger(owner_id)
         owner_status = owner.get("status") if owner else None
     if owner_status not in db.NON_SUCCESS_TERMINAL_STATUSES:
         raise HTTPException(
@@ -262,7 +267,7 @@ async def _resolve_workspace_for_action(task_id: int) -> tuple[str, str, int]:
 _VALID_INTEGRATE_STRATEGIES = {"default", "theirs", "ours"}
 
 
-@router.post("/api/tasks/{task_id}/workspace/integrate")
+@router.post("/api/triggers/{task_id}/workspace/integrate")
 async def integrate_task_workspace(task_id: int, strategy: str = "default"):
     """Manually retry the merge of a preserved task branch into main.
 
@@ -311,12 +316,12 @@ async def integrate_task_workspace(task_id: int, strategy: str = "default"):
     await git.worktree_remove(project_dir, wt_path, force=True)
     await git.worktree_prune(project_dir)
     await git.branch_delete(project_dir, branch, force=True)
-    await db.update_task(owner_id, worktree_path=None, task_branch=None)
+    await db.update_trigger(owner_id, worktree_path=None, task_branch=None)
     pubsub.notify_queue_changed()
     return {"status": "integrated", "result_commit": await git.head_hash(project_dir)}
 
 
-@router.post("/api/tasks/{task_id}/workspace/discard")
+@router.post("/api/triggers/{task_id}/workspace/discard")
 async def discard_task_workspace(task_id: int):
     """Remove a non-success task's preserved worktree and delete its branch.
 
@@ -332,16 +337,16 @@ async def discard_task_workspace(task_id: int):
     await git.worktree_prune(project_dir)
     if branch:
         await git.branch_delete(project_dir, branch, force=True)
-    await db.update_task(owner_id, worktree_path=None, task_branch=None)
+    await db.update_trigger(owner_id, worktree_path=None, task_branch=None)
     pubsub.notify_queue_changed()
     return {"status": "discarded"}
 
 
-@router.get("/api/tasks/{task_id}/orphan-stash")
+@router.get("/api/triggers/{task_id}/orphan-stash")
 async def get_orphan_stash(task_id: int):
     """Show the diff for a task's stashed orphan changes (Phase 2 safety net)."""
     project_dir = require_project()
-    task = await db.get_task_resolved(task_id)
+    task = await db.get_trigger_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     sha = task.get("orphan_stash_ref")
@@ -350,7 +355,7 @@ async def get_orphan_stash(task_id: int):
     return {"diff": await git.stash_show(project_dir, sha), "ref": sha}
 
 
-@router.post("/api/tasks/{task_id}/orphan-stash/restore")
+@router.post("/api/triggers/{task_id}/orphan-stash/restore")
 async def restore_orphan_stash(task_id: int):
     """Re-apply the stashed orphan changes to the working tree.
 
@@ -359,7 +364,7 @@ async def restore_orphan_stash(task_id: int):
     cleared so the banner stops showing.
     """
     project_dir = require_project()
-    task = await db.get_task_resolved(task_id)
+    task = await db.get_trigger_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     sha = task.get("orphan_stash_ref")
@@ -372,17 +377,17 @@ async def restore_orphan_stash(task_id: int):
     # Stash column lives on the executing row (the root for coalesced groups);
     # update there so the view's fall-through stops surfacing the ref.
     owner_id = task.get("effective_root_id") or task["id"]
-    await db.update_task(owner_id, orphan_stash_ref=None)
+    await db.update_trigger(owner_id, orphan_stash_ref=None)
     pubsub.notify_queue_changed()
     return {"status": "restored"}
 
 
-@router.post("/api/tasks/{task_id}/orphan-stash/discard")
+@router.post("/api/triggers/{task_id}/orphan-stash/discard")
 async def discard_orphan_stash(task_id: int):
     """Drop the stash entry. Underlying commit object remains in the reflog
     until git-gc — recoverable via `git fsck --lost-found` if needed."""
     project_dir = require_project()
-    task = await db.get_task_resolved(task_id)
+    task = await db.get_trigger_resolved(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     sha = task.get("orphan_stash_ref")
@@ -390,31 +395,31 @@ async def discard_orphan_stash(task_id: int):
         raise HTTPException(404, "No orphan stash for this task")
     await git.stash_drop(project_dir, sha)
     owner_id = task.get("effective_root_id") or task["id"]
-    await db.update_task(owner_id, orphan_stash_ref=None)
+    await db.update_trigger(owner_id, orphan_stash_ref=None)
     pubsub.notify_queue_changed()
     return {"status": "discarded"}
 
 
-@router.patch("/api/tasks/{task_id}")
+@router.patch("/api/triggers/{task_id}")
 async def update_task_route(task_id: int, req: UpdateTaskRequest):
     """Edit a pending task's context (only before it starts running)."""
     require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_trigger(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.get("status") not in db.PRE_EXECUTION_STATUSES:
         raise HTTPException(409, "Cannot edit a task that has already started")
 
     if req.context is not None:
-        await db.update_task(task_id, context=req.context)
+        await db.update_trigger(task_id, context=req.context)
         pubsub.notify_queue_changed()
     return {"status": "ok"}
 
 
-@router.post("/api/tasks/cancel/{task_id}")
+@router.post("/api/triggers/cancel/{task_id}")
 async def cancel_task(task_id: int):
     require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_trigger(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     current = task.get("status")
@@ -428,13 +433,13 @@ async def cancel_task(task_id: int):
         pubsub.notify_queue_changed()
         return {"status": "cancelling", "was_running": True}
     # Pending or queued: not being processed by the worker, transition directly.
-    await db.transition_task(task_id, "cancelled", error="cancelled")
+    await db.transition_trigger(task_id, "cancelled", error="cancelled")
     await db.cascade_completion(task_id, "cancelled", error="cancelled")
     pubsub.notify_queue_changed()
     return {"status": "cancelled", "was_running": False}
 
 
-@router.post("/api/tasks/{task_id}/resume")
+@router.post("/api/triggers/{task_id}/resume")
 async def resume_task(task_id: int):
     """Resume a non-success terminal task by re-entering its preserved worktree.
 
@@ -449,7 +454,7 @@ async def resume_task(task_id: int):
     with the preserved workspace.
     """
     require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_trigger(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.get("status") not in db.NON_SUCCESS_TERMINAL_STATUSES:
@@ -465,22 +470,22 @@ async def resume_task(task_id: int):
     if not cli_session_id:
         raise HTTPException(409, "No CLI session ID available — cannot resume")
 
-    new_id = await db.enqueue_task(
+    new_id = await db.enqueue_trigger(
         task["job_id"], "resume",
         trigger_detail=str(task_id),
         context=await build_trigger_context("resume", original_task_id=task_id),
     )
-    await db.update_task(new_id, resume_session_id=cli_session_id)
+    await db.update_trigger(new_id, resume_session_id=cli_session_id)
     await db.coalesce_under(task_id, new_id)
     worker.notify()
     return {"task_id": new_id, "resuming_from": task_id}
 
 
-@router.post("/api/tasks/{task_id}/reply")
+@router.post("/api/triggers/{task_id}/reply")
 async def reply_task(task_id: int, req: ReplyRequest | None = None):
     """Reply to a resolved task — creates a follow-up task with user context."""
     project_dir = require_project()
-    task = await db.get_task(task_id)
+    task = await db.get_trigger(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.get("status") not in db.TERMINAL_STATUSES:
@@ -488,7 +493,7 @@ async def reply_task(task_id: int, req: ReplyRequest | None = None):
 
     user_notes = req.context if req and req.context else None
 
-    new_id = await db.enqueue_task(
+    new_id = await db.enqueue_trigger(
         task["job_id"], "reply",
         trigger_detail=str(task_id),
         context=await build_trigger_context(
@@ -505,44 +510,44 @@ async def reply_task(task_id: int, req: ReplyRequest | None = None):
     return {"task_id": new_id, "replying_to": task_id}
 
 
-@router.post("/api/tasks/merge")
+@router.post("/api/triggers/merge")
 async def merge_tasks_route(req: MergeRequest):
     """Merge pending same-job tasks into one logical unit."""
     require_project()
     try:
-        root_id = await db.merge_tasks(req.task_ids)
+        root_id = await db.merge_triggers(req.task_ids)
         pubsub.notify_queue_changed()
         return {"root_id": root_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
-@router.get("/api/tasks/{task_id}/subordinates")
+@router.get("/api/triggers/{task_id}/subordinates")
 async def get_subordinates(task_id: int):
     """Get all subordinate tasks coalesced under this root."""
     require_project()
-    subs = await db.get_subordinate_tasks(task_id)
+    subs = await db.get_subordinate_triggers(task_id)
     return subs
 
 
-@router.post("/api/tasks/{task_id}/uncoalesce")
+@router.post("/api/triggers/{task_id}/uncoalesce")
 async def uncoalesce_task_route(task_id: int):
     """Remove a single subordinate from its coalesce group."""
     require_project()
     try:
-        freed_id = await db.uncoalesce_task(task_id)
+        freed_id = await db.uncoalesce_trigger(task_id)
         pubsub.notify_queue_changed()
         return {"task_id": freed_id}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
-@router.post("/api/tasks/{task_id}/transfer")
+@router.post("/api/triggers/{task_id}/transfer")
 async def transfer_task_route(task_id: int, req: TransferRequest):
     """Move a task between pending and queued columns."""
     require_project()
     try:
-        await db.transfer_task(task_id, req.to_queued)
+        await db.transfer_trigger(task_id, req.to_queued)
         if req.to_queued:
             worker.notify()
         else:
@@ -552,12 +557,12 @@ async def transfer_task_route(task_id: int, req: TransferRequest):
         raise HTTPException(400, str(e))
 
 
-@router.post("/api/tasks/{task_id}/split")
+@router.post("/api/triggers/{task_id}/split")
 async def split_task_route(task_id: int):
     """Split a merged task — make subordinates independent again."""
     require_project()
     try:
-        split_ids = await db.split_task(task_id)
+        split_ids = await db.split_trigger(task_id)
         pubsub.notify_queue_changed()
         return {"split_ids": split_ids}
     except ValueError as e:
@@ -582,22 +587,22 @@ async def set_queue_settings(req: QueueSettingsRequest):
     return {"status": "ok"}
 
 
-@router.post("/api/tasks/{task_id}/approve")
+@router.post("/api/triggers/{task_id}/approve")
 async def approve_task_route(task_id: int):
     """Approve a pending-approval task so the worker can process it."""
     require_project()
-    ok = await db.approve_task(task_id)
+    ok = await db.approve_trigger(task_id)
     if not ok:
         raise HTTPException(404, "Task not found or not pending approval")
     worker.notify()
     return {"status": "approved"}
 
 
-@router.post("/api/tasks/{task_id}/reject")
+@router.post("/api/triggers/{task_id}/reject")
 async def reject_task_route(task_id: int):
     """Reject a pending-approval task (marks as skipped)."""
     require_project()
-    ok = await db.reject_task(task_id)
+    ok = await db.reject_trigger(task_id)
     if not ok:
         raise HTTPException(404, "Task not found or not pending approval")
     pubsub.notify_queue_changed()
@@ -608,7 +613,7 @@ async def reject_task_route(task_id: int):
 async def queue_all():
     """Transfer all pending tasks to queued."""
     require_project()
-    count = await db.transfer_all_tasks(to_queued=True)
+    count = await db.transfer_all_triggers(to_queued=True)
     if count > 0:
         worker.notify()
     return {"transferred": count}
@@ -618,7 +623,7 @@ async def queue_all():
 async def shelve_all():
     """Transfer all queued (non-active) tasks back to pending."""
     require_project()
-    count = await db.transfer_all_tasks(to_queued=False)
+    count = await db.transfer_all_triggers(to_queued=False)
     pubsub.notify_queue_changed()
     return {"transferred": count}
 
@@ -627,7 +632,7 @@ async def shelve_all():
 async def reorder_tasks_route(req: ReorderTasksRequest):
     """Reorder pending tasks to control execution priority."""
     require_project()
-    await db.reorder_tasks(req.task_ids)
+    await db.reorder_triggers(req.task_ids)
     pubsub.notify_queue_changed()
     return {"status": "ok"}
 
@@ -642,7 +647,7 @@ async def queue_process_one(task_id: int):
     return {"processed": [task["id"]]}
 
 
-@router.post("/api/tasks/mcp-event")
+@router.post("/api/triggers/mcp-event")
 async def log_mcp_event(req: McpEventRequest, x_session_id: str = Header(None)):
     """Log an MCP tool invocation to the task's chat session audit trail."""
     if not x_session_id:
@@ -657,7 +662,7 @@ async def log_mcp_event(req: McpEventRequest, x_session_id: str = Header(None)):
     return {"status": "ok"}
 
 
-@router.post("/api/tasks/agent-dispatch")
+@router.post("/api/triggers/agent-dispatch")
 async def agent_dispatch(req: AgentDispatchRequest):
     """Enqueue a task via agent dispatch (dispatch_task MCP tool).
 
@@ -698,7 +703,7 @@ async def agent_dispatch(req: AgentDispatchRequest):
         upstream_task_id=req.source_task_id,
         user_context=req.message,
     )
-    task_id = await db.enqueue_task(
+    task_id = await db.enqueue_trigger(
         req.target_job_id, "agent",
         trigger_detail=f"{req.source_job_id}#{req.source_task_id}",
         context=context,
@@ -709,7 +714,7 @@ async def agent_dispatch(req: AgentDispatchRequest):
 
 # ── Enqueue ────────────────────────────────────────────────
 
-@router.post("/api/tasks/{job_id}")
+@router.post("/api/triggers/{job_id}")
 async def enqueue_job(job_id: int, req: DispatchRequest | None = None):
     """Enqueue a task for a job. The worker processes it."""
     project_dir = require_project()
@@ -722,7 +727,7 @@ async def enqueue_job(job_id: int, req: DispatchRequest | None = None):
     context = await build_trigger_context(
         "manual", commit_hash=head, user_context=user_context,
     )
-    task_id = await db.enqueue_task(job_id, "manual", trigger_detail=head, context=context)
+    task_id = await db.enqueue_trigger(job_id, "manual", trigger_detail=head, context=context)
     log.info("[dispatch] Manual enqueue: job #%d → task #%d", job_id, task_id)
     worker.notify()
     return {"task_id": task_id}

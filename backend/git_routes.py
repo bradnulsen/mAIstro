@@ -100,10 +100,10 @@ async def post_commit_hook(req: PostCommitRequest):
     dispatched = []
 
     for job in triggered:
-        context = build_trigger_context(
+        context = await build_trigger_context(
             "commit", project_dir=project_dir, commit_hash=req.commit_hash,
         )
-        await db.enqueue_task(
+        await db.enqueue_trigger(
             job["id"], "commit", trigger_detail=req.commit_hash, context=context
         )
         dispatched.append(job["id"])

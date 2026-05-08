@@ -97,7 +97,7 @@ async def _loop():
                         head = await git.head_hash(state.PROJECT_DIR)
 
                         log.info("[scheduler] Firing %s (schedule: %s)", job["id"], schedule)
-                        await db.enqueue_task(
+                        await db.enqueue_trigger(
                             job["id"],
                             "schedule",
                             trigger_detail=schedule,

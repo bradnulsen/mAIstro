@@ -49,9 +49,9 @@ def broadcast(task_id: int, event: dict):
             pass
 
 
-def cleanup_task(task_id: int):
-    """Remove all subscribers for a task (call on task completion)."""
-    _subscribers.pop(task_id, None)
+def cleanup_trigger(trigger_id: int):
+    """Remove all subscribers for a trigger (call on terminal transition)."""
+    _subscribers.pop(trigger_id, None)
 
 
 # ── Queue-level broadcast ─────────────────────────────────

@@ -8,7 +8,7 @@ a window in days and return rows shaped for direct JSON serialization.
 from backend import git
 from backend.db_core import get_db
 from backend.db_jobs import list_jobs
-from backend.db_tasks import TERMINAL_STATUSES_SQL
+from backend.db_triggers import TERMINAL_STATUSES_SQL
 
 
 async def dashboard_health(window_days: int) -> list[dict]:
