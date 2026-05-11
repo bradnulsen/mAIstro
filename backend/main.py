@@ -38,6 +38,7 @@ from backend.learnings_routes import router as learnings_router
 from backend.mcp_routes import router as mcp_router
 from backend.project_routes import router as project_router
 from backend.queue_routes import router as queue_router
+from backend.system_routes import router as system_router
 
 
 # ── Lifespan ────────────────────────────────────────────────
@@ -73,6 +74,7 @@ app.include_router(git_router)
 app.include_router(mcp_router)
 app.include_router(dashboard_router)
 app.include_router(config_router)
+app.include_router(system_router)
 
 
 @app.get("/health")

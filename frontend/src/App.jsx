@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTrigger, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus } from './api'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTrigger, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus, getClaudeStatus } from './api'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
 import Governor from './components/Governor'
@@ -127,7 +127,22 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
   const [popout, setPopout] = useState(null) // job id
   const [context, setContext] = useState('')
   const [dispatching, setDispatching] = useState(false)
+  const [claudeStatus, setClaudeStatus] = useState(null) // null until first poll, then {installed, path}
   const popoutRef = useRef(null)
+
+  // Probe the Claude CLI on mount + every 60s. Installation status changes rarely;
+  // the poll exists so re-installing the CLI without refreshing the tab still updates.
+  useEffect(() => {
+    let cancelled = false
+    const poll = () => {
+      getClaudeStatus()
+        .then(s => { if (!cancelled) setClaudeStatus(s) })
+        .catch(() => {})
+    }
+    poll()
+    const interval = setInterval(poll, 60000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [])
 
   // Close popout on outside click
   useEffect(() => {
@@ -253,6 +268,19 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
       </div>
 
       <div className="command-bar-actions">
+        {claudeStatus && (
+          <div
+            className={`command-bar-pill ${claudeStatus.installed ? 'ok' : 'warn'}`}
+            title={
+              claudeStatus.installed
+                ? `Claude CLI: ${claudeStatus.path}`
+                : "Claude CLI not found on PATH. Install from https://claude.ai/code — agents can't dispatch without it."
+            }
+          >
+            <span className={`command-bar-pill-dot ${claudeStatus.installed ? 'ok' : 'warn'}`} />
+            <span>claude</span>
+          </div>
+        )}
         <button className="small" onClick={handleQueueAll} disabled={!hasPending} title="Queue all pending tasks">▶ Queue all</button>
         <button className="small" onClick={handleShelveAll} disabled={!hasQueued} title="Shelve all queued tasks">▣ Shelve all</button>
         <label className="command-bar-toggle" title="Auto-queue: new tasks skip pending and go directly to queued">

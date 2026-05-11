@@ -205,6 +205,10 @@ export const getGovernorDebug = () => fetchJSON('/api/governor/debug')
 
 export const getGovernorRuns = () => fetchJSON('/api/governor/runs')
 
+// ── System Environment ──
+
+export const getClaudeStatus = () => fetchJSON('/api/system/claude-status')
+
 // ── Job Templates ──
 
 export const listTemplates = () => fetchJSON('/api/templates')
