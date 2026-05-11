@@ -275,7 +275,7 @@ function Timeline({ timeline, windowDays, jobColorMap }) {
                   const end = t.completed_at ? new Date(t.completed_at + 'Z').getTime() : now
                   const span = now - windowStart
                   const width = Math.max(0.3, ((end - start) / span) * 100)
-                  const left = Math.max(0, ((now - end) / span) * 100)
+                  const left = Math.max(0, Math.min(100 - width, ((start - windowStart) / span) * 100))
                   const dur = end - start
                   const median = medians[t.job_id] || dur
                   const isOutlier = dur > median * 3 && dur > 60000
@@ -309,9 +309,9 @@ function Timeline({ timeline, windowDays, jobColorMap }) {
 function TimelineAxis({ windowStart, now }) {
   const span = now - windowStart
   const ticks = []
-  // Generate ~5 evenly-spaced time ticks
+  // Generate ~5 evenly-spaced time ticks, oldest on the left, "now" on the right.
   for (let i = 0; i <= 4; i++) {
-    const t = now - (span * i) / 4
+    const t = windowStart + (span * i) / 4
     const d = new Date(t)
     const label = span > 86400000 * 2
       ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
@@ -390,10 +390,14 @@ function CommitHistory({ windowDays }) {
   }
 
   // Client-side window filter — keeps the table aligned with the
-  // window selector that drives the rest of the dashboard.
+  // window selector that drives the rest of the dashboard. The backend
+  // returns dates as "YYYY-MM-DD HH:MM:SS ±HHMM" (git iso) which Date()
+  // parses directly; the prior `.replace(' ', 'T')` produced a bad ISO
+  // string ("...T...:09 -0400") that returned NaN and filtered out
+  // every commit.
   const cutoffMs = windowDays ? Date.now() - windowDays * 86400000 : null
   const filtered = cutoffMs
-    ? items.filter(i => i.date && new Date(i.date.replace(' ', 'T')).getTime() >= cutoffMs)
+    ? items.filter(i => i.date && new Date(i.date).getTime() >= cutoffMs)
     : items
 
   return (
