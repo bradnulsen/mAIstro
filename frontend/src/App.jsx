@@ -222,7 +222,18 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
                   className="dispatch-modal-backdrop"
                   onMouseDown={e => { if (e.target === e.currentTarget) { setPopout(null); setContext('') } }}
                 >
-                  <div className="dispatch-modal" ref={popoutRef}>
+                  <div
+                    className="dispatch-modal"
+                    ref={popoutRef}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !dispatching) {
+                        e.preventDefault()
+                        handleDispatch(j.id)
+                      } else if (e.key === 'Escape') {
+                        setPopout(null); setContext('')
+                      }
+                    }}
+                  >
                     <div className="dispatch-modal-header">
                       <span className="dispatch-modal-title">Dispatch — {j.name}</span>
                       <button
@@ -231,20 +242,15 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
                         title="Close (Esc)"
                       >✕</button>
                     </div>
-                    <textarea
-                      className="dispatch-modal-context"
-                      value={context}
-                      onChange={e => setContext(e.target.value)}
-                      placeholder="Context (optional) — what should this job work on?"
-                      autoFocus
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !dispatching) {
-                          e.preventDefault()
-                          handleDispatch(j.id)
-                        }
-                        if (e.key === 'Escape') { setPopout(null); setContext('') }
-                      }}
-                    />
+                    <div className="dispatch-modal-body">
+                      <textarea
+                        className="dispatch-modal-context"
+                        value={context}
+                        onChange={e => setContext(e.target.value)}
+                        placeholder="Context (optional) — what should this job work on?"
+                        autoFocus
+                      />
+                    </div>
                     <div className="dispatch-modal-footer">
                       <span className="dispatch-modal-hint">Ctrl+Enter to dispatch · Esc to close</span>
                       <div className="dispatch-modal-actions">
