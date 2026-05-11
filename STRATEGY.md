@@ -26,60 +26,24 @@ What's in place:
 
 ## Diagnosis
 
-The platform's *operational* loop is mature: tasks dispatch reliably, run in isolation, surface their work faithfully, and clean up after themselves. Structural debt is paid down. External MCP onboarding is now self-service via `.mcpb` drag-drop. Dashboard answers the two questions that matter operationally — "what ran" and "what shipped."
+Three loops shipped — *execute*, *learn*, *reach*.
 
-What the platform does *not* yet do well: **learn**. The feedback loops that turn lived experience into better future behavior are either absent or one-directional:
+- **Execute.** Tasks dispatch reliably, run in isolated git worktrees, surface their work faithfully, and clean up after themselves. Structural debt is paid down. Dashboard answers the two questions that matter operationally — "what ran" and "what shipped."
+- **Learn.** Both directions are open. Agents write `job_learnings` (gated, capped, query-on-demand). The Governor↔operator surface is a two-way thread system — proposals collapse into prose, the human's reply drives a write-capable Governor reply invocation, and per-thread coalescing keeps queue depth honest.
+- **Reach.** The Windows installer ships the platform to non-developer operators. PyInstaller-bundled backend serves the SPA on `localhost:8420`; Inno Setup wraps it for `Program Files`; the launcher single-instance-detects, auto-opens the browser, and surfaces a non-fatal warning if the Claude CLI isn't on PATH. App-data lives at `%APPDATA%\mAistro\` and survives uninstall.
 
-- **Operator ↔ Governor is one-way.** The Governor speaks (findings); the operator can only assent or decline. Real meta-management is a conversation — push-back, clarification, "yes but in this case do X." Right now an operator who disagrees with a finding has nowhere to put that disagreement; the Governor never sees the rebuttal, never refines its read of the project.
-- **Agents could not write to their own instructions.** *(Closed: the `job_learnings` surface ships with both operator and gated agent CRUD, and dispatch queries learnings on demand rather than auto-injecting.)*
-
-A separate concern, orthogonal to learning, is **reach**: today mAistro ships as a developer setup (`pip install`, `npm install`, two terminals). The operators who would benefit most — non-developer subject-matter experts coordinating with autonomous agents — can't run it. An installer closes that gap.
-
-External MCP polish (env-var UI, server status in dispatch detail, runtime error attribution, config validation) and structural item R6 (EAV-flatten to JSON column) are real but not load-bearing. They live in Deferred with explicit revisit triggers.
+What remains is not a new structural loop but **polish and depth** on top of the three that exist. The Deferred bucket holds those candidates with explicit revisit triggers; none currently has the load-bearing weight that justifies promoting it to a P slot.
 
 ## Guiding Policy
 
-**Close the meta-management loop, then open the reach.** The platform's execution surface is mature, and the agent-writable side of the learning loop has shipped. The remaining structural change is the two-way meta-management surface (Governor threads); after that, an installer makes the platform usable by the operators who most need it.
+**Iterate on the loops that ship.** With execute / learn / reach all open, the platform is feature-complete for its v1 deployment shape (single user, single project, localhost, Windows installer or dev checkout). The next P slot is reserved for the first item from real-usage signal that earns it — a recurring operator complaint, a sharp Governor proposal pattern, an external-MCP onboarding cliff, or a real-world distribution issue surfaced once non-developer operators actually run the installer.
 
-The order from here: Governor threads first (so the operator and the Governor can actually have a conversation, and the Governor can propose learnings via thread `action_payload`s rather than findings); installer second (depth before breadth — shipping to a non-developer audience while the Governor surface is one-way would lock in a shape we're already replacing).
+Until that signal lands, work falls into two categories:
 
-Task session interrogation was previously sequenced here as P2; it has been **dropped** as a planned priority. The "let the operator chat with a completed task's resumed agent" framing fails the value-vs-cost test once you notice that (a) the resumed agent confabulates rather than recalls, (b) the dispatch primitive already handles "ask the agent about its work" via a fresh task with read-only context, and (c) the multi-turn human↔agent thread primitive lands in P1 anyway. If a real need surfaces, revisit then — likely as a "thread on a task" reusing P1's infrastructure rather than as its own subsystem.
+1. **Bounded polish** — items from Deferred that can land opportunistically without blocking each other (external MCP env-var UI, runtime error attribution, claude-CLI UI status pill, JSON config validation). Touch them when they're on the path of other work.
+2. **Strategic items behind explicit triggers** — R6 EAV-flatten (revisit on property-shape churn), parallel dispatch (revisit if sequential processing becomes a real bottleneck), auto-evaluation (revisit at task-volume threshold). These stay parked deliberately.
 
-## Priority 1: Governor Threads
-
-**The problem:** The Governor surfaces findings; the operator approves, declines, or executes. There is no return channel. The operator cannot ask the Governor a question, cannot push back on a misreading, cannot refine a proposal through conversation. Findings are static artifacts in a feed — read, dismiss, or commit. This shape was right when the Governor was a proof of value (does autonomous oversight surface anything useful?). Now that the answer is yes, the missing piece is dialogue: the Governor's analysis is most valuable when it can be challenged, scoped, and iterated.
-
-**Why first:** Governor threads reshape the conversational surface that learning proposals will eventually flow through. With learnings already shipped, the Governor will gain a natural path to propose them via thread `action_payload`s ("I noticed jobs without explicit error-handling guidance fail more — propose adding...") instead of one-shot findings.
-
-**Specifically:** see [governor-threads proposal](architecture/proposals/governor-threads.md) for the full design. The shape:
-- **Threads** replace findings as the persistent unit of Governor↔Human exchange. Each thread is a meta-management discussion with a status (open / closed), an opener (governor / human), and an ordered append-only message list.
-- **Two invocation types**: `survey` (the existing 10-task auto trigger, reframed — the Governor either updates open threads or opens new ones) and `reply` (any human action in a thread — auto-spawned on thread creation, on a reply post, or coalesced into a pending invocation).
-- **Approvals collapse into prose.** No Approve / Decline buttons. A Governor message may carry a structured `action_payload` (proposal); the human responds in the compose box; the next reply invocation reads the conversation, decides whether the human's intent is clearly affirmative, and writes via MCP if so. Reply invocations are uniformly write-capable; the Governor's discretion (informed by the system prompt) decides when to use the write tool.
-- **Closed = muted.** Closing a thread is human-only and excludes that thread entirely from future Governor context. Reopening is human-only too.
-- **Constructive write surface.** `update_job_properties`, `create_job`, `update_queue_settings`. No `delete_job`, no `disable_job` — destruction is operator-only.
-- **Per-thread coalescing on replies.** If a reply invocation is queued or in flight for thread X and a new human message arrives on X, it merges into the pending invocation. One Governor message covers everything; the latest human message is operative.
-
-Schema: `governor_findings` is dropped; `governor_threads` and `governor_messages` replace it. Per the no-migration-system policy, the dev DB is recreated; an optional `migrate_db.py` script can fold each existing finding into a single-message thread.
-
-**In flight:** P1 backend (schema, db helpers, routes, governor.py refactor, MCP server) shipped. The frontend (`Governor.jsx` rewrite) and architecture-doc rewrite (`architecture/governor.md`) are the remaining steps.
-
-## Priority 2: Installer Distribution
-
-**The problem:** mAistro ships as a developer setup — clone the repo, `pip install -r requirements.txt`, `npm install`, `python run.py` in one terminal and `npm run dev` in another. The operators who would benefit most — non-developer subject-matter experts coordinating with autonomous agents on a single project — cannot follow that recipe. The platform's deployment shape (single user, single project, localhost) was always meant to ship to end users; what's missing is the artifact that puts it in their hands.
-
-**Why second:** Depth before breadth. Shipping an installer whose UX still has one-way findings locks in a shape that's about to change. Once P1 lands, the product is ready for the audience the installer opens up.
-
-**In flight:** The app-DB path has been relocated to user app-data with a `MAISTRO_APPDATA` env override for dev runs (P4 step 1). Remaining: PyInstaller spec + smoke test, Inno Setup script, Claude CLI detect-and-prompt, single-instance launcher.
-
-**Specifically:** see [installer-distribution proposal](architecture/proposals/installer-distribution.md) for the full design. v1 shape:
-- **PyInstaller-bundled backend + browser-based UI.** Lowest mechanical cost; backend serves `frontend/dist/` and the user opens `localhost:8420`. Native window (Tauri) is v2 if browser-tab UX proves unacceptable. Electron stays a non-goal.
-- **Windows-first Inno Setup installer.** macOS / Linux deferred until Windows is stable.
-- **Per-user data relocation.** App-DB moves from `<repo>/.maistro/app.db` to `%APPDATA%\mAistro\app.db` (Windows) / `~/Library/Application Support/mAistro/` (macOS) / `~/.local/share/mAistro/` (Linux). Single change point in `appstate.py` with `MAISTRO_APPDATA` env override for dev runs. Project DBs stay at `<project>/.maistro/maistro.db` — git-aware, the right shape regardless of distribution.
-- **Claude CLI: detect-and-prompt.** CLI is required, can't be embedded, requires user's auth. Installer detects, shows setup screen if missing, surfaces a CLI status indicator in the UI alongside MCP server health pills.
-- **Single-instance behavior.** Second launch detects the existing 8420 binding and opens the browser to it.
-- **Auto-start, system tray, autoupdate: v2.** First installer's job is "make it runnable."
-
-**Second-order effects:** Once the installer ships, the README's Quick Start needs a parallel "end-user" section alongside the current developer one. Schema upgrades that include data changes still use the bespoke-script-via-`migrate_db.py` pattern; the installer ships those scripts and the UI exposes them as upgrade actions. Multi-project orchestration becomes more defensible to defer once the deployment shape is locked as single-user-single-project.
+Task session interrogation remains **dropped** as a planned priority (see prior strategy revisions). If a real need surfaces it likely lands as a "thread on a task" reusing the Governor-threads infrastructure.
 
 ## Deferred
 
@@ -111,6 +75,8 @@ Valuable but deliberately postponed:
 
 ## Completed
 
+- **Installer Distribution v1** (was P2) — Windows-first end-user distribution. PyInstaller one-folder bundle (`maistro.spec`) wraps the backend + bundled `frontend/dist/`. `backend/main.py` serves the SPA with a catch-all fallback for deep links; `_MEIPASS` resolution handles the frozen layout. `run.py` routes `--mcp-server` / `--governor-mcp` argv to the appropriate stdio MCP server so dispatched agents re-spawn the bundled exe correctly. App-data relocated to `%APPDATA%\mAistro\` (Windows) / `~/Library/Application Support/mAistro/` (macOS) / `$XDG_DATA_HOME/mAistro/` (Linux), with `MAISTRO_APPDATA` env override for dev. Inno Setup script + `installer/build.ps1` (npm build → PyInstaller → ISCC) produce the signed installer artifact. Launcher polish: single-instance detection (probes `/health`, opens browser if mAistro already runs, errors clearly on foreign port collision), auto-opens browser on frozen first-launch, warns non-fatally if `claude` CLI is missing from PATH. Per-user state survives uninstall; per-project state lives at `<project>/.maistro/` and is install-independent. Auto-start, system tray, and auto-update remain v2 deferrals.
+- **Governor Threads** (was P1) — replaced one-way findings with a two-way meta-management conversation surface. Each thread has a status (open / closed), an opener (governor / human), and an append-only message log. Two invocation types: `survey` (10-task auto trigger or manual; reads open threads + recent work, posts to existing threads or opens new ones) and `reply` (auto-spawned on human thread activity; per-thread coalesced; uniformly write-capable). Approvals collapse into prose — a Governor message may carry a structured `action_payload` proposal; the next reply invocation reads the conversation and uses MCP write tools if the human's intent is clearly affirmative. Closed = invisible to the Governor (human-only mute). Write surface is constructive only: `update_job_properties`, `create_job`, `update_queue_settings`. Schema: `governor_findings` dropped; `governor_threads` + `governor_messages` replace it. Frontend: two-pane Governor view (thread list + thread detail with action-payload cards, Ctrl+Enter compose, debug drawer). Architecture doc rewritten ([governor.md](architecture/governor.md)).
 - **Job Learnings** (was P3) — per-job, individually-toggleable rules complementing the prose `description`. Operator and gated agent CRUD via internal MCP. v2 follow-up: capped list (`max_learnings`, default 10) with per-row size cap, switched from auto-injection to query-on-demand (`list_learnings` returns id+summary, `read_learnings` fetches full bodies for selected ids), system prompt directs the agent to use them. Cap acts as a forcing function for consolidation over append.
 - **Triggers/Dispatches Stage 1 rename** — Python identifiers, frontend props/wrappers, API URLs, and the `MAISTRO_TRIGGER_ID` env var moved from `task`/`task_execution` to `trigger`/`dispatch`. SQL tables stay legacy (`tasks` / `task_executions` / `task_events`); Stage 2+ structural promotion of dispatches as a first-class entity remains deferred.
 - **Task Workspace Isolation** (was P1) — three-phase delivery now fully shipped. Phase 1: CLI subtype mapping (`error_max_turns` → `stop_reason: max_turns`) so turn-limit failures classify as `exhausted`, not `completed`. Phase 2: stash-on-orphan safety net for non-success terminals with a dirty working tree. Phase 3: per-task git worktrees at `.maistro/worktrees/task-<id>/` on `<job-slug>/task-<id>` branches. Terminal handlers reconcile via git: `completed` fast-forwards into main and removes the worktree; non-success preserves with discard / manual-merge controls. Operator-wins conflict policy. WorkspaceBanner exposes path, branch, manual-merge command, and confirm-gated `POST /api/tasks/{id}/workspace/discard`. Resume reuses the original worktree. Resolved kanban floats tasks with preserved worktrees to the top.

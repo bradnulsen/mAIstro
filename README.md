@@ -12,6 +12,16 @@ Every dimension is yours to tune: when work happens, what tools it can use, whet
 
 ## Quick Start
 
+You need the [Claude Code CLI](https://claude.ai/code) installed and authenticated — mAistro invokes it as a subprocess to run agents. Then pick a path:
+
+### Run the installed build (Windows)
+
+Grab `maistro-setup-<version>.exe` from a release, run it, and click the new Start-Menu icon. The launcher opens `http://localhost:8420` in your default browser. From there, pick a project directory — mAistro initializes a `.maistro/` folder inside it (gitignored), installs a git post-commit hook, and you're ready.
+
+Per-user state (recent projects, job templates) lives at `%APPDATA%\mAistro\` and survives uninstall. Per-project state lives at `<project>\.maistro\`.
+
+### Run from source (any platform)
+
 ```bash
 # Backend
 pip install -r requirements.txt
@@ -23,9 +33,17 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 and pick a project directory. mAistro initializes a `.maistro/` folder inside it (gitignored), installs a git post-commit hook, and you're ready.
+Open http://localhost:5173 (Vite proxies `/api` and `/health` to the backend on :8420). Source runs default the app-data directory to a repo-local `.maistro/` so an active checkout keeps its own state.
 
-You'll need the [Claude Code CLI](https://claude.ai/code) installed and authenticated — mAistro invokes it as a subprocess to run agents.
+### Build the installer yourself
+
+```powershell
+pip install pyinstaller
+# plus Inno Setup 6 from https://jrsoftware.org/isdl.php
+./installer/build.ps1 -Version 0.1.0
+```
+
+See [installer/README.md](installer/README.md) for what the build produces and what survives uninstall.
 
 ---
 
@@ -84,7 +102,7 @@ Use this for jobs with broad blast radius — anything touching configuration, d
 
 ### "I want to ask the agent why it did something after the fact"
 
-Open a resolved task and use **Reply** to ask a follow-up question. The session resumes with full prior context. (Read-only mode for resumed sessions is in flight — see `STRATEGY.md`.)
+Open a resolved task and use **Reply** to ask a follow-up question. The session resumes with full prior context.
 
 For one-off corrections, use **Resume** to continue the same CLI session, or **Retry** to re-run a failed task.
 
@@ -190,11 +208,13 @@ Coalescing applies — if the dispatched job already has a pending task, the new
 
 ### The Governor
 
-Every 10 successful tasks, the **Governor** runs. It's a meta-agent — its job is to look at how *your* jobs are performing and produce findings: suggestions, observations, configuration changes worth making.
+Every 10 successful tasks, the **Governor** runs. It's a meta-agent — its job is to look at how *your* jobs are performing and surface what's worth your attention.
 
-You see findings in the **Governor** view. You approve, decline, or execute them. Approved suggestions can be auto-applied via a write-enabled execution run.
+You see Governor output in the **Governor** view as **threads**: a list of conversations, each with a subject and a chronological message log. Threads can be opened by either side — the Governor opens a thread when a survey turns up something worth flagging; you open one when you want a question answered or a change considered. Reply, close, or reopen any thread. Closed threads disappear from the open list (they're still queryable, but the Governor itself has no notion of mute or escalation — open/closed is a human-only signal).
 
-The Governor doesn't touch your project code. It only reads task history and writes findings. Think of it as an embedded operator — the eyes you'd otherwise need to keep on the dashboard.
+When the Governor wants to propose a configuration change, it attaches a *proposal card* to its message — a structured payload describing what it would do and why. You can approve a card to apply it, or just reply in prose to keep the thread going. Plain text answers don't need approval; only proposal cards mutate state.
+
+The Governor doesn't touch your project code. It reads task history and threads, and writes back to its own conversation log. Think of it as an embedded operator — the eyes you'd otherwise need to keep on the dashboard.
 
 You can also trigger Governor runs manually if you want a fresh assessment.
 
@@ -336,7 +356,7 @@ Walking into a 20-year-old facility with sparse documentation is the most common
 - Reply on the resulting task: "now extract the alarm logic specifically — which tags drive which alarms, what are the priorities?"
 - Reply again: "now compare this against the existing `docs/Functional_Spec.docx` and tell me what's undocumented."
 
-Read-only mode (in flight) makes this safer — the agent is a forensic investigator, not an editor. You get an interview transcript with the legacy code.
+A narrow `allowed_tools` set (Read, Grep, Glob only) makes this safer — the agent is a forensic investigator, not an editor. You get an interview transcript with the legacy code.
 
 ### 11. The "Site-visit-prep" pattern — manual + dependency for handoff packages
 
