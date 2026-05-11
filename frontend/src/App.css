@@ -218,15 +218,34 @@ body {
   font-size: var(--text-sm);
 }
 
-.command-bar-project {
-  font-weight: 600;
-  color: var(--text);
-  padding: var(--space-1) var(--space-3);
+.command-bar-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-4) var(--space-1) var(--space-2);
   border-right: 1px solid var(--border-light);
-  margin-right: var(--space-2);
+  margin-right: var(--space-3);
   white-space: nowrap;
   cursor: default;
   user-select: none;
+  line-height: var(--line-height-tight);
+}
+.command-bar-brand-name {
+  font-weight: 700;
+  font-size: var(--text-base);
+  letter-spacing: 0.01em;
+  color: var(--text);
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 2px;
+}
+.command-bar-brand-name .brand-orange {
+  color: var(--warning);
+}
+.command-bar-brand-project {
+  font-weight: 500;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
 
 .command-bar-jobs {

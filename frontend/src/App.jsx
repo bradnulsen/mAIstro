@@ -192,11 +192,16 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
 
   return (
     <div className="command-bar">
-      {project && (
-        <div className="command-bar-project" title={project.path}>
-          {project.name}
-        </div>
-      )}
+      <div className="command-bar-brand">
+        <span className="command-bar-brand-name">
+          mA<span className="brand-orange">i</span>str<span className="brand-orange">o</span>
+        </span>
+        {project && (
+          <span className="command-bar-brand-project" title={project.path}>
+            {project.name}
+          </span>
+        )}
+      </div>
       <div className="command-bar-jobs">
         {jobs.map(j => {
           const p = j.properties || {}
