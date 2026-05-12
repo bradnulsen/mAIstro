@@ -484,7 +484,7 @@ def tool_delete_learning(args: dict) -> str:
 TOOLS = [
     {
         "name": "git_status",
-        "description": "Get the working tree status (porcelain format).",
+        "description": "Working-tree status (porcelain).",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -509,7 +509,7 @@ TOOLS = [
     },
     {
         "name": "git_diff",
-        "description": "Get diff for working tree changes or a specific commit.",
+        "description": "Working-tree diff, or a commit's diff.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -527,10 +527,7 @@ TOOLS = [
     },
     {
         "name": "git_commit",
-        "description": (
-            f"Commit staged/unstaged changes with enforced authorship "
-            f"({JOB_NAME} <{JOB_SLUG}@maistro.local>) and message prefix ([{JOB_NAME}])."
-        ),
+        "description": f"Commit changes — authorship and [{JOB_NAME}] prefix enforced.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -551,7 +548,7 @@ TOOLS = [
     # disabled — see the comment block above the tool functions.
     {
         "name": "list_files",
-        "description": "List files in the project matching a glob pattern.",
+        "description": "List project files matching a glob.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -568,7 +565,7 @@ TOOLS = [
     },
     {
         "name": "read_file",
-        "description": "Read a file's contents from the project directory.",
+        "description": "Read a project file.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -582,7 +579,7 @@ TOOLS = [
     },
     {
         "name": "list_jobs",
-        "description": "List all configured jobs in this mAistro project with their descriptions and current status.",
+        "description": "List jobs in this project with descriptions and status.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -590,11 +587,7 @@ TOOLS = [
     },
     {
         "name": "dispatch_task",
-        "description": (
-            "Enqueue a task for another job, creating an agent trigger. "
-            "The target job will run with your message as context. "
-            "Self-dispatch is prohibited."
-        ),
+        "description": "Enqueue a task on another job (no self-dispatch). Your message becomes the target's context.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -612,7 +605,7 @@ TOOLS = [
     },
     {
         "name": "get_queue_status",
-        "description": "Get read-only view of the current task queue: pending, queued, running, and recently completed tasks.",
+        "description": "Current queue snapshot: pending, queued, running, recent terminals.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -620,12 +613,7 @@ TOOLS = [
     },
     {
         "name": "list_learnings",
-        "description": (
-            "Breadth view of this job's enabled learnings — returns id, "
-            "one-line summary, and source (human or agent) for each row. "
-            "Use this first to scan what's stored, then call read_learnings "
-            "with the ids that look relevant. Always available."
-        ),
+        "description": "Index of this job's enabled learnings (id, summary, source). Scan first; fetch bodies via read_learnings.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -633,12 +621,7 @@ TOOLS = [
     },
     {
         "name": "read_learnings",
-        "description": (
-            "Depth view of selected learnings — returns the full body for "
-            "each requested id (scoped to the current job). Use after "
-            "list_learnings to deep-dive only the entries you'll actually "
-            "use. Always available."
-        ),
+        "description": "Full body of selected learnings by id (scoped to this job).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -653,14 +636,7 @@ TOOLS = [
     },
     {
         "name": "add_learning",
-        "description": (
-            "Append a new agent-authored learning to this job's list. "
-            "Requires the allow_learning_self_modification job permission. "
-            "Provide both a one-sentence summary (the index entry) and a "
-            "longer body. Stamped source='agent'. The list has a hard cap "
-            "(max_learnings job property); at capacity the call is refused — "
-            "consolidate via update_learning or delete_learning first."
-        ),
+        "description": "Add a learning (summary + body). Refused at capacity — consolidate or delete an existing one first.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -678,12 +654,7 @@ TOOLS = [
     },
     {
         "name": "update_learning",
-        "description": (
-            "Rewrite the summary and/or body of an agent-authored learning. "
-            "Requires the allow_learning_self_modification job permission. "
-            "Refuses to edit operator-authored (source='human') rows. "
-            "Toggling enabled is an operator action and not exposed here."
-        ),
+        "description": "Edit an agent-authored learning (summary and/or body). Operator-authored rows are read-only.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -705,11 +676,7 @@ TOOLS = [
     },
     {
         "name": "delete_learning",
-        "description": (
-            "Hard-delete an agent-authored learning. Requires the "
-            "allow_learning_self_modification job permission. Refuses to delete "
-            "operator-authored (source='human') rows."
-        ),
+        "description": "Delete an agent-authored learning. Operator-authored rows are protected.",
         "inputSchema": {
             "type": "object",
             "properties": {

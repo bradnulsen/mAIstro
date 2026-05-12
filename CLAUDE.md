@@ -133,7 +133,7 @@ New code should import the domain module directly. The re-export shim exists so 
 
 ### `backend/main.py` is a thin shell
 
-Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All routes live in `*_routes.py` modules: `job_routes`, `queue_routes`, `governor_routes`, `project_routes`, `feed_routes`, `git_routes`, `mcp_routes`, `dashboard_routes`, `config_routes`, `learnings_routes`.
+Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All routes live in `*_routes.py` modules: `job_routes`, `queue_routes`, `governor_routes`, `project_routes`, `feed_routes`, `git_routes`, `mcp_routes`, `dashboard_routes`, `config_routes`, `learnings_routes`, `system_routes` (host environment — Claude CLI presence on PATH plus worker liveness; no project required).
 
 ### Other backend modules
 
@@ -157,7 +157,7 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 - `api.js` — `fetchJSON` (request/response) + `fetchSSE` (streaming) — the only place backend URLs are constructed.
 - `App.css` — design token system: all visual constants as CSS custom properties on `:root` (colors, type scale `--text-3xs`–`--text-2xl`, spacing `--space-1`–`--space-9`, radius, z-index, layout dims, 10 job identity colors `--job-color-0`–`--job-color-9`). **Use existing tokens rather than hardcoded values.**
 - `util.js` — `getTaskStatus` (status with timestamp fallback), `formatDate`, `formatDuration`, label maps.
-- `components/` — Queue (Dispatch kanban), Feed, Tasks (job config), Settings, Governor, Dashboard, Files, McpServers, HelpTip.
+- `components/` — Queue (Dispatch kanban), Tasks (job config), Settings, Governor, Dashboard (includes the git-activity feed), Files, McpServers, HelpTip.
 
 ## Conventions
 

@@ -122,6 +122,7 @@ Your job has a curated, capped list of learnings — discrete rules, examples, a
 
 
 LEARNINGS_WRITE_BLOCK = """\
+- Prioritize storing learnings as the generalized tools or process you used to find the information over just the trivia or the artifacts found. Learnings should be a breadcrumb that reproduces the correct results under different but similar scenarios.
 - When you discover guidance worth carrying forward to future runs, capture it via `add_learning` (provide both a one-sentence `summary` and a longer `body`). Prefer `update_learning` over appending when a similar rule already exists.
 - The list has a hard cap. At capacity, `add_learning` will refuse — consolidate or delete an existing learning first rather than abandoning the insight."""
 
