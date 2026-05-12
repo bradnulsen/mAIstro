@@ -538,6 +538,81 @@ body {
   color: #1a1a1a;
 }
 
+/* ═══════════════════════════════════════════════════════
+   SYSTEM HEALTH — fatal halt overrides everything else
+   ═══════════════════════════════════════════════════════ */
+
+/* Fatal: solid-red inset border + override the shimmer gradient with
+   a flat red command bar. The whole point is "you cannot miss this." */
+.app-shell[data-health="fatal"] {
+  box-shadow: inset 0 0 0 4px var(--danger);
+}
+.app-shell[data-health="fatal"] .command-bar {
+  background: var(--danger) !important;
+  border-bottom-color: var(--danger) !important;
+  animation: none !important;
+  color: #fff;
+}
+.app-shell[data-health="fatal"] .command-bar-brand-name,
+.app-shell[data-health="fatal"] .command-bar-brand-project,
+.app-shell[data-health="fatal"] .command-bar-toggle,
+.app-shell[data-health="fatal"] .command-bar-indicator,
+.app-shell[data-health="fatal"] .command-bar-pill {
+  color: #fff;
+}
+.app-shell[data-health="fatal"] .command-bar-brand-name .brand-orange {
+  color: #fff;
+}
+
+/* Warn: amber inset border, gentler. Doesn't gate dispatch but signals
+   that the silent-failure streak is climbing or the worker is stale. */
+.app-shell[data-health="warn"] {
+  box-shadow: inset 0 0 0 3px var(--warning);
+}
+
+.system-halt-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background: var(--danger);
+  color: #fff;
+}
+.system-halt-banner-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--text-sm);
+}
+.system-halt-icon {
+  font-size: var(--text-xl);
+  flex-shrink: 0;
+}
+.system-halt-text { flex: 1; min-width: 0; }
+.system-halt-title {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: var(--text-sm);
+  margin-bottom: 2px;
+}
+.system-halt-detail {
+  font-weight: 400;
+  font-size: var(--text-xs);
+  opacity: 0.95;
+}
+.system-halt-resume {
+  background: #fff;
+  color: var(--danger);
+  border: none;
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.system-halt-resume:hover { background: #f4f4f4; }
+
 /* Keep status-dot for backward compat (used in task list items) */
 .status-dot {
   width: var(--size-dot);

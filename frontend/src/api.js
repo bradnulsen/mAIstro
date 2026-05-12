@@ -209,6 +209,11 @@ export const getGovernorRuns = () => fetchJSON('/api/governor/runs')
 
 export const getClaudeStatus = () => fetchJSON('/api/system/claude-status')
 
+export const getSystemHealth = () => fetchJSON('/api/system/health')
+
+export const clearSystemHealth = () =>
+  fetchJSON('/api/system/health/clear', { method: 'POST' })
+
 // ── Job Templates ──
 
 export const listTemplates = () => fetchJSON('/api/templates')

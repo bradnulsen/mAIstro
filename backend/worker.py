@@ -56,11 +56,110 @@ _lock: asyncio.Lock = asyncio.Lock()
 _active_task_id: int | None = None
 _cancel_event: asyncio.Event | None = None
 
+# ── Health state ────────────────────────────────────────────
+#
+# `_last_loop_tick_at` is bumped every iteration of `_loop()`; the
+# system-health endpoint surfaces it so the frontend can detect a
+# wedged worker. While a task is running the loop is blocked in
+# `_process_trigger`, so the timestamp only refreshes between tasks —
+# the frontend should treat it together with `_active_task_id`.
+#
+# `_silent_streak` counts consecutive completions where the CLI
+# exited "successfully" but did no real model work (cost=0, ≤1 turn,
+# no tool calls). That's the smoking-gun pattern for an upstream
+# API/network failure that the CLI swallowed. Two in a row sets
+# `_health_halt_reason`; the worker then refuses to pull queued
+# work until cleared via `clear_health_halt()` (from the Resume
+# button) or by a subsequent dispatch that does real work.
+_last_loop_tick_at: str | None = None
+_silent_streak: int = 0
+_health_halt_reason: str | None = None
+_health_halt_at: str | None = None
+
+# Stop-reasons the CLI returns when it thinks the model finished
+# normally. A $0.00 / ≤1-turn dispatch under one of these reasons is
+# almost certainly silent: the model never actually responded.
+_SUCCESSY_STOP_REASONS = {"success", "end_turn", "stop_sequence", "stop", None, ""}
 
 
 def get_active_dispatch_id() -> int | None:
     """Return the task ID currently being processed, or None."""
     return _active_task_id
+
+
+def get_health_snapshot() -> dict:
+    """Return current worker-health signals for the /api/system/health route.
+
+    Frontend-friendly shape. The route module decides overall ok/warn/fatal
+    after combining these with its own checks (claude CLI on PATH, etc.).
+    """
+    return {
+        "last_tick_at": _last_loop_tick_at,
+        "active_dispatch_id": _active_task_id,
+        "silent_streak": _silent_streak,
+        "halt_reason": _health_halt_reason,
+        "halt_at": _health_halt_at,
+    }
+
+
+def clear_health_halt() -> None:
+    """Resume after an operator confirms the upstream issue is resolved.
+
+    Resets the silent-failure streak and lets the worker pull again on
+    the next loop iteration. The operator's `auto_dispatch` toggle is
+    untouched — this is strictly an automatic-safety lift.
+    """
+    global _silent_streak, _health_halt_reason, _health_halt_at
+    _silent_streak = 0
+    _health_halt_reason = None
+    _health_halt_at = None
+    _wake_event.set()
+
+
+def _is_silent_api_failure(meta: dict, has_tool_use: bool) -> bool:
+    """Detect the (no-cost, no-turns, success-y stop) dispatch pattern.
+
+    A real model response always costs money and reports ≥1 turn. Tool use
+    is a stronger positive signal — if the agent invoked anything, the
+    model definitely responded. Anything else with `cost_usd == 0` looks
+    like the CLI gave up before the API answered.
+    """
+    if has_tool_use:
+        return False
+    cost = meta.get("cost_usd")
+    if cost is None or cost > 0:
+        return False
+    turns = meta.get("num_turns")
+    if turns is not None and turns > 1:
+        return False
+    return meta.get("stop_reason") in _SUCCESSY_STOP_REASONS
+
+
+def _update_health_after_dispatch(meta_fields: dict, has_tool_use: bool,
+                                  completion_state: str) -> None:
+    """Record a dispatch outcome's effect on system health.
+
+    Only success-like terminals participate in the silent-failure heuristic.
+    A `failed` / `timed_out` / `cancelled` outcome is already loud — it
+    shouldn't reset or extend the streak. `exhausted` did real work
+    (consumed turns), so it resets the streak.
+    """
+    global _silent_streak, _health_halt_reason, _health_halt_at
+    if completion_state not in ("completed", "exhausted"):
+        return
+    if _is_silent_api_failure(meta_fields, has_tool_use):
+        _silent_streak += 1
+        if _silent_streak >= 2 and not _health_halt_reason:
+            _health_halt_reason = (
+                f"{_silent_streak} consecutive dispatches finished at $0.00 "
+                f"with <=1 turn and no tool use -- probable API or network "
+                f"outage. Worker paused. Click Resume after you've verified "
+                f"upstream."
+            )
+            _health_halt_at = utcnow()
+            log.warning("[worker] HEALTH HALT: %s", _health_halt_reason)
+    else:
+        _silent_streak = 0
 
 
 async def _integrate_or_fail(task_id: int, job: dict,
@@ -364,6 +463,7 @@ async def _sweep_orphan_worktrees():
 
 async def _loop():
     """Main worker loop — poll for pending tasks."""
+    global _last_loop_tick_at
     _swept_project = None
     while True:
         try:
@@ -372,8 +472,17 @@ async def _loop():
             except asyncio.TimeoutError:
                 pass
             _wake_event.clear()
+            _last_loop_tick_at = utcnow()
 
             if not state.PROJECT_DIR:
+                continue
+
+            # Health halt: refuse to pull new work after a confirmed
+            # silent-failure streak. Existing in-flight dispatches were
+            # never affected (the loop only gates the NEXT pull); the
+            # operator clears this via clear_health_halt() through the
+            # /api/system/health/clear route.
+            if _health_halt_reason:
                 continue
 
             if _swept_project != state.PROJECT_DIR:
@@ -597,6 +706,10 @@ async def _process_trigger(task: dict):
     full_response = []
     # Execution metadata captured from CLI result event
     _result_meta: dict = {}
+    # Track whether the agent invoked any tools — used by the silent-failure
+    # health heuristic. Tool use is a strong positive signal that the API
+    # really answered (a $0 dispatch with tool calls is impossible).
+    _has_tool_use = False
 
     try:
         task_with_session = {**task, "session_id": session_id}
@@ -606,6 +719,8 @@ async def _process_trigger(task: dict):
                                     subordinates=subordinates,
                                     workspace_dir=workspace_dir):
             etype = event.get("type")
+            if etype == "tool_use":
+                _has_tool_use = True
 
             # Incremental persistence: write each raw NDJSON event immediately
             if etype == "_raw":
@@ -728,14 +843,23 @@ async def _process_trigger(task: dict):
     finally:
         # Last-resort: if status is still 'active' (both try and except
         # crashed), force it to failed so tasks can never get stuck.
+        final_status = None
         try:
             task_row = await db.get_trigger(task_id)
             if task_row and task_row.get("status") == "active":
                 log.error("[worker] Task #%d still active in finally — forcing to failed", task_id)
                 await db.transition_trigger(task_id, "failed",
                                          error="internal error: post-processing failed")
+                final_status = "failed"
+            elif task_row:
+                final_status = task_row.get("status")
         except Exception:
             log.exception("[worker] Task #%d CRITICAL: could not transition to failed", task_id)
+        # Feed the silent-failure health heuristic. Safe to call even if
+        # meta_fields never populated — _is_silent_api_failure returns False
+        # when cost_usd is None.
+        if final_status:
+            _update_health_after_dispatch(_result_meta, _has_tool_use, final_status)
         if watchdog and not watchdog.done():
             watchdog.cancel()
         pubsub.broadcast(task_id, events.done())

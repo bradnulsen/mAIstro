@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTrigger, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus, getClaudeStatus } from './api'
+import { getProject, openProject, browseProject, getRecentProjects, removeRecentProject, listJobs, enqueueTrigger, getQueueSettings, setQueueSettings, queueAll, shelveAll, getGovernorStatus, getClaudeStatus, getSystemHealth, clearSystemHealth } from './api'
 import Tasks from './components/Tasks'
 import Queue from './components/Queue'
 import Governor from './components/Governor'
@@ -17,6 +17,7 @@ export default function App() {
   const [jobs, setJobs] = useState([])
   const [autoQueue, setAutoQueue] = useState(false)
   const [governorBadge, setGovernorBadge] = useState(0)
+  const [health, setHealth] = useState(null) // {ok, level, checks, halt_reason, halt_at}
 
   // Load auto-queue setting at app level
   useEffect(() => {
@@ -60,11 +61,49 @@ export default function App() {
     return () => clearInterval(interval)
   }, [project])
 
+  // Poll system health — paints the whole shell red/yellow when the worker
+  // is halted or degraded. Polls every 5s while degraded so a successful
+  // Resume click reflects fast; 15s otherwise.
+  useEffect(() => {
+    if (!project) return
+    let cancelled = false
+    let interval = null
+    const poll = () => {
+      getSystemHealth()
+        .then(h => { if (!cancelled) setHealth(h) })
+        .catch(() => {})
+    }
+    const schedule = () => {
+      if (interval) clearInterval(interval)
+      const period = (health && health.level !== 'ok') ? 5000 : 15000
+      interval = setInterval(poll, period)
+    }
+    poll()
+    schedule()
+    return () => { cancelled = true; if (interval) clearInterval(interval) }
+  }, [project, health?.level])
+
+  const handleResumeHealth = useCallback(async () => {
+    try {
+      await clearSystemHealth()
+      const h = await getSystemHealth()
+      setHealth(h)
+    } catch {}
+  }, [])
+
   if (loading) return <div className="loading">Loading...</div>
   if (!project) return <ProjectOpener onOpen={setProject} />
 
   return (
-    <div className="app-shell" data-auto-dispatch={autoQueue || undefined} data-any-running={jobs.some(j => j.properties?.running) || undefined}>
+    <div
+      className="app-shell"
+      data-auto-dispatch={autoQueue || undefined}
+      data-any-running={jobs.some(j => j.properties?.running) || undefined}
+      data-health={(health && health.level !== 'ok') ? health.level : undefined}
+    >
+      {health && health.level === 'fatal' && (
+        <SystemHaltBanner health={health} onResume={handleResumeHealth} />
+      )}
       <nav className="rail">
         <div className="rail-logo" onClick={() => { setProject(null); setJobs([]) }} title="Switch project">⬡</div>
         <button
@@ -298,6 +337,29 @@ function CommandBar({ project, jobs, onNavigate, refreshJobs, autoQueue, setAuto
           <input type="checkbox" checked={autoQueue} onChange={handleAutoQueueToggle} />
           <span>Auto</span>
         </label>
+      </div>
+    </div>
+  )
+}
+
+function SystemHaltBanner({ health, onResume }) {
+  // Surface the failing check(s) so the operator can tell which leg of the
+  // health probe tripped. Right now the only fatal paths are claude_cli
+  // missing or the worker-side silent-failure halt; the loop covers either.
+  const fatal = (health.checks || []).filter(c => c.level === 'fatal')
+  return (
+    <div className="system-halt-banner" role="alert">
+      <div className="system-halt-banner-bar">
+        <span className="system-halt-icon" aria-hidden="true">⚠</span>
+        <div className="system-halt-text">
+          <div className="system-halt-title">SYSTEM HALTED</div>
+          {fatal.map((c, i) => (
+            <div key={i} className="system-halt-detail">{c.detail}</div>
+          ))}
+        </div>
+        <button className="system-halt-resume" onClick={onResume}>
+          Resume
+        </button>
       </div>
     </div>
   )
