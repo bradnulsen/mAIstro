@@ -50,6 +50,7 @@ def build_mcp_config(
     allowed_internal = json.dumps(props.get("allowed_internal_tools") or [])
     allowed_dispatch = json.dumps(props.get("allowed_dispatch_targets") or [])
     allow_learning_writes = "1" if props.get("allow_learning_self_modification") else "0"
+    allow_self_requeue = "1" if props.get("allow_self_requeue") else "0"
 
     servers = {
         "maistro": {
@@ -68,6 +69,7 @@ def build_mcp_config(
                 "MAISTRO_ALLOWED_INTERNAL_TOOLS": allowed_internal,
                 "MAISTRO_ALLOWED_DISPATCH_TARGETS": allowed_dispatch,
                 "MAISTRO_ALLOW_LEARNING_WRITES": allow_learning_writes,
+                "MAISTRO_ALLOW_SELF_REQUEUE": allow_self_requeue,
             },
         }
     }

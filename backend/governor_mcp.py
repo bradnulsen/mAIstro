@@ -16,6 +16,8 @@ import subprocess
 import sys
 import urllib.request
 
+from backend import git_tools
+
 PROJECT_DIR = os.environ.get("MAISTRO_PROJECT_DIR", ".")
 BACKEND_PORT = int(os.environ.get("MAISTRO_BACKEND_PORT", "8420"))
 GOVERNOR_MODE = os.environ.get("MAISTRO_GOVERNOR_MODE", "read")
@@ -84,16 +86,23 @@ def tool_get_recent_tasks(args: dict) -> str:
     return _api_get(f"/api/governor/recent-tasks?limit={limit}")
 
 
-def tool_get_git_log(args: dict) -> str:
-    n = args.get("count", 30)
-    try:
-        result = subprocess.run(
-            ["git", "log", "--oneline", f"-{n}"],
-            capture_output=True, text=True, cwd=PROJECT_DIR, timeout=10,
-        )
-        return result.stdout or "(no commits)"
-    except Exception as e:
-        return f"Error: {e}"
+_GIT_OUTPUT_CAP = 32_000  # chars; truncate diffs so one call can't blow the window
+
+
+def tool_git_status(args: dict) -> str:
+    return git_tools.git_status_handler(args, cwd=PROJECT_DIR)
+
+
+def tool_git_log(args: dict) -> str:
+    return git_tools.git_log_handler(args, cwd=PROJECT_DIR)
+
+
+def tool_git_diff(args: dict) -> str:
+    return git_tools.git_diff_handler(args, cwd=PROJECT_DIR, cap=_GIT_OUTPUT_CAP)
+
+
+def tool_git_show(args: dict) -> str:
+    return git_tools.git_show_handler(args, cwd=PROJECT_DIR, cap=_GIT_OUTPUT_CAP)
 
 
 def tool_get_job_health(args: dict) -> str:
@@ -160,13 +169,58 @@ READ_TOOLS = [
         },
     },
     {
-        "name": "get_git_log",
-        "description": "Get recent git commit history with authorship.",
+        "name": "git_status",
+        "description": "Working-tree status (porcelain) of the project root.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "git_log",
+        "description": "Recent commit history (oneline).",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "count": {"type": "integer", "description": "Number of commits (default 30)"},
+                "limit": {"type": "integer", "description": "Max commits (default 20, max 100)."},
+                "path": {"type": "string", "description": "Limit to commits touching this path."},
             },
+        },
+    },
+    {
+        "name": "git_diff",
+        "description": (
+            "Diff modes: commit=<sha> diffs that commit against its parent; "
+            "base+head diffs a range (use task.start_commit..result_commit to "
+            "see exactly what files a task touched); neither diffs the working "
+            "tree vs HEAD. name_only=true returns just the file list — cheap, "
+            "use first when surveying scope. paths=[...] filters by pathspec."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "commit": {"type": "string", "description": "Single commit (diffed against its parent)."},
+                "base": {"type": "string", "description": "Base of a range diff (typically task.start_commit)."},
+                "head": {"type": "string", "description": "Head of a range diff (typically task.result_commit)."},
+                "name_only": {"type": "boolean", "description": "Files-only mode."},
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional path filter.",
+                },
+            },
+        },
+    },
+    {
+        "name": "git_show",
+        "description": (
+            "Show one commit. name_only=true returns just the file list. "
+            "Default returns the full diff plus the commit header."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "commit": {"type": "string", "description": "Commit hash (full or short)."},
+                "name_only": {"type": "boolean", "description": "Files-only mode."},
+            },
+            "required": ["commit"],
         },
     },
     {
@@ -249,7 +303,10 @@ READ_TOOL_NAMES = {t["name"] for t in READ_TOOLS}
 TOOL_HANDLERS = {
     "list_jobs": tool_list_jobs,
     "get_recent_tasks": tool_get_recent_tasks,
-    "get_git_log": tool_get_git_log,
+    "git_status": tool_git_status,
+    "git_log": tool_git_log,
+    "git_diff": tool_git_diff,
+    "git_show": tool_git_show,
     "get_job_health": tool_get_job_health,
     "list_open_threads": tool_list_open_threads,
     "get_thread": tool_get_thread,

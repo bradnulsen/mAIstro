@@ -369,6 +369,7 @@ async def get_recent_tasks_for_governor(limit: int = 50) -> list[dict]:
                   t.trigger_detail, t.context, t.error,
                   t.stop_reason, t.num_turns, t.cost_usd,
                   t.started_at, t.completed_at,
+                  t.start_commit, t.result_commit,
                   t.is_subordinate, t.effective_root_id
            FROM tasks_resolved t
            JOIN jobs j ON j.id = t.job_id

@@ -1664,34 +1664,53 @@ label.muted-text {
   background: var(--hover-bg);
 }
 
-/* New-thread composer */
+/* New-thread modal — reuses .dispatch-modal-* base for header/footer/backdrop;
+   only the body differs (title input + body textarea stacked vertically). */
 
-.governor-new-thread {
+.governor-new-thread-modal-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--border-light);
-  background: var(--bg-active);
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
 }
 
-.governor-new-thread input,
-.governor-new-thread textarea {
+.governor-new-thread-modal-title-input {
   width: 100%;
-  font-family: var(--font);
-  font-size: var(--text-md);
-  padding: var(--space-2) var(--space-3);
   box-sizing: border-box;
+  padding: var(--space-3) var(--space-4);
+  font-family: var(--font);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  outline: none;
+}
+.governor-new-thread-modal-title-input:focus {
+  border-color: var(--border);
 }
 
-.governor-new-thread textarea {
-  resize: vertical;
+.governor-new-thread-modal-body-textarea {
+  flex: 1;
+  min-height: 14rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-4);
+  font-family: var(--font);
+  font-size: var(--text-base);
+  line-height: var(--line-height-body);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  resize: none;
+  outline: none;
 }
-
-.governor-new-thread-actions {
-  display: flex;
-  gap: var(--space-3);
-  justify-content: flex-end;
+.governor-new-thread-modal-body-textarea:focus {
+  border-color: var(--border);
 }
 
 /* Thread view */

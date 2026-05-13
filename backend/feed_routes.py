@@ -17,8 +17,11 @@ async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, 
     project_dir = require_project()
     entries = await git.log(project_dir, limit=limit, skip=offset, path=path, with_stats=True)
 
-    queue = await db.get_trigger_queue(limit=200)
-    task_by_commit = {t["result_commit"]: t for t in queue if t.get("result_commit")}
+    # Look up triggers keyed on the commit hashes we're actually rendering,
+    # so the feed scan is O(visible window) instead of O(recent task window).
+    hashes = [e["hash"] for e in entries if e.get("hash")]
+    triggers = await db.get_triggers_by_result_commits(hashes)
+    task_by_commit = {t["result_commit"]: t for t in triggers if t.get("result_commit")}
 
     feed = []
     for entry in entries:

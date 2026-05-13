@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS task_executions (
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id TEXT PRIMARY KEY,
     job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
-    task_id INTEGER REFERENCES tasks(id),
+    task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
     title TEXT,
     cli_session_id TEXT,
     created_at DATETIME DEFAULT (datetime('now'))
@@ -241,12 +241,28 @@ CREATE INDEX IF NOT EXISTS idx_tasks_job_status
 CREATE INDEX IF NOT EXISTS idx_tasks_status_worker
     ON tasks (status, approval, coalesced_id);
 
+-- Partial index over roots only, ordered for the queue's default sort.
+-- Backs `SELECT ... FROM tasks WHERE coalesced_id IS NULL ORDER BY
+-- created_at DESC LIMIT N` (and the matching ASC sort the worker uses
+-- when joined with status='queued'). Subordinates are excluded from the
+-- index entirely so the queue scan touches only what it displays.
+CREATE INDEX IF NOT EXISTS idx_tasks_roots_recent
+    ON tasks (created_at DESC)
+    WHERE coalesced_id IS NULL;
+
 -- Drop the old column-based completed_at index (the column moved to
 -- task_executions). Idempotent: safe whether or not it existed.
 DROP INDEX IF EXISTS idx_tasks_completed_at;
 
 CREATE INDEX IF NOT EXISTS idx_task_executions_completed_at
     ON task_executions (completed_at);
+
+-- Partial index: most task_executions rows have NULL result_commit until
+-- the task lands successfully, so a partial index keeps the index small
+-- while still backing feed lookups that map commit hash → owning task.
+CREATE INDEX IF NOT EXISTS idx_task_executions_result_commit
+    ON task_executions (result_commit)
+    WHERE result_commit IS NOT NULL;
 
 -- View: tasks_resolved
 -- Centralized read seam for coalescing-aware queries. Outcome data
@@ -332,6 +348,12 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_session
 
 CREATE INDEX IF NOT EXISTS idx_chat_events_session
     ON chat_events (session_id);
+
+-- Backs reconstruct_output_from_events(), which filters by event_type
+-- inside a session. The session-only index forces a row-by-row scan and
+-- filter; the composite lets the planner seek straight to assistant rows.
+CREATE INDEX IF NOT EXISTS idx_chat_events_session_type
+    ON chat_events (session_id, event_type);
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_cli_session
     ON chat_sessions (cli_session_id);
@@ -432,10 +454,23 @@ INSERT OR IGNORE INTO job_property_defs (key, default_value, type) VALUES
     ('allowed_internal_tools', '[]', 'json'),
     ('allowed_dispatch_targets', '[]', 'json'),
     ('allow_learning_self_modification', 'false', 'boolean'),
+    ('allow_self_requeue', 'false', 'boolean'),
+    ('auto_continue', 'false', 'boolean'),
     ('max_learnings', '10', 'integer'),
     ('max_learning_chars', '1000', 'integer');
 
 INSERT OR IGNORE INTO config (key, value) VALUES ('queue_auto_dispatch', 'false');
 INSERT OR IGNORE INTO config (key, value) VALUES ('agent_dispatch_depth_limit', '5');
 INSERT OR IGNORE INTO config (key, value) VALUES ('governor_task_counter', '0');
+-- Opt-in retention: 0 (default) means never prune the raw NDJSON audit log.
+-- Operators set this to N>0 to drop chat_events older than N days for any
+-- session whose task is terminal AND whose chat_messages cache already has
+-- an assistant row. The cache check guarantees reconstruct_output_from_events
+-- never needs the raw rows we delete.
+INSERT OR IGNORE INTO config (key, value) VALUES ('chat_events_retention_days', '0');
+-- Opt-in retention for the lifecycle event log. 0 (default) keeps history
+-- forever. Trade: pruned triggers drop off the dashboard timeline, which
+-- derives start/end pairs from this log. The `tasks.status` materialized
+-- cache survives, so queue listings are unaffected.
+INSERT OR IGNORE INTO config (key, value) VALUES ('task_events_retention_days', '0');
 """

@@ -52,6 +52,26 @@ _DISPATCH_SELECT = (
 )
 
 
+async def clear_workspace_pointers(worktree_path: str) -> int:
+    """Null worktree_path + task_branch on every dispatch row pointing at a path.
+
+    Use whenever a worktree is physically removed from disk. Resume and
+    auto_continue inherit a prior dispatch's worktree, so multiple rows may
+    point at the same path — clearing only the current task leaves dangling
+    pointers on its ancestors. Path-based is naturally chain-aware: any
+    row pointing at this path is stale once the path is gone.
+
+    Returns the number of rows updated (for logging).
+    """
+    db = await get_db()
+    cur = await db.execute(
+        "UPDATE task_executions SET worktree_path = NULL, task_branch = NULL WHERE worktree_path = ?",
+        (worktree_path,)
+    )
+    await db.commit()
+    return cur.rowcount or 0
+
+
 async def upsert_dispatch(trigger_id: int, conn=None, _commit: bool = True, **fields):
     """Create or update the per-task execution row.
 
@@ -80,6 +100,10 @@ async def upsert_dispatch(trigger_id: int, conn=None, _commit: bool = True, **fi
         await conn.commit()
 
 
+_CONTINUATION_TRIGGERS = {"self_requeue", "auto_continue"}
+_CONTINUATION_THROTTLE_N = {"self_requeue": 5, "auto_continue": 2}
+
+
 async def enqueue_trigger(job_id: int, trigger: str,
                        trigger_detail: str | None = None,
                        context: str | None = None) -> int:
@@ -89,7 +113,14 @@ async def enqueue_trigger(job_id: int, trigger: str,
     - 'schedule' always coalesces globally
     - 'commit', 'dependency', and 'agent' coalesce with other pending tasks of the same type
     - coalesce_tasks=true coalesces globally
-    - All other triggers (manual, resume, reply) never coalesce
+    - All other triggers (manual, resume, reply, self_requeue, auto_continue) never coalesce
+
+    Continuation throttle: when `trigger` is `self_requeue` or `auto_continue`,
+    if the last N tasks on the same job are all of that same kind, the new
+    task is forced into `pending` (skipping `auto_dispatch`) and an extra
+    `continuation_throttled` event is emitted. N differs per kind — voluntary
+    self-requeue tolerates longer chains; involuntary auto-continue trips at 2
+    because two-in-a-row almost always means the job is misconfigured.
     """
     db = await get_db()
 
@@ -107,15 +138,27 @@ async def enqueue_trigger(job_id: int, trigger: str,
     if trigger != "manual" and job_props.get("require_approval", "").lower() == "true":
         approval = "pending"
 
+    # Continuation throttle: same kind N times in a row forces pending
+    throttled = False
+    if trigger in _CONTINUATION_TRIGGERS:
+        n = _CONTINUATION_THROTTLE_N[trigger]
+        recent_rows = await db.execute_fetchall(
+            "SELECT trigger FROM tasks WHERE job_id = ? ORDER BY created_at DESC LIMIT ?",
+            (job_id, n)
+        )
+        if len(recent_rows) == n and all(r["trigger"] == trigger for r in recent_rows):
+            throttled = True
+
     # Auto-queueing: when enabled, new tasks skip pending and go directly to queued
     from backend.state import utcnow
     from backend.db_config import get_config
     queued_at = None
     status = "pending"
-    auto_queue = await get_config("queue_auto_dispatch")
-    if auto_queue == "true":
-        queued_at = utcnow()
-        status = "queued"
+    if not throttled:
+        auto_queue = await get_config("queue_auto_dispatch")
+        if auto_queue == "true":
+            queued_at = utcnow()
+            status = "queued"
 
     # Insert the atomic task (not committed yet — coalesce update shares the transaction)
     now = utcnow()
@@ -131,6 +174,11 @@ async def enqueue_trigger(job_id: int, trigger: str,
         "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'dispatched', ?, ?)",
         (new_id, trigger, now)
     )
+    if throttled:
+        await db.execute(
+            "INSERT INTO task_events (task_id, event, detail, created_at) VALUES (?, 'continuation_throttled', ?, ?)",
+            (new_id, f"{trigger}:{_CONTINUATION_THROTTLE_N[trigger]}", now)
+        )
     if queued_at:
         await db.execute(
             "INSERT INTO task_events (task_id, event, created_at) VALUES (?, 'queued', ?)",
@@ -244,21 +292,78 @@ async def get_agent_dispatch_depth(trigger_id: int) -> int:
 
 
 async def get_trigger_queue(limit: int = 50) -> list[dict]:
+    """Return the most-recent N root triggers with execution outcome and
+    a subordinate count attached.
+
+    Reads roots through `tasks_resolved` so outcome columns mirror what
+    the detail drawer sees. Subordinate counts come from a separate keyed
+    aggregate so the queue scan doesn't have to GROUP BY across the full
+    coalesce graph (and so the partial index `idx_tasks_roots_recent` can
+    actually back the ORDER BY).
+    """
     db = await get_db()
     rows = await db.execute_fetchall(
-        f"""SELECT t.*, j.name as job_name,
-                  COUNT(sub.id) as subordinate_count,
-                  {_DISPATCH_SELECT}
-           FROM tasks t
+        """SELECT t.*, j.name as job_name
+           FROM tasks_resolved t
            JOIN jobs j ON j.id = t.job_id
-           LEFT JOIN tasks sub ON sub.coalesced_id = t.id
-           LEFT JOIN task_executions te ON te.task_id = t.id
            WHERE t.coalesced_id IS NULL
-           GROUP BY t.id
            ORDER BY t.created_at DESC LIMIT ?""",
         (limit,)
     )
-    return [dict(r) for r in rows]
+    if not rows:
+        return []
+    triggers = [dict(r) for r in rows]
+
+    ids = [t["id"] for t in triggers]
+    placeholders = ",".join("?" * len(ids))
+    sub_rows = await db.execute_fetchall(
+        f"SELECT coalesced_id, COUNT(*) as cnt FROM tasks "
+        f"WHERE coalesced_id IN ({placeholders}) GROUP BY coalesced_id",
+        ids,
+    )
+    sub_counts = {r["coalesced_id"]: r["cnt"] for r in sub_rows}
+    for t in triggers:
+        t["subordinate_count"] = sub_counts.get(t["id"], 0)
+    return triggers
+
+
+async def get_triggers_by_result_commits(commits: list[str]) -> list[dict]:
+    """Return root triggers whose result_commit matches any of the given hashes.
+
+    Keyed lookup for the activity feed: instead of pulling a fixed window
+    of recent triggers and filtering in Python, hand in the commit hashes
+    the feed actually rendered and let the DB scan only those rows. Reads
+    through `tasks_resolved` so outcome columns mirror the queue/detail
+    shape, with `subordinate_count` attached the same way `get_trigger_queue`
+    does it.
+    """
+    if not commits:
+        return []
+    db = await get_db()
+    placeholders = ",".join("?" * len(commits))
+    rows = await db.execute_fetchall(
+        f"""SELECT t.*, j.name as job_name
+            FROM tasks_resolved t
+            JOIN jobs j ON j.id = t.job_id
+            WHERE t.coalesced_id IS NULL
+              AND t.result_commit IN ({placeholders})""",
+        commits,
+    )
+    if not rows:
+        return []
+    triggers = [dict(r) for r in rows]
+
+    ids = [t["id"] for t in triggers]
+    id_placeholders = ",".join("?" * len(ids))
+    sub_rows = await db.execute_fetchall(
+        f"SELECT coalesced_id, COUNT(*) as cnt FROM tasks "
+        f"WHERE coalesced_id IN ({id_placeholders}) GROUP BY coalesced_id",
+        ids,
+    )
+    sub_counts = {r["coalesced_id"]: r["cnt"] for r in sub_rows}
+    for t in triggers:
+        t["subordinate_count"] = sub_counts.get(t["id"], 0)
+    return triggers
 
 
 async def get_oldest_queued_trigger() -> dict | None:
@@ -646,6 +751,40 @@ async def get_trigger_events_batch(trigger_ids: list[int], conn=None) -> dict[in
         tid = d.pop("task_id")
         result.setdefault(tid, []).append(d)
     return result
+
+
+async def prune_task_events(retention_days: int) -> int:
+    """Drop task_events rows for terminal triggers whose history has aged out.
+
+    Predicate: trigger is in terminal status AND its most recent event
+    is older than `retention_days`. Since events are append-only and
+    monotonic, "no event newer than the cutoff" means "all events are
+    older than the cutoff" — pruning takes the whole chain at once.
+
+    Trade: the dashboard timeline derives start/end from these events,
+    so pruned triggers fall off the timeline. The `tasks.status` column
+    is the materialized cache of the latest event, so queue/listing
+    queries are unaffected. Caller decides cadence (typically once per
+    startup). Opt-in via `task_events_retention_days` (default 0).
+    """
+    if retention_days <= 0:
+        return 0
+    db = await get_db()
+    cur = await db.execute(
+        f"""DELETE FROM task_events
+            WHERE task_id IN (
+                SELECT t.id FROM tasks t
+                WHERE t.status IN {TERMINAL_STATUSES_SQL}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM task_events e
+                      WHERE e.task_id = t.id
+                        AND e.created_at >= datetime('now', ?)
+                  )
+            )""",
+        (f"-{retention_days} days",),
+    )
+    await db.commit()
+    return cur.rowcount or 0
 
 
 _TERMINAL_EVENTS = frozenset({"completed", "exhausted", "failed", "cancelled", "timed_out", "interrupted", "rejected"})

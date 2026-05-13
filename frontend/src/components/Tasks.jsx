@@ -23,6 +23,8 @@ const TIPS = {
   allowedDispatchTargets: 'Jobs this agent can dispatch via the dispatch_task tool. When none are selected, the agent cannot dispatch other jobs. Self-dispatch is always prohibited.',
   learnings: 'Discrete, individually-toggleable rules and notes. The agent queries them on demand via list_learnings (returns id + summary) and read_learnings (returns full body). Each row needs a one-sentence summary so the agent can scan breadth-first before deep-diving. Disabled rows are hidden from the agent. Bounded by the max_learnings job property.',
   allowLearningSelfModification: 'When enabled, the agent can add, edit, and delete its own learnings via internal MCP tools — closing the feedback loop "what did I learn this run that should change me next time?". The agent can only modify learnings it itself authored (source=agent); operator-authored rows are never agent-writable. Read tools (list_learnings / read_learnings) are always available regardless of this setting.',
+  allowSelfRequeue: 'When enabled, the agent can call requeue_self to queue a follow-up task on this same job (fresh worktree, fresh conversation). Use cases: agent is blocked needing operator input, or finished a discrete chunk that should run as its own dispatch. Throttled — 5 consecutive self-requeues force the next into pending so a runaway agent stops auto-dispatching.',
+  autoContinue: 'When enabled, the platform automatically queues an auto_continue task after the agent ends in exhausted (hit max_turns) or timed_out. The continuation inherits the prior worktree+branch and runs a fresh conversation. Throttled — 2 consecutive auto_continues force the next into pending, since back-to-back overflows usually mean the job is misconfigured rather than making progress.',
 }
 
 export default function Tasks({ jobs, onRefresh }) {
@@ -465,6 +467,28 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
                 Coalesce pending tasks
               </label>
               <HelpTip text={TIPS.coalesceTasks} />
+            </div>
+            <div className="label-row">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={getVal('allow_self_requeue') || false}
+                  onChange={e => edit('allow_self_requeue', e.target.checked)}
+                />
+                Allow agent self-requeue
+              </label>
+              <HelpTip text={TIPS.allowSelfRequeue} />
+            </div>
+            <div className="label-row">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={getVal('auto_continue') || false}
+                  onChange={e => edit('auto_continue', e.target.checked)}
+                />
+                Auto-continue on exhaustion / timeout
+              </label>
+              <HelpTip text={TIPS.autoContinue} />
             </div>
           </div>
 

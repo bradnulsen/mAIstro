@@ -215,7 +215,7 @@ async def _integrate_or_fail(task_id: int, job: dict,
         log.info("[worker] Task #%d completed with no commits (no-op outcome, cascades suppressed)", task_id)
         await _force_remove_worktree(project_dir, workspace_dir)
         await git.branch_delete(project_dir, task_branch, force=True)
-        await db.update_trigger(task_id, worktree_path=None, task_branch=None)
+        await db.clear_workspace_pointers(workspace_dir)
         await _check_governor_trigger(task_id)
         return
 
@@ -246,10 +246,12 @@ async def _integrate_or_fail(task_id: int, job: dict,
     log.info("[worker] Task #%d completed and integrated (main=%s, branch=%s)",
              task_id, integrated_head[:8], task_branch)
 
-    # Workspace + branch are no longer needed — discard them.
+    # Workspace + branch are no longer needed — discard them. Clear pointers
+    # on every dispatch row sharing this worktree (auto_continue / resume
+    # chains can point at the same path).
     await _force_remove_worktree(project_dir, workspace_dir)
     await git.branch_delete(project_dir, task_branch, force=True)
-    await db.update_trigger(task_id, worktree_path=None, task_branch=None)
+    await db.clear_workspace_pointers(workspace_dir)
 
     await _enqueue_cascades(job_id, task_id,
                             job_name=job["name"],
@@ -388,6 +390,14 @@ async def _sweep_stale():
             await _sweep_stale_workspace_pointers()
         except Exception:
             log.exception("[worker] stale-workspace-pointer sweep failed")
+        try:
+            await _sweep_chat_events_retention()
+        except Exception:
+            log.exception("[worker] chat_events retention sweep failed")
+        try:
+            await _sweep_task_events_retention()
+        except Exception:
+            log.exception("[worker] task_events retention sweep failed")
 
 
 async def _sweep_stale_workspace_pointers():
@@ -421,7 +431,48 @@ async def _sweep_stale_workspace_pointers():
             "(dir_exists=%s, branch_exists=%s, path=%s, branch=%s)",
             tid, dir_exists, branch_present, wt_path, branch,
         )
-        await db.update_trigger(tid, worktree_path=None, task_branch=None)
+        # Path-based: also clears any chain ancestors pointing at the same path.
+        await db.clear_workspace_pointers(wt_path)
+
+
+async def _sweep_retention(config_key: str, prune_fn) -> None:
+    """Shared shape: read `config_key` as int days, prune if > 0, log count."""
+    raw = await db.get_config(config_key)
+    try:
+        days = int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        log.warning("[worker] %s not an integer: %r", config_key, raw)
+        return
+    if days <= 0:
+        return
+    deleted = await prune_fn(days)
+    if deleted:
+        log.info("[worker] %s pruned %d rows older than %d days",
+                 config_key, deleted, days)
+
+
+async def _sweep_chat_events_retention():
+    """Drop old chat_events when the operator has opted into a retention window.
+
+    `chat_events_retention_days` defaults to 0 (never prune) per the
+    platform-philosophy of not imposing workflow opinions; set it to a
+    positive integer via config to enable. The DELETE in `prune_chat_events`
+    only targets sessions whose task is terminal AND whose chat_messages
+    cache already holds an assistant row, so the fallback reconstruction
+    never depends on rows we deleted.
+    """
+    await _sweep_retention("chat_events_retention_days", db.prune_chat_events)
+
+
+async def _sweep_task_events_retention():
+    """Drop old task_events when the operator has opted into a retention window.
+
+    `task_events_retention_days` defaults to 0. Trade is documented on
+    `prune_task_events`: pruned triggers fall off the dashboard timeline.
+    The materialized `tasks.status` cache survives, so queue listings are
+    unaffected.
+    """
+    await _sweep_retention("task_events_retention_days", db.prune_task_events)
 
 
 async def _sweep_orphan_worktrees():
@@ -581,7 +632,16 @@ async def _process_trigger(task: dict):
     # and insta-fails. The original's worktree also still has the agent's
     # prior commits on its branch — picking up there is what "resume"
     # actually means.
-    if resume_session_id and task.get("trigger_detail"):
+    #
+    # `auto_continue` shares the worktree-inheritance behavior but not the
+    # CLI session reuse: it runs a fresh conversation in the prior task's
+    # preserved worktree+branch. The prior conversation already hit its
+    # limit; resuming it would just hit the limit again.
+    needs_worktree_inheritance = (
+        (resume_session_id and task.get("trigger_detail"))
+        or (task.get("trigger") == "auto_continue" and task.get("trigger_detail"))
+    )
+    if needs_worktree_inheritance:
         try:
             original_id = int(task["trigger_detail"])
         except (ValueError, TypeError):
@@ -594,13 +654,16 @@ async def _process_trigger(task: dict):
                 workspace_dir = original_path
                 task_branch = original_branch or task_branch
                 reuse_existing_worktree = True
-                log.info("[worker] Task #%d resuming in original worktree %s on branch %s",
-                         task_id, workspace_dir, task_branch)
+                kind = "resuming" if resume_session_id else "auto-continuing"
+                log.info("[worker] Task #%d %s in original worktree %s on branch %s",
+                         task_id, kind, workspace_dir, task_branch)
             else:
                 # Original's worktree is gone (cleaned up after successful
-                # integration, or operator discarded it). The session
-                # storage is gone too — resume can't find it. Fail loudly.
-                err = (f"cannot resume task #{original_id}: the original "
+                # integration, or operator discarded it). For resume the
+                # session storage is gone too; for auto_continue the
+                # preserved-worktree premise is violated. Fail loudly.
+                kind = "resume" if resume_session_id else "auto-continue"
+                err = (f"cannot {kind} task #{original_id}: the original "
                        f"worktree no longer exists")
                 await db.transition_trigger(task_id, "active",
                                          session_id=session_id,
@@ -676,10 +739,13 @@ async def _process_trigger(task: dict):
     if mcp_error:
         log.warning("[worker] Task #%d failed MCP health check: %s", task_id, mcp_error)
         # Health-check failure means the agent never ran — discard the empty worktree.
+        # NOTE: for auto_continue tasks this nukes the *inherited* prior worktree,
+        # which an operator expected preserved. Separate concern from the DB
+        # pointer hygiene fixed here; flagged for follow-up.
         await _force_remove_worktree(state.PROJECT_DIR, workspace_dir)
         await git.branch_delete(state.PROJECT_DIR, task_branch, force=True)
-        await db.transition_trigger(task_id, "failed", error=mcp_error,
-                                 worktree_path=None, task_branch=None)
+        await db.transition_trigger(task_id, "failed", error=mcp_error)
+        await db.clear_workspace_pointers(workspace_dir)
         await db.cascade_completion(task_id, "failed", error=mcp_error)
         pubsub.broadcast(task_id, events.error(mcp_error))
         pubsub.broadcast(task_id, events.done())
@@ -711,6 +777,25 @@ async def _process_trigger(task: dict):
     # really answered (a $0 dispatch with tool calls is impossible).
     _has_tool_use = False
 
+    # Raw NDJSON events buffer. Streaming writes were one-commit-per-line,
+    # which serialized every concurrent task on the single writer connection.
+    # Flush by size or at natural boundaries (turn end, terminal events,
+    # post-loop, error handler, finally) so the durability window stays
+    # short while bulk-amortizing the per-event commit.
+    _raw_buffer: list[tuple[str, str]] = []
+    RAW_BUFFER_FLUSH_SIZE = 25
+
+    async def _flush_raw():
+        if not _raw_buffer:
+            return
+        pending = list(_raw_buffer)
+        _raw_buffer.clear()
+        try:
+            await db.add_chat_events_batch(session_id, pending)
+        except Exception:
+            log.warning("[worker] Task #%d failed to flush %d chat events",
+                        task_id, len(pending))
+
     try:
         task_with_session = {**task, "session_id": session_id}
         async for event in run_task(task_id, job, state.PROJECT_DIR,
@@ -722,19 +807,20 @@ async def _process_trigger(task: dict):
             if etype == "tool_use":
                 _has_tool_use = True
 
-            # Incremental persistence: write each raw NDJSON event immediately
+            # Incremental persistence: buffer raw NDJSON, flush by size.
             if etype == "_raw":
-                try:
-                    await db.add_chat_event(session_id, event["event_type"], event["raw_json"])
-                except Exception:
-                    log.warning("[worker] Task #%d failed to write chat event (type=%s)",
-                                task_id, event.get("event_type"))
+                _raw_buffer.append((event["event_type"], event["raw_json"]))
+                if len(_raw_buffer) >= RAW_BUFFER_FLUSH_SIZE:
+                    await _flush_raw()
                 continue
 
             pubsub.broadcast(task_id, event)
 
             if etype == "assistant_complete":
                 full_response.append(event.get("content", ""))
+                # Turn boundary — flush so a crash mid-task loses at most
+                # the in-flight turn.
+                await _flush_raw()
                 continue
 
             if etype == "session_id":
@@ -755,8 +841,11 @@ async def _process_trigger(task: dict):
                     "cost_usd": event.get("cost_usd"),
                 }
             elif etype == "error":
+                await _flush_raw()
                 await db.add_chat_message(session_id, "system", event.get("message", "error"))
 
+        # End-of-stream flush — covers the tail below the threshold.
+        await _flush_raw()
         log.info("[worker] Task #%d CLI finished — starting post-processing", task_id)
 
         response_text = "".join(full_response)
@@ -788,6 +877,7 @@ async def _process_trigger(task: dict):
                                         result_commit=worktree_head, error="timed out")
             log.info("[worker] Task #%d timed out (worktree=%s, dependents skipped, workspace preserved)",
                      task_id, worktree_head[:8])
+            await _maybe_auto_continue(task_id, job, "timed_out", meta_fields, timeout_seconds)
             await _check_governor_trigger(task_id)
         elif _cancelled:
             await db.transition_trigger(task_id, "cancelled",
@@ -809,6 +899,7 @@ async def _process_trigger(task: dict):
                                         result_commit=worktree_head, error=err)
             log.info("[worker] Task #%d exhausted (%s/%s turns, worktree=%s, workspace preserved)",
                      task_id, turns_used, max_turns, worktree_head[:8])
+            await _maybe_auto_continue(task_id, job, "exhausted", meta_fields, None)
             await _check_governor_trigger(task_id)
         else:
             # Integration is the gate to `completed`. Try to fold the agent's
@@ -823,7 +914,9 @@ async def _process_trigger(task: dict):
 
     except Exception as e:
         log.exception("[worker] Task #%d failed: %s", task_id, e)
-        # Raw events already persisted incrementally — just write response
+        # Flush any buffered raw events before writing the failure response —
+        # otherwise the audit log loses the final turn that triggered the error.
+        await _flush_raw()
         try:
             response_text = "".join(full_response)
             if response_text:
@@ -841,6 +934,12 @@ async def _process_trigger(task: dict):
             log.warning("[worker] Task #%d failed to cascade failure to subordinates: %s", task_id, cascade_err)
         await _check_governor_trigger(task_id)
     finally:
+        # Last-resort raw-event flush in case both try and except missed it
+        # (e.g. CancelledError mid-loop). The helper swallows its own errors.
+        try:
+            await _flush_raw()
+        except Exception:
+            log.exception("[worker] Task #%d raw-event flush failed in finally", task_id)
         # Last-resort: if status is still 'active' (both try and except
         # crashed), force it to failed so tasks can never get stuck.
         final_status = None
@@ -894,6 +993,48 @@ async def _check_external_mcp_servers(job: dict) -> str | None:
             return f"External MCP server '{name}' health check failed: {error_detail}"
 
     return None
+
+
+async def _maybe_auto_continue(task_id: int, job: dict, terminal_state: str,
+                               meta_fields: dict, timeout_seconds: int | None):
+    """Enqueue an auto_continue task when the job opts in and the terminal qualifies.
+
+    Only fires on `exhausted` and `timed_out`. The new task inherits the
+    prior dispatch's worktree+branch (the worker recognizes the trigger
+    kind in _process_trigger). The continuation throttle in enqueue_trigger
+    forces consecutive auto_continues into pending after N=2 — so a
+    misconfigured job that keeps overflowing surfaces on the kanban
+    instead of burning indefinite cycles.
+    """
+    if not job["properties"].get("auto_continue"):
+        return
+    if terminal_state not in ("exhausted", "timed_out"):
+        return
+
+    if terminal_state == "exhausted":
+        turns = meta_fields.get("num_turns", "?")
+        limit = job["properties"].get("max_turns", 100)
+        synth = (f"Prior dispatch ended **exhausted** after {turns}/{limit} turns. "
+                 f"Worktree preserved with the prior commits. Review what's already "
+                 f"there (`git log`, `git diff`) and continue where it stopped.")
+    else:
+        synth = (f"Prior dispatch ended **timed_out** after {timeout_seconds}s. "
+                 f"Worktree preserved with the prior commits. Review what's already "
+                 f"there (`git log`, `git diff`) and continue where it stopped.")
+
+    context = await build_trigger_context(
+        "auto_continue",
+        original_task_id=task_id,
+        user_context=synth,
+    )
+    new_id = await db.enqueue_trigger(
+        job["id"], "auto_continue",
+        trigger_detail=str(task_id),
+        context=context,
+    )
+    log.info("[worker] Auto-continue: enqueued #%d for task #%d (terminal=%s)",
+             new_id, task_id, terminal_state)
+    notify()
 
 
 async def _enqueue_cascades(completed_job_id: int, task_id: int,

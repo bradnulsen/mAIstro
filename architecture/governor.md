@@ -121,8 +121,8 @@ A dedicated stdio MCP server, gated by mode (`MAISTRO_GOVERNOR_MODE` env var):
 | Tool | Backed by |
 |---|---|
 | `list_jobs` | `GET /api/jobs/` — full configuration |
-| `get_recent_tasks` | `GET /api/governor/recent-tasks?limit=N` — terminal tasks via `tasks_resolved` |
-| `get_git_log` | `git log --oneline -N` (subprocess, project-dir scoped) |
+| `get_recent_tasks` | `GET /api/governor/recent-tasks?limit=N` — terminal tasks via `tasks_resolved` (includes `start_commit`/`result_commit`) |
+| `git_status`, `git_log`, `git_diff`, `git_show` | Shared handlers in `backend/git_tools.py` (project-dir scoped). Same surface task agents have. `git_diff` accepts `base`+`head` so the Governor can pass `task.start_commit..result_commit` to see exactly what files a task touched. |
 | `get_job_health` | `GET /api/dashboard?window=N` — per-job aggregates |
 | `list_open_threads` | `GET /api/governor/threads?status=open` — thin list, no closed threads |
 | `get_thread` | `GET /api/governor/threads/{id}` — full message history of one thread |

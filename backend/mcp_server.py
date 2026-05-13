@@ -18,6 +18,9 @@ Each task gets an instance configured via environment variables:
     MAISTRO_ALLOW_LEARNING_WRITES   "1" if the dispatching job has the
                                      allow_learning_self_modification permission
                                      enabled — gates add/update/delete_learning
+    MAISTRO_ALLOW_SELF_REQUEUE      "1" if the dispatching job has the
+                                     allow_self_requeue permission enabled —
+                                     gates the requeue_self tool
 
 Communication follows the MCP stdio transport (JSON-RPC 2.0, one message per line).
 """
@@ -29,6 +32,8 @@ import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
+
+from backend import git_tools
 
 # ── Context from environment ─────────────────────────────────
 
@@ -59,6 +64,10 @@ ALLOWED_DISPATCH_TARGETS = set(int(x) for x in json.loads(_dispatch_raw)) if _di
 # out of tools/list and refused at tools/call when this flag is false.
 ALLOW_LEARNING_WRITES = os.environ.get("MAISTRO_ALLOW_LEARNING_WRITES", "0") == "1"
 
+# Per-job permission gate for the requeue_self tool. Same filtered-out
+# pattern as the learning-writes gate.
+ALLOW_SELF_REQUEUE = os.environ.get("MAISTRO_ALLOW_SELF_REQUEUE", "0") == "1"
+
 
 
 # ── Git helpers ──────────────────────────────────────────────
@@ -78,33 +87,15 @@ def _run_git(*args) -> tuple[bool, str]:
 # ── Tool implementations ─────────────────────────────────────
 
 def tool_git_status(args: dict) -> str:
-    ok, out = _run_git("status", "--porcelain")
-    if not ok:
-        return f"Error: {out}"
-    return out or "(clean working tree)"
+    return git_tools.git_status_handler(args, cwd=WORKSPACE_DIR)
 
 
 def tool_git_log(args: dict) -> str:
-    limit = min(int(args.get("limit", 20)), 100)
-    path = args.get("path")
-    git_args = ["log", f"--max-count={limit}", "--oneline", "--no-decorate"]
-    if path:
-        git_args.extend(["--", path])
-    ok, out = _run_git(*git_args)
-    return out if ok else f"Error: {out}"
+    return git_tools.git_log_handler(args, cwd=WORKSPACE_DIR)
 
 
 def tool_git_diff(args: dict) -> str:
-    paths = args.get("paths") or []
-    commit = args.get("commit")
-    if commit:
-        git_args = ["diff", f"{commit}~1", commit]
-    else:
-        git_args = ["diff", "HEAD"]
-    if paths:
-        git_args.extend(["--", *paths])
-    ok, out = _run_git(*git_args)
-    return out if ok else f"Error: {out}"
+    return git_tools.git_diff_handler(args, cwd=WORKSPACE_DIR)
 
 
 def tool_git_commit(args: dict) -> str:
@@ -278,6 +269,43 @@ def tool_dispatch_task(args: dict) -> str:
         return f"Error dispatching task: {e.code} — {body}"
     except Exception as e:
         return f"Error dispatching task: {e}"
+
+
+def tool_requeue_self(args: dict) -> str:
+    """Enqueue a new task on this same job (self-requeue).
+
+    Posts to the backend agent-side route which calls enqueue_trigger with
+    trigger='self_requeue'. The continuation throttle in enqueue_trigger
+    forces consecutive self-requeues into pending after N=5.
+    """
+    if not ALLOW_SELF_REQUEUE:
+        return "Error: self-requeue is not enabled for this job"
+    message = (args.get("message") or "").strip()
+    if not message:
+        return "Error: message is required"
+    job_id_int = int(JOB_ID) if JOB_ID.isdigit() else 0
+    if not job_id_int:
+        return "Error: job context unavailable"
+    try:
+        payload = json.dumps({
+            "job_id": job_id_int,
+            "message": message,
+            "source_task_id": int(TASK_ID) if TASK_ID else 0,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://localhost:{BACKEND_PORT}/api/triggers/self-requeue",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        return f"Queued self-requeue task #{result['task_id']}"
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return f"Error self-requeueing: {e.code} — {body}"
+    except Exception as e:
+        return f"Error self-requeueing: {e}"
 
 
 def tool_get_queue_status(args: dict) -> str:
@@ -586,6 +614,20 @@ TOOLS = [
         },
     },
     {
+        "name": "requeue_self",
+        "description": "Queue a new task on this same job (picked up after the current dispatch ends). Use when blocked needing operator input, or when finishing a discrete chunk that should run as its own dispatch. Rate-limited — do not loop.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "What state you reached and what should happen next. Becomes the new task's context.",
+                },
+            },
+            "required": ["message"],
+        },
+    },
+    {
         "name": "dispatch_task",
         "description": "Enqueue a task on another job (no self-dispatch). Your message becomes the target's context.",
         "inputSchema": {
@@ -700,6 +742,7 @@ TOOL_HANDLERS = {
     "read_file": tool_read_file,
     "list_jobs": tool_list_jobs,
     "dispatch_task": tool_dispatch_task,
+    "requeue_self": tool_requeue_self,
     "get_queue_status": tool_get_queue_status,
     "list_learnings": tool_list_learnings,
     "read_learnings": tool_read_learnings,
@@ -712,6 +755,7 @@ TOOL_HANDLERS = {
 # permission. Filtered out of tools/list when the gate is closed (so the
 # agent doesn't even see them). Defense in depth at tools/call too.
 LEARNING_WRITE_TOOLS = {"add_learning", "update_learning", "delete_learning"}
+SELF_REQUEUE_TOOLS = {"requeue_self"}
 
 
 # ── Audit logging ────────────────────────────────────────────
@@ -780,6 +824,8 @@ def handle_tools_list(req_id, params):
         filtered = list(TOOLS)
     if not ALLOW_LEARNING_WRITES:
         filtered = [t for t in filtered if t["name"] not in LEARNING_WRITE_TOOLS]
+    if not ALLOW_SELF_REQUEUE:
+        filtered = [t for t in filtered if t["name"] not in SELF_REQUEUE_TOOLS]
     _respond(req_id, {"tools": filtered})
 
 
@@ -792,6 +838,9 @@ def handle_tools_call(req_id, params):
         _error(req_id, -32601, f"Tool not available: {tool_name}")
         return
     if tool_name in LEARNING_WRITE_TOOLS and not ALLOW_LEARNING_WRITES:
+        _error(req_id, -32601, f"Tool not available: {tool_name}")
+        return
+    if tool_name in SELF_REQUEUE_TOOLS and not ALLOW_SELF_REQUEUE:
         _error(req_id, -32601, f"Tool not available: {tool_name}")
         return
 

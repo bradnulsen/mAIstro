@@ -546,6 +546,10 @@ def _format_recent_tasks(tasks: list[dict]) -> str:
         if t.get("error"):
             line += f" error=\"{t['error'][:100]}\""
         line += f" trigger={t.get('trigger', '?')}"
+        start = (t.get("start_commit") or "")[:8]
+        result = (t.get("result_commit") or "")[:8]
+        if start and result:
+            line += f" commits={start}..{result}"
         parts.append(line)
     parts.append("")
     return "\n".join(parts)

@@ -64,6 +64,11 @@ class AgentDispatchRequest(BaseModel):
     source_job_id: int
     source_task_id: int
 
+class SelfRequeueRequest(BaseModel):
+    job_id: int
+    message: str
+    source_task_id: int
+
 
 # ── Task Routes ────────────────────────────────────────────
 
@@ -316,7 +321,7 @@ async def integrate_task_workspace(task_id: int, strategy: str = "default"):
     await git.worktree_remove(project_dir, wt_path, force=True)
     await git.worktree_prune(project_dir)
     await git.branch_delete(project_dir, branch, force=True)
-    await db.update_trigger(owner_id, worktree_path=None, task_branch=None)
+    await db.clear_workspace_pointers(wt_path)
     pubsub.notify_queue_changed()
     return {"status": "integrated", "result_commit": await git.head_hash(project_dir)}
 
@@ -337,7 +342,7 @@ async def discard_task_workspace(task_id: int):
     await git.worktree_prune(project_dir)
     if branch:
         await git.branch_delete(project_dir, branch, force=True)
-    await db.update_trigger(owner_id, worktree_path=None, task_branch=None)
+    await db.clear_workspace_pointers(wt_path)
     pubsub.notify_queue_changed()
     return {"status": "discarded"}
 
@@ -706,6 +711,35 @@ async def agent_dispatch(req: AgentDispatchRequest):
     task_id = await db.enqueue_trigger(
         req.target_job_id, "agent",
         trigger_detail=f"{req.source_job_id}#{req.source_task_id}",
+        context=context,
+    )
+    worker.notify()
+    return {"task_id": task_id}
+
+
+@router.post("/api/triggers/self-requeue")
+async def self_requeue(req: SelfRequeueRequest):
+    """Enqueue a self-requeue task (requeue_self MCP tool).
+
+    Validates that the calling agent's job has `allow_self_requeue` enabled.
+    Defense in depth — the MCP tool already gates on the env var, but routes
+    are agent-reachable HTTP endpoints and should not trust the caller.
+    """
+    require_project()
+    job = await db.get_job(req.job_id)
+    if not job:
+        raise HTTPException(404, f"Job '{req.job_id}' not found")
+    if not job["properties"].get("allow_self_requeue"):
+        raise HTTPException(403, f"Job '{req.job_id}' does not allow self-requeue")
+
+    context = await build_trigger_context(
+        "self_requeue",
+        original_task_id=req.source_task_id,
+        user_context=req.message,
+    )
+    task_id = await db.enqueue_trigger(
+        req.job_id, "self_requeue",
+        trigger_detail=str(req.source_task_id),
         context=context,
     )
     worker.notify()

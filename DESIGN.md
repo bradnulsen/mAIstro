@@ -301,8 +301,8 @@ The Governor connects to a dedicated MCP tool surface scoped to meta-operations.
 
 **Read tools** (always available):
 - `list_jobs` — all jobs with their full configuration
-- `get_recent_tasks` — recent terminal tasks with outcomes, metadata, trigger info, and error context
-- `get_git_log` — recent commit history with authorship attribution
+- `get_recent_tasks` — recent terminal tasks with outcomes, metadata, trigger info, error context, and the `start_commit`/`result_commit` SHA pair
+- `git_status`, `git_log`, `git_diff`, `git_show` — same read-only git surface task agents have; `git_diff` accepts `base`+`head` so the Governor can drill into a task's actual file changes via its commit pair
 - `get_job_health` — per-job aggregates: success rate, failure count, timeout count, exhaustion count, average turns, average cost
 - `list_open_threads` — thin list of open threads (id, title, opener, last activity)
 - `get_thread` — full message history of a specific thread

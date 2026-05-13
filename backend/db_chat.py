@@ -135,3 +135,39 @@ async def add_chat_events_batch(session_id: str, events: list[tuple[str, str]]):
         [(session_id, et, rj) for et, rj in events],
     )
     await db.commit()
+
+
+async def prune_chat_events(retention_days: int) -> int:
+    """Drop chat_events older than N days for sessions safe to forget.
+
+    "Safe" means the owning task is terminal AND the chat_messages cache
+    already has an assistant row — so reconstruct_output_from_events()
+    will never need the raw rows we delete. Sessions still streaming, or
+    sessions whose post-processing failed to write the cache, are left
+    intact so the audit log can still recover them.
+
+    Caller decides when to invoke (typically once per startup). Returns
+    the number of rows deleted, for logging.
+    """
+    if retention_days <= 0:
+        return 0
+    # Local import — db_triggers imports db_chat indirectly via re-exports,
+    # and we only need the terminal-set constant here.
+    from backend.db_triggers import TERMINAL_STATUSES_SQL
+    db = await get_db()
+    cur = await db.execute(
+        f"""DELETE FROM chat_events
+            WHERE session_id IN (
+                SELECT cs.id FROM chat_sessions cs
+                JOIN tasks t ON t.id = cs.task_id
+                WHERE t.status IN {TERMINAL_STATUSES_SQL}
+                  AND cs.created_at < datetime('now', ?)
+                  AND EXISTS (
+                      SELECT 1 FROM chat_messages m
+                      WHERE m.session_id = cs.id AND m.role = 'assistant'
+                  )
+            )""",
+        (f"-{retention_days} days",),
+    )
+    await db.commit()
+    return cur.rowcount or 0

@@ -10,6 +10,8 @@ export const TRIGGER_ICONS = {
   reply: '⟳',
   cascade: '⛓',
   schedule: '⏰',
+  self_requeue: '⤴',
+  auto_continue: '⏭',
 }
 
 /**
@@ -96,6 +98,7 @@ export const EVENT_LABELS = {
   approved: 'Approved',
   coalesced: 'Coalesced',
   uncoalesced: 'Uncoalesced',
+  continuation_throttled: 'Continuation throttled',
 }
 
 /* ── Task status derivation and labels ── */
@@ -130,6 +133,8 @@ export const TRIGGER_LABELS = {
   reply: 'Reply',
   cascade: 'Cascade',
   schedule: 'Schedule',
+  self_requeue: 'Self-requeue',
+  auto_continue: 'Auto-continue',
 }
 
 const NON_SUCCESS_TERMINAL_SET = new Set(NON_SUCCESS_TERMINAL_STATUSES)

@@ -308,6 +308,20 @@ async def build_trigger_context(
             parts.append(user_context)
         return "\n".join(parts)
 
+    if trigger == "self_requeue":
+        header = f"**Self-requeue** — queued by the prior dispatch (task #{original_task_id})"
+        if user_context:
+            return f"{header}\n{user_context}"
+        return header
+
+    if trigger == "auto_continue":
+        # user_context carries the synthesized "prior dispatch ended in X" block
+        # assembled by the worker. We just wrap it with a header.
+        header = f"**Auto-continue** — picking up from task #{original_task_id}"
+        if user_context:
+            return f"{header}\n{user_context}"
+        return header
+
     # Fallback — unknown trigger type
     return user_context or f"**{trigger.title()}**"
 

@@ -162,7 +162,7 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 ## Conventions
 
 - **Job IDs are integers.** Slugs are derived (`slugify`) and stored on the job for git authorship + branch naming. Commit authorship: `<JobName> <<job-id>@maistro.local>`.
-- **Triggers**: `manual`, `commit` (watch), `dependency`, `schedule`, `agent`, `resume`, `reply`.
+- **Triggers**: `manual`, `commit` (watch), `dependency`, `schedule`, `agent`, `resume`, `reply`, `self_requeue` (agent-voluntary continuation via the `requeue_self` MCP tool, gated by `allow_self_requeue`), `auto_continue` (worker-spawned continuation after `exhausted` / `timed_out`, gated by `auto_continue`). The two continuation kinds share a throttle in `enqueue_trigger` — `self_requeue` forces pending after 5 consecutive; `auto_continue` after 2 — and emit a `continuation_throttled` event when the limit trips.
 - **Watch behavior**: jobs with non-empty `subscriptions` auto-trigger on matching commits. There's no separate watch toggle — subscription presence is the toggle. Subscriptions are also injected as context on every task.
 - **Coalescing**: `coalesce_tasks=true` on a job auto-coalesces new tasks at enqueue time (global, all triggers). `schedule` triggers always coalesce globally regardless of this setting. Manual coalesce/decompose via UI drag-drop is the same FK operation. Reply/resume use *inverted* coalescing: the new task becomes root, the original becomes subordinate.
 - **Task columns**: `trigger` (type), `trigger_detail` (specifics), `context` (pre-formatted text) — real columns, not JSON.

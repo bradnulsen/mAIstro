@@ -103,13 +103,6 @@ export default function Governor({ onBadgeChange }) {
           >+ New Thread</button>
         </div>
 
-        {composing && (
-          <NewThreadComposer
-            onCancel={() => setComposing(false)}
-            onSubmit={handleNewThread}
-          />
-        )}
-
         <div className="governor-thread-list">
           {open.length === 0 && !composing && (
             <div className="governor-empty">
@@ -164,6 +157,13 @@ export default function Governor({ onBadgeChange }) {
           </div>
         )}
       </div>
+
+      {composing && (
+        <NewThreadComposer
+          onCancel={() => setComposing(false)}
+          onSubmit={handleNewThread}
+        />
+      )}
     </div>
   )
 }
@@ -329,38 +329,60 @@ function NewThreadComposer({ onCancel, onSubmit }) {
     }
   }
 
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      onCancel()
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
+
   return (
-    <div className="governor-new-thread">
-      <input
-        type="text"
-        value={title}
-        onChange={e => setTitle(e.target.value)}
-        placeholder="Thread title"
-        maxLength={200}
-        autoFocus
-      />
-      <textarea
-        value={body}
-        onChange={e => setBody(e.target.value)}
-        placeholder="What do you want to discuss with the Governor?"
-        rows={4}
-        onKeyDown={e => {
-          if (e.key === 'Escape') onCancel()
-          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault()
-            handleSubmit()
-          }
-        }}
-      />
-      <div className="governor-new-thread-actions">
-        <button onClick={onCancel}>Cancel</button>
-        <button
-          className="primary"
-          onClick={handleSubmit}
-          disabled={!title.trim() || !body.trim() || submitting}
-        >
-          {submitting ? 'Opening…' : 'Open Thread'}
-        </button>
+    <div
+      className="dispatch-modal-backdrop"
+      onMouseDown={e => { if (e.target === e.currentTarget) onCancel() }}
+    >
+      <div className="dispatch-modal" onKeyDown={handleKeyDown}>
+        <div className="dispatch-modal-header">
+          <span className="dispatch-modal-title">New Thread</span>
+          <button
+            className="dispatch-modal-close"
+            onClick={onCancel}
+            title="Close (Esc)"
+          >✕</button>
+        </div>
+        <div className="governor-new-thread-modal-body">
+          <input
+            type="text"
+            className="governor-new-thread-modal-title-input"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="Subject"
+            maxLength={200}
+            autoFocus
+          />
+          <textarea
+            className="governor-new-thread-modal-body-textarea"
+            value={body}
+            onChange={e => setBody(e.target.value)}
+            placeholder="What do you want to discuss with the Governor?"
+          />
+        </div>
+        <div className="dispatch-modal-footer">
+          <span className="dispatch-modal-hint">Ctrl+Enter to send · Esc to close</span>
+          <div className="dispatch-modal-actions">
+            <button onClick={onCancel}>Cancel</button>
+            <button
+              className="primary"
+              onClick={handleSubmit}
+              disabled={!title.trim() || !body.trim() || submitting}
+            >
+              {submitting ? 'Opening…' : 'Open Thread'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
