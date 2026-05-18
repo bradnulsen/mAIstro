@@ -26,7 +26,7 @@ import re
 import sys
 import tempfile
 
-from backend import cli, database as db, git, state
+from backend import cli, database as db, db_learnings, git, state
 
 log = logging.getLogger("maistro.governor")
 
@@ -142,6 +142,12 @@ context was seen." The agent saw all of them.
 - Configuration friction — turn limits, timeouts, subscription breadth.
 - Implied operator intent — manual dispatch patterns, approval decisions.
 - Inter-agent coordination — dispatch chains, missing dependencies.
+- Job knowledge — the prose `description` plus per-job `learnings` (discrete,
+  toggleable rules / examples / constraints). The jobs section flags any job
+  that has learnings with an enabled/total count; call `get_job_learnings`
+  to read them before suggesting changes to description or proposing new
+  learnings. Learnings carry the same authority as description prose at
+  dispatch time — they are not optional context.
 
 ## Output Format
 Output a JSON array of operations. Each operation is one of:
@@ -219,13 +225,14 @@ async def _build_survey_context() -> dict:
         "recent_tasks": await db.get_recent_tasks_for_governor(limit=50),
         "health": await db.dashboard_health(7),
         "open_threads": await db.list_open_threads_thin(limit=50),
+        "learning_counts": await db_learnings.learning_counts_by_job(),
         "git_log": git_log,
     }
 
 
 def _format_survey_context(ctx: dict) -> str:
     parts = []
-    parts.append(_format_jobs(ctx["jobs"]))
+    parts.append(_format_jobs(ctx["jobs"], ctx.get("learning_counts")))
     parts.append(_format_recent_tasks(ctx["recent_tasks"]))
     parts.append(_format_health(ctx["health"]))
     parts.append(_format_git_log(ctx["git_log"]))
@@ -450,6 +457,7 @@ async def _build_reply_context(thread: dict) -> dict:
         "recent_tasks": await db.get_recent_tasks_for_governor(limit=50),
         "health": await db.dashboard_health(7),
         "other_open_threads": other_open,
+        "learning_counts": await db_learnings.learning_counts_by_job(),
         "git_log": git_log,
     }
 
@@ -468,7 +476,7 @@ def _format_reply_context(ctx: dict) -> str:
             parts.append(f"action_payload:\n```json\n{payload_str}\n```")
         parts.append("")
 
-    parts.append(_format_jobs(ctx["jobs"]))
+    parts.append(_format_jobs(ctx["jobs"], ctx.get("learning_counts")))
     parts.append(_format_recent_tasks(ctx["recent_tasks"]))
     parts.append(_format_health(ctx["health"]))
     parts.append(_format_git_log(ctx["git_log"]))
@@ -504,10 +512,11 @@ def _parse_reply_message(text: str) -> dict | None:
 # ── Shared formatters / helpers ────────────────────────────
 
 
-def _format_jobs(jobs: list[dict]) -> str:
+def _format_jobs(jobs: list[dict], learning_counts: dict[int, dict] | None = None) -> str:
     parts = ["## Current Jobs\n"]
     if not jobs:
         return "## Current Jobs\n(no jobs configured)\n"
+    learning_counts = learning_counts or {}
     for j in jobs:
         props = j.get("properties", {})
         parts.append(f"### {j['name']} (id={j['id']})")
@@ -521,6 +530,12 @@ def _format_jobs(jobs: list[dict]) -> str:
         subs = props.get("subscriptions", [])
         if subs:
             parts.append(f"Subscriptions: {', '.join(subs)}")
+        counts = learning_counts.get(j["id"])
+        if counts and counts.get("total"):
+            parts.append(
+                f"Learnings: {counts.get('enabled', 0)} enabled / "
+                f"{counts['total']} total — call get_job_learnings({j['id']}) to read"
+            )
         parts.append("")
     return "\n".join(parts)
 

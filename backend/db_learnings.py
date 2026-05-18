@@ -60,6 +60,27 @@ async def list_learnings(job_id: int) -> list[dict]:
     return [_row_to_dict(r) for r in rows]
 
 
+async def learning_counts_by_job() -> dict[int, dict]:
+    """Per-job count of enabled / total learnings, in one query.
+
+    Used by the Governor's context packet to surface that learnings exist
+    for a job without pulling every body into the prompt up front. The
+    Governor follows up with `get_job_learnings` when a job's count
+    suggests there's something worth reading.
+    """
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT job_id, "
+        "SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled_count, "
+        "COUNT(*) AS total_count "
+        "FROM job_learnings GROUP BY job_id"
+    )
+    return {
+        r["job_id"]: {"enabled": r["enabled_count"], "total": r["total_count"]}
+        for r in rows
+    }
+
+
 async def list_learning_summaries(job_id: int) -> list[dict]:
     """Breadth view used by the agent's `list_learnings` MCP tool.
 

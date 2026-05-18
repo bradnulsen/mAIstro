@@ -1235,6 +1235,7 @@ label.muted-text {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .task-tab-panel--definition {
@@ -1300,6 +1301,19 @@ label.muted-text {
 }
 
 /* ── Learnings ── */
+
+.learnings-anchor {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  margin-bottom: var(--space-4);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-light);
+}
 
 .learnings-section {
   display: flex;
@@ -1407,6 +1421,12 @@ label.muted-text {
 }
 
 .learning-delete {
+  align-self: center;
+}
+
+.learning-delete-confirm {
+  display: flex;
+  gap: var(--space-2);
   align-self: center;
 }
 
@@ -2516,6 +2536,14 @@ label.muted-text {
   border-color: var(--text-muted);
   color: var(--text);
   outline: none;
+}
+
+.help-tip-link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.help-tip-link:hover {
+  text-decoration: none;
 }
 
 .help-tip-content {

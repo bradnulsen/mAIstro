@@ -46,7 +46,7 @@ UninstallDisplayIcon={app}\{#AppExeName}
 SetupIconFile=
 ChangesAssociations=no
 CloseApplications=force
-RestartApplicationsIfNeeded=no
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

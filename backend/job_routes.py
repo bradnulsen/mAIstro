@@ -38,6 +38,8 @@ class UpdateJobRequest(BaseModel):
     allowed_internal_tools: list[str] | None = None
     allowed_dispatch_targets: list[int] | None = None
     allow_learning_self_modification: bool | None = None
+    allow_self_requeue: bool | None = None
+    auto_continue: bool | None = None
 
 class ReorderRequest(BaseModel):
     job_ids: list[int]

@@ -123,6 +123,14 @@ def tool_get_thread(args: dict) -> str:
     return _api_get(f"/api/governor/threads/{thread_id}")
 
 
+def tool_get_job_learnings(args: dict) -> str:
+    """All learnings (rules, notes, examples) attached to a job."""
+    job_id = args.get("job_id")
+    if not job_id:
+        return "Error: job_id required"
+    return _api_get(f"/api/jobs/{job_id}/learnings")
+
+
 # Write tools — only available in reply mode (MAISTRO_GOVERNOR_MODE=write).
 # The Governor's discretion (informed by REPLY_SYSTEM_PROMPT) decides when
 # to actually invoke them. Constructive only — no delete_job, no
@@ -133,7 +141,9 @@ def tool_update_job_properties(args: dict) -> str:
     if not job_id:
         return "Error: job_id required"
     properties = args.get("properties", {})
-    return _api_patch(f"/api/jobs/{job_id}", {"properties": properties})
+    if not properties:
+        return "Error: properties required (e.g. {timeout: 1800})"
+    return _api_patch(f"/api/jobs/{job_id}", properties)
 
 
 def tool_create_job(args: dict) -> str:
@@ -256,6 +266,25 @@ READ_TOOLS = [
             "required": ["thread_id"],
         },
     },
+    {
+        "name": "get_job_learnings",
+        "description": (
+            "Read every learning (rules, notes, examples, constraints) "
+            "attached to a job — enabled and disabled, human- and "
+            "agent-authored. Each row has a one-line summary plus a longer "
+            "body. Agents query their own learnings during dispatch via "
+            "internal MCP; this tool lets the Governor inspect them when "
+            "reasoning about a job's behavior, before suggesting changes "
+            "to its description or proposing new learnings."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "integer", "description": "ID of the job whose learnings to read."},
+            },
+            "required": ["job_id"],
+        },
+    },
 ]
 
 WRITE_TOOLS = [
@@ -310,6 +339,7 @@ TOOL_HANDLERS = {
     "get_job_health": tool_get_job_health,
     "list_open_threads": tool_list_open_threads,
     "get_thread": tool_get_thread,
+    "get_job_learnings": tool_get_job_learnings,
     "update_job_properties": tool_update_job_properties,
     "create_job": tool_create_job,
     "update_queue_settings": tool_update_queue_settings,

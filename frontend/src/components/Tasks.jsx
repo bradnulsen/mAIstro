@@ -213,6 +213,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
   const [activeTab, setActiveTab] = useState('definition')
   const [availableMcpServers, setAvailableMcpServers] = useState([])
   const [toolInventory, setToolInventory] = useState({ cli_native: [], internal_mcp: [], external_servers: {} })
+  const instructionsRef = useRef(null)
   const props = job.properties || {}
 
   const refreshSubs = useCallback(() => {
@@ -228,6 +229,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
 
   useEffect(() => {
     setEditing({})
+    setEditingSummary(false)
     setEditingInstructions(false)
     setSaveError('')
     setConfirmDelete(false)
@@ -249,6 +251,8 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
     try {
       await updateJob(job.id, payload)
       setEditing({})
+      setEditingSummary(false)
+      setEditingInstructions(false)
       await onRefresh()
       refreshSubs()
     } catch (e) {
@@ -277,7 +281,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
         <div className="task-save-bar">
           <span className="task-save-bar-label">Unsaved changes</span>
           {saveError && <span className="error-text">{saveError}</span>}
-          <button onClick={() => { setEditing({}); setSaveError('') }}>Discard</button>
+          <button onClick={() => { setEditing({}); setSaveError(''); setEditingSummary(false); setEditingInstructions(false) }}>Discard</button>
           <button className="primary" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
           </button>
@@ -296,12 +300,12 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
         >{job.name}</h2>
         <span className="muted-text">{job.slug}</span>
       </div>
-      {editingSummary || !getVal('summary') ? (
+      {editingSummary || ('summary' in editing) || !getVal('summary') ? (
         <AutoTextarea
           className="job-summary-inline"
           value={getVal('summary') || ''}
           onChange={e => edit('summary', e.target.value)}
-          onBlur={() => { if (getVal('summary')) setEditingSummary(false) }}
+          onBlur={() => { if (getVal('summary') && !('summary' in editing)) setEditingSummary(false) }}
           placeholder="Add a summary..."
           maxHeight={80}
           minRows={1}
@@ -359,6 +363,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
             <label>Description</label>
             <div className="instructions-stack">
               <textarea
+                ref={instructionsRef}
                 value={getVal('description') || ''}
                 onChange={e => edit('description', e.target.value)}
                 onFocus={() => setEditingInstructions(true)}
@@ -369,7 +374,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
               {getVal('description') && (
                 <div
                   className={`instructions-preview md-content${editingInstructions ? ' hidden' : ''}`}
-                  onClick={() => setEditingInstructions(true)}
+                  onClick={() => instructionsRef.current?.focus()}
                 >
                   <Markdown>{getVal('description')}</Markdown>
                 </div>
@@ -381,21 +386,19 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
 
       {activeTab === 'learnings' && (
         <div className="task-tab-panel">
-          <LearningsList jobId={job.id} />
-
-          <div className="field-group">
-            <div className="label-row">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={getVal('allow_learning_self_modification') || false}
-                  onChange={e => edit('allow_learning_self_modification', e.target.checked)}
-                />
-                Allow agent self-modification of learnings
-              </label>
-              <HelpTip text={TIPS.allowLearningSelfModification} />
-            </div>
+          <div className="learnings-anchor">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={getVal('allow_learning_self_modification') || false}
+                onChange={e => edit('allow_learning_self_modification', e.target.checked)}
+              />
+              Allow agent self-modification of learnings
+            </label>
+            <HelpTip text={TIPS.allowLearningSelfModification} />
           </div>
+
+          <LearningsList jobId={job.id} />
         </div>
       )}
 
@@ -524,7 +527,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
           <div className="field-group">
             <div className="label-row">
               <label>Schedule (cron)</label>
-              <HelpTip text={TIPS.schedule} />
+              <HelpTip text={TIPS.schedule} linkUrl="https://crontab.guru/" linkLabel="crontab.guru" />
             </div>
             <div className="field-row">
               <input
@@ -726,23 +729,25 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
         </div>
       )}
 
-      {/* Template save */}
-      <TemplateSave job={job} templates={templates} onTemplatesChanged={onTemplatesChanged} />
+      {activeTab === 'definition' && (
+        <>
+          <TemplateSave job={job} templates={templates} onTemplatesChanged={onTemplatesChanged} />
 
-      {/* Danger zone */}
-      <div className="task-section danger">
-        <h3>Danger Zone</h3>
-        {confirmDelete ? (
-          <div className="action-row">
-            <span className="confirm-text">Delete "{job.name}"?</span>
-            <button className="danger small" onClick={handleDelete}>Confirm</button>
-            <button className="small" onClick={() => setConfirmDelete(false)}>Cancel</button>
+          <div className="task-section danger">
+            <h3>Danger Zone</h3>
+            {confirmDelete ? (
+              <div className="action-row">
+                <span className="confirm-text">Delete "{job.name}"?</span>
+                <button className="danger small" onClick={handleDelete}>Confirm</button>
+                <button className="small" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              </div>
+            ) : (
+              <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Job</button>
+            )}
+            {deleteError && <div className="error-text">{deleteError}</div>}
           </div>
-        ) : (
-          <button className="danger small" onClick={() => setConfirmDelete(true)}>Delete Job</button>
-        )}
-        {deleteError && <div className="error-text">{deleteError}</div>}
-      </div>
+        </>
+      )}
     </div>
   )
 }
@@ -756,6 +761,7 @@ function LearningsList({ jobId }) {
   const [editingId, setEditingId] = useState(null)
   const [editSummary, setEditSummary] = useState('')
   const [editBody, setEditBody] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [dragIdx, setDragIdx] = useState(null)
   const [dragOverIdx, setDragOverIdx] = useState(null)
 
@@ -763,6 +769,7 @@ function LearningsList({ jobId }) {
     listLearnings(jobId).then(setItems).catch(e => setError(e.message))
   }, [jobId])
   useEffect(() => { reload() }, [reload])
+  useEffect(() => { setConfirmDeleteId(null); setEditingId(null) }, [jobId])
 
   const handleAdd = async () => {
     const summary = newSummary.trim()
@@ -798,6 +805,7 @@ function LearningsList({ jobId }) {
   const handleDelete = async (id) => {
     try {
       await deleteLearning(id)
+      setConfirmDeleteId(null)
       reload()
     } catch (e) { setError(e.message) }
   }
@@ -882,11 +890,18 @@ function LearningsList({ jobId }) {
               </div>
             )}
             <span className={`learning-source learning-source-${l.source}`}>{l.source}</span>
-            <button
-              className="small learning-delete"
-              onClick={() => handleDelete(l.id)}
-              title="Delete learning"
-            >✕</button>
+            {confirmDeleteId === l.id ? (
+              <div className="learning-delete-confirm">
+                <button className="small danger" onClick={() => handleDelete(l.id)}>Yes</button>
+                <button className="small" onClick={() => setConfirmDeleteId(null)}>No</button>
+              </div>
+            ) : (
+              <button
+                className="small learning-delete"
+                onClick={() => setConfirmDeleteId(l.id)}
+                title="Delete learning"
+              >✕</button>
+            )}
           </div>
         ))}
         {adding && (
