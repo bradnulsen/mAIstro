@@ -10,3 +10,4 @@ __pycache__/
 # PyInstaller bundle output (see maistro.spec)
 build/
 dist/
+.venv/

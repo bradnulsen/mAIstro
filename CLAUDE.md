@@ -18,6 +18,20 @@ npm run build                 # production bundle to frontend/dist/
 
 Backend on http://localhost:8420, frontend on http://localhost:5173. No test suite, linter, or formatter is configured. Hot-reload covers `backend/`; everything else needs a manual restart. Set `MAISTRO_DEBUG=1` for verbose backend logging.
 
+If `frontend/dist/` exists, `backend/main.py` serves it directly on :8420 (override the location with `MAISTRO_FRONTEND_DIST`). Otherwise it logs "dev mode" and expects Vite. A stale `frontend/dist/` can therefore mask frontend changes when you open :8420 instead of :5173.
+
+### Packaging (Windows installer)
+
+```powershell
+pip install pyinstaller          # plus Inno Setup 6
+./installer/build.ps1 -Version 0.1.0   # npm run build → PyInstaller (maistro.spec) → ISCC → dist/installer/maistro-setup-<version>.exe
+./installer/build.ps1 -SkipFrontend    # also -SkipBundle, -SkipInstaller to rerun a single stage
+```
+
+`run.py` is both the dev launcher and the frozen entry point. When bundled (`sys.frozen`), `mcp_config.py` and `governor.py` re-spawn `sys.executable` with `--mcp-server` / `--governor-mcp`, and `run.py` routes those flags into the stdio MCP servers instead of uvicorn. Keep that routing intact when touching either file. One-folder mode is deliberate (one-file breaks the self-respawn and slows startup). See `installer/README.md`.
+
+App-data (`app.db`) location: `MAISTRO_APPDATA` if set, else per-OS user app-data dir when frozen. `run.py` sets `MAISTRO_APPDATA` to the repo-local `.maistro/` for dev runs.
+
 ## Documentation Layout
 
 The repo's design documentation is layered. When you need depth, read these in order:
@@ -100,12 +114,12 @@ Each task executes in its own git worktree, so the operator's main checkout is s
 
 ### Governor
 
-Autonomous meta-analysis agent. Triggered every 10 successful task completions (or manually via `POST /api/governor/trigger`). Reads jobs, recent tasks (through `tasks_resolved`), health metrics, and emits structured findings (suggestions / observations) for the operator to approve, decline, or execute. Approved suggestions can be applied via a write-enabled `execution` run. Replaced the standalone chat surface that earlier versions exposed. See [architecture/governor.md](architecture/governor.md).
+Autonomous meta-analysis agent. Triggered every 10 executed terminal transitions — `completed`, `exhausted`, `failed`, `timed_out`; `cancelled` is excluded — or manually via `POST /api/governor/trigger`. Reads jobs, recent tasks (through `tasks_resolved`), health metrics, and emits structured findings (suggestions / observations) for the operator to approve, decline, or execute. Approved suggestions can be applied via a write-enabled `execution` run. Replaced the standalone chat surface that earlier versions exposed. See [architecture/governor.md](architecture/governor.md).
 
 ### Key Design Decisions
 
 - **Git is the source of truth for project content.** SQLite holds only operational state — job configs, task records, event log, chat sessions/messages, raw event audit, MCP servers, KV config, Governor data.
-- **Two SQLite databases.** Project DB at `<project>/.maistro/maistro.db`; app DB at `<repo>/.maistro/app.db` for recent-projects list and cross-project job templates.
+- **Two SQLite databases.** Project DB at `<project>/.maistro/maistro.db`; app DB `app.db` in the app-data dir (repo-local `.maistro/` in dev, per-OS user dir when installed) for recent-projects list and cross-project job templates.
 - **Atomic tasks.** Never mutated; retry/reply/resume create new tasks and coalesce the prior one.
 - **Vite proxies `/api` and `/health` to backend.** Frontend always calls same-origin URLs.
 
@@ -138,12 +152,13 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 ### Other backend modules
 
 - `state.py` — shared mutable state (`PROJECT_DIR`, `_switching` flag) and `require_project()` to break circular imports.
-- `appstate.py` — app-level DB at `<repo>/.maistro/app.db`. Owns the recent-projects list and cross-project job templates (sync sqlite3, not aiosqlite — these are short, infrequent reads outside any project context).
+- `appstate.py` — app-level DB `app.db`, resolved via `MAISTRO_APPDATA` (see Packaging). Owns the recent-projects list and cross-project job templates (sync sqlite3, not aiosqlite — these are short, infrequent reads outside any project context).
 - `worker.py` — background worker: pulls from queue, runs one trigger at a time, manages lifecycle via `transition_trigger()`, handles cancellation/timeout watchdog and stale-trigger sweep on startup.
 - `scheduler.py` — cron-based scheduler: checks job schedules every 30s, enqueues when due.
 - `dispatch.py` — prompt assembly (`build_dispatch_system_prompt`, `build_user_prompt`), watch trigger matching (`_any_file_matches`, `_glob_to_regex`), job manifest.
 - `cli.py` — Claude CLI subprocess invocation, NDJSON parsing. On `is_error` results, emits `result_meta` alongside the error event with `stop_reason` derived from the CLI's `subtype` (e.g. `error_max_turns` → `max_turns`), so the worker correctly classifies turn-limit failures as `exhausted` rather than `completed`.
-- `git.py` — git subprocess abstraction (still sync `subprocess.run`; see Known Debt).
+- `git.py` — git subprocess abstraction used by the worker and routes (still sync `subprocess.run`; see Known Debt).
+- `git_tools.py` — shared read-only git tool handlers (`git_status`, `git_log`, `git_diff`, `git_show`) used by both stdio MCP servers. `git_commit` stays in `mcp_server.py` because it enforces job authorship. cwd is passed explicitly: task agents run in the worktree, the Governor in the project root.
 - `events.py` — single source of truth for SSE event types and wire serialization (`to_sse()`).
 - `pubsub.py` — trigger-level + global queue-level subscriber registries for SSE.
 - `governor.py` — orchestration (trigger handling, prompt assembly, finding parsing, suggestion execution).
@@ -175,14 +190,14 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 
 - **No general-purpose migration system.** `SCHEMA_SQL` uses `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` for idempotent init. `SEED_SQL` uses `INSERT OR IGNORE`. To change schema: edit `SCHEMA_SQL` in `db_core` and recreate the dev DB.
 - **`backend/db_migrations.py`** runs on startup but only handles legacy table renames / PK conversions from the goals→jobs and slug→INTEGER transitions. Do not add new entries.
-- **`migrate_db.py`** at the repo root is a one-shot script for converting older project DBs offline — not part of the running backend.
+- **Root one-shot scripts** (`migrate_db.py`, `migrate_to_task_executions.py`, `migrate_learning_summary.py`, `recover_tasks_old_fk.py`) convert or repair older project DBs offline — not part of the running backend. Each takes `<path-to-project>` and is idempotent. `recover_tasks_old_fk.py` fixes DBs whose FKs were rewritten to `tasks_old` by an earlier buggy rename (symptom: `no such table: main.tasks_old`). If you ever rename a table with `ALTER TABLE ... RENAME`, set `PRAGMA legacy_alter_table=ON` first or dependent FKs get rewritten.
 
 ### Project Switch Coordination
 
 - `db_core` implements a readers-draining protocol: `db_read_guard()` tracks active readers, `close_db()` sets a `_closing` flag and waits up to 10s for readers to drain before closing.
 - `state._switching` flag prevents new `db_read_guard()` entries during a switch.
 - Worker and scheduler check `state.PROJECT_DIR` inside `db_read_guard()` and catch `RuntimeError("closing...")` if a switch lands mid-operation.
-- HTTP layer rejects project switch with 409 if `worker.get_active_task_id()` is set.
+- HTTP layer rejects project switch and project close with 409 if `worker.get_active_dispatch_id()` is set.
 
 ## Known Debt (see `REMEDIATION.md`)
 
