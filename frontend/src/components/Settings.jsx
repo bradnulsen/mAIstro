@@ -3,7 +3,7 @@ import { getProject, getConfig, setConfig } from '../api'
 import HelpTip from './HelpTip'
 
 const TIPS = {
-  model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
+  model: 'Fable: most capable, slowest, most expensive. Opus: high capability. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency tasks.',
   timeout: 'Maximum execution time in seconds applied to tasks that have no task-level override. Set to 0 or leave blank for no limit.',
 }
 
@@ -85,6 +85,7 @@ export default function Settings() {
               <select value={defaultModel} onChange={e => setDefaultModel(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSaveModel()}>
                 <option value="sonnet">sonnet</option>
                 <option value="opus">opus</option>
+                <option value="fable">fable</option>
                 <option value="haiku">haiku</option>
               </select>
             </div>

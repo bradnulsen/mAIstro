@@ -16,7 +16,7 @@ npm run dev                   # dev server on :5173, proxies /api and /health to
 npm run build                 # production bundle to frontend/dist/
 ```
 
-Backend on http://localhost:8420, frontend on http://localhost:5173. No test suite, linter, or formatter is configured. Hot-reload covers `backend/`; everything else needs a manual restart. Set `MAISTRO_DEBUG=1` for verbose backend logging.
+Backend on http://localhost:8420, frontend on http://localhost:5173. No test suite, linter, or formatter is configured (the root `.pytest_cache/` is stray, not evidence of tests). Hot-reload covers `backend/`; everything else needs a manual restart. Set `MAISTRO_DEBUG=1` for verbose backend logging.
 
 If `frontend/dist/` exists, `backend/main.py` serves it directly on :8420 (override the location with `MAISTRO_FRONTEND_DIST`). Otherwise it logs "dev mode" and expects Vite. A stale `frontend/dist/` can therefore mask frontend changes when you open :8420 instead of :5173.
 
@@ -55,10 +55,10 @@ The repo's design documentation is layered. When you need depth, read these in o
 
 ### Data Model
 
-- **Jobs** (`jobs` table): `INTEGER PRIMARY KEY AUTOINCREMENT` ID + `slug` (derived via `slugify()`). Configuration via EAV (`job_property_defs` + `job_properties`) — properties are `string`, `json`, `integer`, or `boolean` with defaults. Notable properties: `max_turns` (default 100), `timeout`, `coalesce_tasks`, `require_approval`, `schedule` (cron), `allowed_tools`, `allowed_internal_tools`, `mcp_servers`, `subscriptions`, `allowed_dispatch_targets`. Description is the north star — declarative, first-principle definition of good output. Slug drives git authorship (`<slug>@maistro.local`) and branch naming.
+- **Jobs** (`jobs` table): `INTEGER PRIMARY KEY AUTOINCREMENT` ID + `slug` (derived via `slugify()`). Configuration via EAV (`job_property_defs` + `job_properties`) — properties are `string`, `json`, `integer`, or `boolean` with defaults. The full seed lives in `SEED_SQL` (`db_core.py`): `summary`, `description`, `model` (default `sonnet`; the string is passed verbatim to `claude --model`, UI offers sonnet/opus/fable/haiku), `max_turns` (100), `timeout` (900s), `schedule` (cron), `coalesce_tasks`, `require_approval` (non-manual triggers only; approve/reject via `POST /api/triggers/{task_id}/approve|reject`), `allowed_tools`, `allowed_internal_tools`, `mcp_servers`, `subscriptions`, `allowed_dispatch_targets`, `cascades_from`, `allow_learning_self_modification`, `allow_self_requeue`, `auto_continue`, `max_learnings`, `max_learning_chars`, `sort_order`. Description is the north star — declarative, first-principle definition of good output. Slug drives git authorship (`<slug>@maistro.local`) and branch naming.
 - **Tasks** (`tasks` table): atomic. Each row has exactly one trigger, one context, one `job_id` FK. Tasks are never mutated after creation — retry, reply, and resume create new tasks and coalesce the original under the new one.
-- **Coalescing**: `coalesced_id` FK links subordinates to a root. Depth-1 is enforced by SQLite triggers (`tasks_depth1_insert`, `tasks_depth1_update_target`, `tasks_depth1_update_self`). `coalesce_under()` and `merge_tasks()` flatten before re-parenting so depth-1 holds at every intermediate state. `cascade_completion()` is the single helper used by every worker completion path to terminal-cascade subordinates of a root.
-- **Coalescing lock**: every coalesce-mutating op (`split_task`, `uncoalesce_task`, `merge_tasks`) requires all participants to be `pending`; `transfer_task` requires `pending`/`queued` and roots only. Therefore a terminal coalesced subtree is structurally immutable — outcome data on the root is permanent. Reply/resume "unlock" a terminal subtree by introducing a new non-terminal root above it.
+- **Coalescing**: `coalesced_id` FK links subordinates to a root. Depth-1 is enforced by SQLite triggers (`tasks_depth1_insert`, `tasks_depth1_update_target`, `tasks_depth1_update_self`). `coalesce_under()` and `merge_triggers()` flatten before re-parenting so depth-1 holds at every intermediate state. `cascade_completion()` is the single helper used by every worker completion path to terminal-cascade subordinates of a root.
+- **Coalescing lock**: every coalesce-mutating op (`split_trigger`, `uncoalesce_trigger`, `merge_triggers`) requires all participants to be `pending`; `transfer_trigger` requires `pending`/`queued` and roots only. Therefore a terminal coalesced subtree is structurally immutable — outcome data on the root is permanent. Reply/resume "unlock" a terminal subtree by introducing a new non-terminal root above it.
 - **Vocabulary state.** Stage 1 of the [triggers-and-dispatches](architecture/proposals/triggers-and-dispatches.md) rename is committed: Python identifiers, frontend, API URLs, and the `MAISTRO_TRIGGER_ID` env var use `trigger` (was `task`) and `dispatch` (was `task_execution`). **SQL tables intentionally keep their legacy names** — `tasks`, `task_executions`, `task_events`, plus the `tasks.trigger` / `tasks.trigger_detail` columns. Path params are still `task_id`. Stage 2+ (schema rename) is deferred. Use trigger/dispatch in new code; expect the inversion at the storage boundary.
 - **`tasks` vs `task_executions`**: `tasks` holds intrinsic identity + queue placement + materialized status. Per-execution outcome data (`session_id`, `start_commit`, `result_commit`, `stop_reason`, `num_turns`, `cost_usd`, `started_at`, `completed_at`, `error`, `worktree_path`, `task_branch`) lives in a sibling `task_executions` table keyed by `task_id` — one row per trigger that actually ran. Coalesced subordinates have no `task_executions` row; their effective outcome is the root's. Write helpers in `db_triggers` (`transition_trigger`, `update_trigger`, etc.) route outcome fields to `task_executions` via `upsert_dispatch` automatically — callers see the same kwargs interface.
 - **Reading task data — two semantic profiles**:
@@ -102,19 +102,21 @@ Each task executes in its own git worktree, so the operator's main checkout is s
 
 - **Integration is the gate to `completed`.** A task is only `completed` after its branch successfully merges into main. Merge failure → `failed` with the conflict captured in `error`; worktree+branch preserved.
 - **No commits → `failed`.** If `worktree_head == start_commit`, the worker fails the task ("agent finished without committing").
-- **Non-success terminals preserve the workspace.** `exhausted`, `failed`, `timed_out`, `cancelled`, `interrupted` all leave the worktree and branch in place. The detail-drawer `WorkspaceBanner` exposes path, branch, a manual-merge command, and a confirm-gated `POST /api/tasks/{id}/workspace/discard`.
+- **Non-success terminals preserve the workspace.** `exhausted`, `failed`, `timed_out`, `cancelled`, `interrupted` all leave the worktree and branch in place. The detail-drawer `WorkspaceBanner` exposes path, branch, a manual-merge command, and a confirm-gated `POST /api/triggers/{task_id}/workspace/discard`. Siblings: `.../workspace/integrate` (manual merge) and `GET/POST .../orphan-stash[/restore|/discard]` for stashes left behind by a failed integration.
 - **Disk pressure is real.** Worktrees from non-success terminals accumulate until the operator discards them. There's no auto-prune yet (see [git-integration.md — Disk Pressure](architecture/git-integration.md)).
 
 ### MCP Server & Tool Governance
 
-- `backend/mcp_server.py` — internal stdio MCP server: git operations (status, log, diff, commit, branch ops), project context (list_files, read_file, list_jobs, get_queue_status), inter-agent dispatch (`dispatch_task`).
-- `backend/governor_mcp.py` — Governor's separate stdio MCP server (read tools always; write tools only in execution mode).
+- `backend/mcp_server.py` — internal stdio MCP server: `git_status`, `git_log`, `git_diff`, `git_commit`, `list_files`, `read_file`, `list_jobs`, `get_queue_status`, `dispatch_task`, `requeue_self`, and the learnings tools (`list_learnings`, `read_learnings`, `add_learning`, `update_learning`, `delete_learning`). Branch-op tools are commented out. It does no DB I/O — it calls back into the backend over HTTP (`/api/learnings/agent-*`, `/api/triggers/agent-dispatch`, `/api/triggers/self-requeue`, `/api/triggers/mcp-event`), so those routes must never depend on UI state.
+- `backend/governor_mcp.py` — Governor's separate stdio MCP server (read tools always, including `get_job_learnings`; write tools only when `MAISTRO_GOVERNOR_MODE=write`).
 - `backend/mcp_config.py` — assembles `--mcp-config` JSON per dispatch, combining internal + external MCP servers.
-- **Three-dimensional tool control**: `allowed_tools` (CLI native) × `allowed_internal_tools` (internal MCP, passed via `MAISTRO_ALLOWED_INTERNAL_TOOLS` env var) × `mcp_servers` (external MCP). All compose independently per job. All tool calls are audit-logged.
+- **Tool control**: `allowed_tools` (CLI native) × `allowed_internal_tools` (internal MCP, via `MAISTRO_ALLOWED_INTERNAL_TOOLS`) × `mcp_servers` (external MCP), plus two separate gates the MCP server applies on top: `MAISTRO_ALLOW_LEARNING_WRITES` (from `allow_learning_self_modification`) and `MAISTRO_ALLOW_SELF_REQUEUE`. All tool calls are audit-logged.
+- **CLI native enforcement is `--disallowedTools`.** The CLI runs with `--dangerously-skip-permissions`, which makes `--allowedTools` non-restrictive, so `cli.py` computes the complement of `allowed_tools` and passes that as `--disallowedTools`. See `architecture/cli-bridge.md`.
+- **Per-dispatch env vars** set by `mcp_config.py`: `MAISTRO_JOB_ID`, `MAISTRO_JOB_SLUG`, `MAISTRO_JOB_NAME`, `MAISTRO_WORKSPACE_DIR`, `MAISTRO_SESSION_ID`, `MAISTRO_TRIGGER_ID`, `MAISTRO_ALLOWED_INTERNAL_TOOLS`, `MAISTRO_ALLOWED_DISPATCH_TARGETS`, `MAISTRO_ALLOW_LEARNING_WRITES`, `MAISTRO_ALLOW_SELF_REQUEUE`. Governor MCP gets `MAISTRO_GOVERNOR_MODE`, `MAISTRO_PROJECT_DIR`, `MAISTRO_BACKEND_PORT`.
 
 ### Governor
 
-Autonomous meta-analysis agent. Triggered every 10 executed terminal transitions — `completed`, `exhausted`, `failed`, `timed_out`; `cancelled` is excluded — or manually via `POST /api/governor/trigger`. Reads jobs, recent tasks (through `tasks_resolved`), health metrics, and emits structured findings (suggestions / observations) for the operator to approve, decline, or execute. Approved suggestions can be applied via a write-enabled `execution` run. Replaced the standalone chat surface that earlier versions exposed. See [architecture/governor.md](architecture/governor.md).
+Autonomous meta-analysis agent, thread-based (`governor_threads` / `governor_messages`; this replaced the earlier one-way findings feed). Two invocation kinds share one in-process lock so at most one run is in flight: **Survey** runs automatically every 10 executed terminal transitions (`completed`, `exhausted`, `failed`, `timed_out`; `cancelled` excluded) in MCP mode `read` and posts to or opens threads. **Reply** runs when a human creates a thread or posts in one, in MCP mode `write`, coalesced per thread via `enqueue_reply`. Routes under `/api/governor/`: `threads`, `threads/{id}/reply|close|reopen|mark-read`, `status`, `runs`, `recent-tasks`. It reads jobs, recent tasks (through `tasks_resolved`), health metrics, and job learnings. See [architecture/governor.md](architecture/governor.md).
 
 ### Key Design Decisions
 
@@ -140,24 +142,24 @@ Real implementation lives in:
 | `db_chat` | Chat sessions, messages, raw event audit log |
 | `db_config` | Key-value config + external MCP server registration and cascade delete |
 | `db_dashboard` | Read-only operational analytics queries |
-| `db_governor` | Governor counters, runs, findings |
+| `db_governor` | Governor counters, runs, threads, messages |
 | `db_learnings` | Per-job learnings — discrete, addressable, individually-toggleable rules complementing the prose `description`. Each row has a one-line `summary` (the index entry) plus a longer `body`. **Not auto-injected**: agents query `list_learnings` (id + summary) for breadth then `read_learnings(ids)` for depth, via the internal MCP server. Bounded by the `max_learnings` (default 10) and `max_learning_chars` (default 1000) job properties — the cap turns agent self-modification into a curation problem. |
 
 New code should import the domain module directly. The re-export shim exists so existing `from backend import database as db; db.foo()` call sites keep working without churn.
 
 ### `backend/main.py` is a thin shell
 
-Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All routes live in `*_routes.py` modules: `job_routes`, `queue_routes`, `governor_routes`, `project_routes`, `feed_routes`, `git_routes`, `mcp_routes`, `dashboard_routes`, `config_routes`, `learnings_routes`, `system_routes` (host environment — Claude CLI presence on PATH plus worker liveness; no project required).
+Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All routes live in `*_routes.py` modules: `job_routes`, `queue_routes`, `governor_routes`, `project_routes`, `feed_routes`, `git_routes`, `mcp_routes`, `dashboard_routes`, `config_routes`, `learnings_routes`, `system_routes` (host environment; no project required — `GET /api/system/claude-status`, `GET /api/system/health`, `POST /api/system/health/clear`). Only `governor_routes` uses an `APIRouter(prefix=...)`; every other router writes full `/api/...` paths in its decorators.
 
 ### Other backend modules
 
 - `state.py` — shared mutable state (`PROJECT_DIR`, `_switching` flag) and `require_project()` to break circular imports.
 - `appstate.py` — app-level DB `app.db`, resolved via `MAISTRO_APPDATA` (see Packaging). Owns the recent-projects list and cross-project job templates (sync sqlite3, not aiosqlite — these are short, infrequent reads outside any project context).
-- `worker.py` — background worker: pulls from queue, runs one trigger at a time, manages lifecycle via `transition_trigger()`, handles cancellation/timeout watchdog and stale-trigger sweep on startup.
+- `worker.py` — background worker: pulls from queue, runs one trigger at a time, manages lifecycle via `transition_trigger()`, handles cancellation/timeout watchdog and stale-trigger sweep on startup. **Silent-API-failure halt**: a dispatch that ends `completed`/`exhausted` with zero cost, at most one turn, and no tool use is counted as silent. Two in a row set a health halt and the worker stops pulling work, independent of the `auto_dispatch` toggle, until `POST /api/system/health/clear` (the frontend's red-shell state). The streak resets on the next real dispatch.
 - `scheduler.py` — cron-based scheduler: checks job schedules every 30s, enqueues when due.
-- `dispatch.py` — prompt assembly (`build_dispatch_system_prompt`, `build_user_prompt`), watch trigger matching (`_any_file_matches`, `_glob_to_regex`), job manifest.
+- `dispatch.py` — prompt assembly (`build_dispatch_system_prompt`, `build_user_prompt`), watch-trigger evaluation (delegates matching to `matching.py`), job manifest.
 - `cli.py` — Claude CLI subprocess invocation, NDJSON parsing. On `is_error` results, emits `result_meta` alongside the error event with `stop_reason` derived from the CLI's `subtype` (e.g. `error_max_turns` → `max_turns`), so the worker correctly classifies turn-limit failures as `exhausted` rather than `completed`.
-- `git.py` — git subprocess abstraction used by the worker and routes (still sync `subprocess.run`; see Known Debt).
+- `git.py` — git subprocess abstraction used by the worker and routes. All public helpers are async (`subprocess.run` via `asyncio.to_thread`).
 - `git_tools.py` — shared read-only git tool handlers (`git_status`, `git_log`, `git_diff`, `git_show`) used by both stdio MCP servers. `git_commit` stays in `mcp_server.py` because it enforces job authorship. cwd is passed explicitly: task agents run in the worktree, the Governor in the project root.
 - `events.py` — single source of truth for SSE event types and wire serialization (`to_sse()`).
 - `pubsub.py` — trigger-level + global queue-level subscriber registries for SSE.
@@ -184,7 +186,9 @@ Just logging setup, lifespan, CORS, `/health`, and `include_router` calls. All r
 - **Queue**: auto-processing or paused via `/api/queue/settings` (`auto_dispatch` toggle).
 - **Ports**: backend 8420, frontend 5173.
 - **API routes**: all prefixed `/api/`. REST conventions: `GET/POST /api/jobs/`, `PATCH/DELETE /api/jobs/:id`. Triggers at `/api/triggers/` (output via `/api/triggers/{task_id}/output` — path params still named `task_id`; no `/api/chat/` namespace, though `chat_sessions`/`chat_messages` tables still back trigger output). Queue settings at `/api/queue/settings`. Governor at `/api/governor/`. Learnings at `/api/jobs/{job_id}/learnings` (operator) and `/api/learnings/agent-add` etc. (agent — stamps `source='agent'`).
-- **SSE events** (defined in `events.py`): `text`, `thinking`, `tool_use`, `assistant_complete`, `result_meta`, `result`, `session_id`, `error`, `done`, `task`, `queue_changed`.
+- **SSE events** (defined in `events.py`): `text`, `thinking`, `tool_use`, `assistant_complete`, `result_meta`, `result`, `session_id`, `error`, `done`, `queue_changed`, plus `ping` keepalives. `_raw` is internal-only and never sent. The queue stream sends event type with empty data.
+- **Trigger kinds are free strings.** There is no enum or CHECK constraint; the only set in code is `_CONTINUATION_TRIGGERS` in `db_triggers.py`.
+- **Runtime config keys** seeded in the project DB (`db_config`): `queue_auto_dispatch` (false), `agent_dispatch_depth_limit` (5), `governor_task_counter`, `chat_events_retention_days` and `task_events_retention_days` (0 = keep forever).
 
 ### Database Schema
 

@@ -17,7 +17,7 @@ const TIPS = {
   cascadesFrom: 'Upstream jobs that trigger this job on completion. When any selected upstream job completes successfully, a task is enqueued for this job. Timed-out, failed, or cancelled tasks do not trigger cascades.',
   timeout: 'Maximum execution time in seconds. The platform gracefully terminates the agent when reached, then force-kills if it does not exit. Timed-out tasks do not trigger downstream cascades. Set to 0 for no limit.',
   maxTurns: 'Maximum agent reasoning turns per task. One turn is one cycle of context → reasoning → output (text or tool call). Hitting the limit transitions the task to exhausted (distinct from completed or failed). Lower = tighter scope but more exhaustions; higher = more headroom but more cost.',
-  model: 'Opus: highest capability, slowest, most expensive. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.',
+  model: 'Fable: most capable, slowest, most expensive. Opus: high capability. Sonnet: balanced capability and speed. Haiku: fastest, cheapest, best for simple or high-frequency jobs.',
   mcpServers: 'External MCP servers to connect to this job\'s agent. Servers must first be registered in Settings. When enabled, the agent can use tools provided by these servers alongside the platform\'s built-in tools.',
   allowedInternalTools: 'Internal MCP tools the agent can access. When a subset is selected, only listed tools are presented by the internal server. All checked = default (no restrictions). Use this to create read-only jobs or restrict dispatch capabilities.',
   allowedDispatchTargets: 'Jobs this agent can dispatch via the dispatch_task tool. When none are selected, the agent cannot dispatch other jobs. Self-dispatch is always prohibited.',
@@ -355,6 +355,7 @@ function JobDetail({ job, allJobs, onRefresh, onDelete, templates = [], onTempla
             <select value={getVal('model') || 'sonnet'} onChange={e => edit('model', e.target.value)}>
               <option value="sonnet">Sonnet</option>
               <option value="opus">Opus</option>
+              <option value="fable">Fable</option>
               <option value="haiku">Haiku</option>
             </select>
           </div>
