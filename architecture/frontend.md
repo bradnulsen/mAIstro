@@ -74,7 +74,7 @@ Aggregated operational visibility — a read-only surface that answers "how are 
 
 - **Job Health Summary** — per-job task counts by terminal state (completed, failed, timed out, cancelled, interrupted, rejected), success rate (completed / total terminal), and trend indicator (current window vs. previous equivalent window). Terminal state breakdown uses the `status` column directly. Jobs are ordered by health — low success rates and degrading trends are visually prominent.
 
-- **Job Impact** — per-job commit-derived metrics: commits in window, lines added, lines removed, files touched, plus the per-job execution summary (completed / total runs, non-success count, turns consumed, total cost). Authorship is parsed from git log via the `<slug>@maistro.local` convention; commits attributed to non-job authors fold into an "Operator" pseudo-row, and commits whose slug no longer exists in `jobs` surface as `(removed) <slug>`. This is the panel that answers "what did this job actually produce?" — task-outcome counts alone don't.
+- **Job Impact** — per-job commit-derived metrics: commits in window, lines added, lines removed, files touched, plus the per-job execution summary (completed / total runs, non-success count, turns consumed, total cost). Authorship is parsed from git log by author name (`user.name` == job name); commits attributed to non-job authors, including jobs since deleted, fold into an "Operator" pseudo-row. This is the panel that answers "what did this job actually produce?" — task-outcome counts alone don't.
 
 - **Timeline** — horizontal bars per task positioned by `started_at` and sized by duration, color-coded by job. Rendered with positioned HTML/CSS — no chart library. Reveals scheduling density, idle gaps, and duration outliers.
 
@@ -88,7 +88,7 @@ A scrollable list of commits in the window, with author/job attribution, message
 
 **Data access pattern**: the dashboard introduces a new query surface over existing tables but requires no schema changes. The key reads are:
 - `tasks` joined to `task_executions` (filtered on `coalesced_id IS NULL` so coalesce groups count as one outcome), grouped by `job_id` with terminal state classification, filtered by time range — for Job Health and the execution summary in Job Impact
-- `git log --numstat` parsed into `{author_email, files, insertions, deletions}` over the window — for the commit-derived half of Job Impact and for the Commit History panel
+- `git log --numstat` parsed into `{author, files, insertions, deletions}` over the window — for the commit-derived half of Job Impact and for the Commit History panel
 - `task_events` pairs of `activated` and terminal events for timeline positioning, with duration computed from event timestamps
 
 The reorientation lives in `db_dashboard.dashboard_job_impact()` (commit-attribution and execution-cost aggregation) and `dashboard_routes` (response shape `{window_days, health, timeline, job_impact}`). The shipped reorientation is documented in [proposals/archive/dashboard-commits-reorientation.md](proposals/archive/dashboard-commits-reorientation.md).

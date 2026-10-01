@@ -23,23 +23,25 @@ async def get_feed(limit: int = 50, offset: int = 0, job_id: int | None = None, 
     triggers = await db.get_triggers_by_result_commits(hashes)
     task_by_commit = {t["result_commit"]: t for t in triggers if t.get("result_commit")}
 
+    jobs = await db.list_jobs()
+
     feed = []
     for entry in entries:
         item = {**entry}
         task = task_by_commit.get(entry["hash"])
+        author_job = db.job_for_commit_author(entry.get("author"), jobs)
         if task:
             item["task"] = task
             item["trigger"] = task["trigger"]
         else:
-            item["trigger"] = "task" if entry.get("email", "").endswith("@maistro.local") else "human"
+            item["trigger"] = "task" if author_job else "human"
+        if author_job:
+            item["author_job_id"] = author_job["id"]
         feed.append(item)
 
     if job_id:
-        # Look up slug for email matching (git author uses slug@maistro.local)
-        job = await db.get_job(job_id)
-        slug = job["slug"] if job else None
         feed = [f for f in feed if f.get("task", {}).get("job_id") == job_id
-                or (slug and f.get("email") == f"{slug}@maistro.local")]
+                or f.get("author_job_id") == job_id]
 
     return feed
 

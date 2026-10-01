@@ -31,6 +31,27 @@ def slugify(name: str) -> str:
     return slug
 
 
+def job_for_commit_author(author: str, jobs: list[dict]) -> dict | None:
+    """Resolve a git author name to a job.
+
+    Agent commits carry `user.name = <job name>` (the email is the
+    operator's own, so commits verify on GitHub). Exact name match first,
+    then slugified name against the job slug so a case/punctuation
+    difference still attributes.
+    """
+    author = (author or "").strip()
+    if not author:
+        return None
+    for job in jobs:
+        if job.get("name") == author:
+            return job
+    slug = slugify(author)
+    for job in jobs:
+        if slug and job.get("slug") == slug:
+            return job
+    return None
+
+
 def _cast_property(value: str, type_: str):
     if type_ == "json":
         try:

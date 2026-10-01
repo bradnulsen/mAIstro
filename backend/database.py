@@ -34,6 +34,7 @@ from backend.db_jobs import (
     delete_job,
     get_cascade_targets,
     get_job,
+    job_for_commit_author,
     list_jobs,
     reorder_jobs,
     slugify,

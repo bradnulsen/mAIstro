@@ -7,7 +7,7 @@ a window in days and return rows shaped for direct JSON serialization.
 
 from backend import git
 from backend.db_core import get_db
-from backend.db_jobs import list_jobs
+from backend.db_jobs import job_for_commit_author, list_jobs
 from backend.db_triggers import TERMINAL_STATUSES_SQL
 
 
@@ -115,7 +115,7 @@ async def dashboard_job_impact(window_days: int, project_dir: str) -> list[dict]
 
     Two sources, joined on `job_id`:
       - Git side: parses `git log --numstat --since=<window>` for commits
-        in the window; attributes by author email (`<slug>@maistro.local`
+        in the window; attributes by author name (`user.name` == job name
         for jobs, anything else lumped under the `Operator` pseudo-row).
         Yields commit count, additions, deletions, files-touched.
       - Execution side: aggregates `task_executions` over the same window
@@ -138,7 +138,6 @@ async def dashboard_job_impact(window_days: int, project_dir: str) -> list[dict]
         cutoff_iso = cutoff_dt.isoformat()
 
     jobs = await list_jobs()
-    slug_to_job = {j["slug"]: j for j in jobs if j.get("slug")}
 
     # job_id (or "operator") → impact dict
     impact: dict[str | int, dict] = {}
@@ -161,18 +160,9 @@ async def dashboard_job_impact(window_days: int, project_dir: str) -> list[dict]
         date_str = entry.get("date") or ""
         if cutoff_iso and date_str < cutoff_iso:
             continue
-        email = (entry.get("email") or "").strip()
-        # Match the `<slug>@maistro.local` convention from CLAUDE.md
-        if email.endswith("@maistro.local"):
-            slug = email[: -len("@maistro.local")]
-            job = slug_to_job.get(slug)
-            if job:
-                row = _ensure(job["id"], job["name"])
-            else:
-                # Stale job slug — operator may have deleted the job after it
-                # committed. Bucket under a synthetic "removed-job" name so
-                # the commits don't silently disappear.
-                row = _ensure(f"removed:{slug}", f"(removed) {slug}")
+        job = job_for_commit_author(entry.get("author"), jobs)
+        if job:
+            row = _ensure(job["id"], job["name"])
         else:
             row = _ensure("operator", "Operator")
 

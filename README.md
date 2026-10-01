@@ -165,7 +165,7 @@ The default is *narrow*. Grant only what the job needs.
 
 ### Git Is the Source of Truth
 
-mAistro never auto-commits. Agents commit their own work, with authorship `<JobName> <<job-id>@maistro.local>` so you can always trace who did what.
+mAistro never auto-commits. Agents commit their own work with the job name as git author name (`user.name = <JobName>`) so you can always trace who did what. The author email is your own global git email, so your `commit.gpgsign` signature verifies on GitHub.
 
 Project content lives in git. Operational state (job configs, task records, audit logs) lives in `.maistro/maistro.db` — a SQLite file inside the project, gitignored. Two databases per project: nothing leaks across project boundaries.
 

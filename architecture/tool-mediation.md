@@ -41,7 +41,7 @@ This is not a stylistic choice — it follows from headless execution. A headles
 
 Structured tools for git interaction with enforced conventions:
 
-- **`git_commit`** — commits with enforced authorship (`<JobName> <<slug>@maistro.local>`) and message format (`[JobName] description`). Path restrictions can limit which files a job is allowed to commit.
+- **`git_commit`** — commits with enforced author name (`<JobName>`; the email is the operator's own git config, so signed commits verify on GitHub) and message format (`[JobName] description`). Path restrictions can limit which files a job is allowed to commit.
 - **`git_diff`** — returns structured diff output for specified paths or the working tree
 - **`git_log`** — returns commit history with configurable depth and format
 - **`git_status`** — returns working tree status

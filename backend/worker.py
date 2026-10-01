@@ -706,7 +706,6 @@ async def _process_trigger(task: dict):
         wt_ok, wt_err = await git.worktree_add(
             state.PROJECT_DIR, workspace_dir, task_branch, start_commit,
             user_name=job["name"],
-            user_email=f"{job['slug']}@maistro.local",
         )
         if not wt_ok:
             log.error("[worker] Task #%d worktree creation failed: %s", task_id, wt_err)

@@ -6,7 +6,7 @@ via --mcp-config.
 
 Each task gets an instance configured via environment variables:
     MAISTRO_JOB_ID                   job slug (e.g. "engineer")
-    MAISTRO_JOB_SLUG                 job slug for git authorship
+    MAISTRO_JOB_SLUG                 job slug for branch naming
     MAISTRO_JOB_NAME                 display name (e.g. "Engineer")
     MAISTRO_PROJECT_DIR             absolute path to project directory (read source for project-wide context)
     MAISTRO_WORKSPACE_DIR           cwd for the agent's edits and commits (Phase 3a: equals project_dir; Phase 3b: per-task worktree)
@@ -118,9 +118,9 @@ def tool_git_commit(args: dict) -> str:
     if stage.returncode != 0:
         return f"Error staging files: {stage.stderr.strip()}"
 
-    # Commit with enforced authorship convention
-    author = f"{JOB_NAME} <{JOB_SLUG}@maistro.local>"
-    ok, out = _run_git("commit", "-m", message, f"--author={author}")
+    # Author name is the job name; email falls through to the operator's
+    # git config so signed commits verify on GitHub.
+    ok, out = _run_git("-c", f"user.name={JOB_NAME}", "commit", "-m", message)
     if not ok:
         return f"Error: {out}"
     return out

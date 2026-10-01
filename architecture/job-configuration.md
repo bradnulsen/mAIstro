@@ -7,7 +7,7 @@ A job is a named, persistent configuration of autonomous work. The job configura
 Each job has three identity fields:
 
 - **`id`** — `INTEGER PRIMARY KEY AUTOINCREMENT`. The stable identifier used across all foreign keys (`tasks.job_id`, `job_properties.job_id`, `chat_sessions.job_id`), API routes, and internal references.
-- **`slug`** — derived from the original name via `slugify()` (lowercase, non-alphanumeric characters replaced with hyphens). `UNIQUE` column. Used for git authorship (`<slug>@maistro.local`) and branch naming (`<slug>/<description>`). Immutable after creation.
+- **`slug`** — derived from the original name via `slugify()` (lowercase, non-alphanumeric characters replaced with hyphens). `UNIQUE` column. Used for branch naming (`<slug>/<description>`). Git authorship uses the job `name`, not the slug.
 - **`name`** — human-facing display name. Can be updated; renaming a job in the UI changes the display name only, not the slug or integer ID.
 
 ## Property System
